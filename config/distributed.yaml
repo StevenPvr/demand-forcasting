@@ -24,18 +24,18 @@ postgres:
 
 workers:
   pro:
-    worker_count: 11
-    dask_threads_per_worker: 1
+    worker_count: 1
+    dask_threads_per_worker: 11
     xgboost_threads_per_task: 1
-    memory_limit: 6GiB
+    memory_limit: 66GiB
     local_directory: artifacts/dask/pro
   air:
     ssh_host: steven@172.20.10.2
     fallback_host: steven@Macbook-Air-de-Steven.local
-    worker_count: 8
-    dask_threads_per_worker: 1
+    worker_count: 1
+    dask_threads_per_worker: 8
     xgboost_threads_per_task: 1
-    memory_limit: 5GiB
+    memory_limit: 40GiB
     local_directory: artifacts/dask/air
 
 runtime:

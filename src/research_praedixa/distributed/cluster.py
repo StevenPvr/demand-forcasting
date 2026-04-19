@@ -38,11 +38,11 @@ def wait_for_workers(
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         scheduler_info = client.scheduler_info()
-        worker_count = int(scheduler_info.get("n_workers", 0))
-        if worker_count >= minimum_workers:
+        total_threads = int(scheduler_info.get("total_threads", 0))
+        if total_threads >= minimum_workers:
             return
         time.sleep(0.5)
-    raise TimeoutError(f"Timed out waiting for {minimum_workers} Dask workers.")
+    raise TimeoutError(f"Timed out waiting for {minimum_workers} Dask execution slots.")
 
 
 def pid_path(pid_dir: Path, name: str) -> Path:

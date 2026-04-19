@@ -21,8 +21,8 @@ class RuntimeBudget:
 
 def build_runtime_budget(config: DistributedConfig) -> RuntimeBudget:
     total_cores = int(os.cpu_count() or 1)
-    pro_slots = int(config.pro_workers.worker_count)
-    air_slots = int(config.air_workers.worker_count)
+    pro_slots = int(config.pro_workers.worker_count * config.pro_workers.dask_threads_per_worker)
+    air_slots = int(config.air_workers.worker_count * config.air_workers.dask_threads_per_worker)
     cluster_slots = max(1, pro_slots + air_slots)
     xgboost_threads = max(
         config.pro_workers.xgboost_threads_per_task,
