@@ -34,7 +34,7 @@ prepare-distributed:
 feature-select-distributed:
 	PYTHONPATH=src $(PYTHON) -m research_praedixa.distributed.cli --config $(CONFIG) feature-select
 
-hpo-distributed:
+hpo-distributed: start-postgres
 	PYTHONPATH=src $(PYTHON) -m research_praedixa.distributed.cli --config $(CONFIG) hpo
 
 backtest-distributed:
