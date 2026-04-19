@@ -33,10 +33,10 @@ def main() -> None:
     configure_logging()
     config = load_distributed_config(args.config)
     pid_dir = config.resolve_pid_dir()
+    _stop_local_pid(pid_path(pid_dir, "worker_air_ssh"))
     _stop_local_pid(pid_path(pid_dir, "worker_pro"))
     _stop_local_pid(pid_path(pid_dir, "scheduler"))
-    remote_pid_file = config.resolve_pid_dir() / "worker_air.pid"
-    remote_command = f"test -f '{remote_pid_file}' && kill $(cat '{remote_pid_file}') && rm -f '{remote_pid_file}' || true"
+    remote_command = "pkill -f 'dask worker tcp://' || true"
     for host in (config.air_workers.ssh_host, config.air_workers.fallback_host):
         subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, remote_command], check=False)
 

@@ -29,22 +29,18 @@ def main() -> None:
     payload: dict[str, object] = {
         "scheduler_pid": _read_pid(pid_dir / "scheduler.pid"),
         "pro_worker_pid": _read_pid(pid_dir / "worker_pro.pid"),
+        "air_worker_ssh_pid": _read_pid(pid_dir / "worker_air_ssh.pid"),
     }
-    remote_pid_file = config.resolve_pid_dir() / "worker_air.pid"
-    remote_command = f"test -f '{remote_pid_file}' && cat '{remote_pid_file}' || true"
-    remote_pid = None
     for host in (config.air_workers.ssh_host, config.air_workers.fallback_host):
         probe = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, remote_command],
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "echo", "ok"],
             check=False,
             capture_output=True,
             text=True,
         )
-        if probe.returncode == 0 and probe.stdout.strip():
-            remote_pid = int(probe.stdout.strip())
+        if probe.returncode == 0 and probe.stdout.strip() == "ok":
             payload["air_worker_host"] = host
             break
-    payload["air_worker_pid"] = remote_pid
     try:
         client = connect_client(config, timeout_seconds=5.0)
         payload["scheduler_info"] = client.scheduler_info()

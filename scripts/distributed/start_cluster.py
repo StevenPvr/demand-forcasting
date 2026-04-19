@@ -19,7 +19,13 @@ def _write_pid(path: Path, pid: int) -> None:
 def _start_local_process(command: list[str], *, log_path: Path, pid_file: Path) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as stream:
-        process = subprocess.Popen(command, stdout=stream, stderr=stream)
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=stream,
+            stderr=stream,
+            start_new_session=True,
+        )
     _write_pid(pid_file, process.pid)
 
 
@@ -88,23 +94,36 @@ def main() -> None:
         )
 
     remote_host = _pick_remote_host(config.air_workers.ssh_host, config.air_workers.fallback_host)
-    remote_pid_file = config.resolve_pid_dir() / "worker_air.pid"
-    remote_log_file = config.resolve_logs_dir() / "worker_air.log"
-    remote_command = (
-        f"mkdir -p '{remote_pid_file.parent}' '{remote_log_file.parent}' '{config.air_workers.local_directory}' && "
-        f"nohup '{config.project.resolve_dask_bin()}' worker '{config.scheduler_address}' "
-        f"--nworkers {config.air_workers.worker_count} "
-        f"--nthreads {config.air_workers.dask_threads_per_worker} "
-        f"--memory-limit '{config.air_workers.memory_limit}' "
-        f"--local-directory '{config.air_workers.local_directory}' "
-        f"--name praedixa-air "
-        f"> '{remote_log_file}' 2>&1 < /dev/null & echo $! > '{remote_pid_file}'"
-    )
-    subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", remote_host, remote_command],
-        check=True,
-    )
-    time.sleep(3.0)
+    air_worker_pid = pid_path(pid_dir, "worker_air_ssh")
+    if not air_worker_pid.exists():
+        remote_command = (
+            f"cd '{config.repo_path}' && "
+            f"mkdir -p '{config.air_workers.local_directory}' && "
+            f"for _ in $(seq 1 30); do "
+            f"nc -z '{config.scheduler.host}' {config.scheduler.port} && break; "
+            f"sleep 1; "
+            f"done && "
+            f"exec '{config.project.resolve_dask_bin()}' worker '{config.scheduler_address}' "
+            f"--nworkers {config.air_workers.worker_count} "
+            f"--nthreads {config.air_workers.dask_threads_per_worker} "
+            f"--memory-limit '{config.air_workers.memory_limit}' "
+            f"--local-directory '{config.air_workers.local_directory}' "
+            f"--name praedixa-air"
+        )
+        _start_local_process(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                remote_host,
+                remote_command,
+            ],
+            log_path=logs_dir / "worker_air_ssh.log",
+            pid_file=air_worker_pid,
+        )
+    time.sleep(5.0)
 
 
 if __name__ == "__main__":

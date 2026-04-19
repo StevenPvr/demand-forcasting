@@ -4,13 +4,13 @@ project:
   dask_bin: .venv/bin/dask
 
 scheduler:
-  host: MacBook-Pro-de-Steven.local
+  host: 172.20.10.14
   bind_host: 0.0.0.0
   port: 8786
   dashboard_port: 8787
 
 postgres:
-  host: MacBook-Pro-de-Steven.local
+  host: 172.20.10.14
   bind_host: 0.0.0.0
   port: 54329
   database: praedixa_optuna
@@ -18,7 +18,7 @@ postgres:
   password: praedixa_optuna_local_dev
   data_dir: artifacts/postgres/data
   log_path: logs/distributed/postgres.log
-  air_allow_cidr: 10.188.88.36/32
+  air_allow_cidr: 172.20.10.2/32
 
 workers:
   pro:
@@ -28,8 +28,8 @@ workers:
     memory_limit: 6GiB
     local_directory: artifacts/dask/pro
   air:
-    ssh_host: steven@Macbook-Air-de-Steven.local
-    fallback_host: steven@10.188.88.36
+    ssh_host: steven@172.20.10.2
+    fallback_host: steven@Macbook-Air-de-Steven.local
     worker_count: 2
     dask_threads_per_worker: 1
     xgboost_threads_per_task: 2
@@ -47,12 +47,14 @@ runtime:
     - .pytest_cache/
     - .mypy_cache/
     - logs/
+    - artifacts/
     - artifacts/run/
+    - data/
+    - bakery_sales/
   sync_includes:
     - config/
-    - data/
     - warehouse/
-    - bakery_sales/data/
+    - praedixa-ecc/
     - scripts/
     - src/
     - tests/
