@@ -23,8 +23,6 @@ from research_praedixa.optimisation.pipeline import (
     DEFAULT_TUNING_SAMPLE_FRACTION,
     load_gold_train_tuning_frames,
 )
-from scripts.run_local_gold import LocalGoldRunConfig, run_local_gold
-from scripts.run_local_silver import LocalSilverRunConfig, run_local_silver
 
 
 DEFAULT_DISTRIBUTED_RUNTIME_DIR = Path("data/distributed_runtime")
@@ -62,6 +60,8 @@ def prepare_distributed_runtime(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if run_local_silver_pipeline:
+        from scripts.run_local_silver import LocalSilverRunConfig, run_local_silver
+
         run_local_silver(LocalSilverRunConfig(
             data_dir=config.repo_path / "data",
             dbt_select="+tag:silver",
@@ -69,6 +69,8 @@ def prepare_distributed_runtime(
             run_dbt_tests=True,
         ))
     if run_local_gold_pipeline:
+        from scripts.run_local_gold import LocalGoldRunConfig, run_local_gold
+
         run_local_gold(LocalGoldRunConfig(
             dbt_select="tag:gold",
             refresh_open_exogenous=True,
