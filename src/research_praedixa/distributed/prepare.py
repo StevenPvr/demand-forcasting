@@ -110,6 +110,8 @@ def prepare_distributed_runtime(
         bakery_reference_train_csv=DEFAULT_BAKERY_REFERENCE_TRAIN_CSV,
         bakery_reference_val_csv=DEFAULT_BAKERY_REFERENCE_VAL_CSV,
         bakery_reference_test_csv=DEFAULT_BAKERY_REFERENCE_TEST_CSV,
+        train_frame=train_frame,
+        valid_frame=tuning_frame,
     )
     evaluation_train = evaluation_dir / "train.parquet"
     evaluation_valid = evaluation_dir / "valid.parquet"

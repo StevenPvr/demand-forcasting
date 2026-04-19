@@ -866,15 +866,20 @@ def _load_gold_reference_mode_frames(
     bakery_reference_train_csv: str | Path,
     bakery_reference_val_csv: str | Path,
     bakery_reference_test_csv: str | Path,
+    train_frame: pd.DataFrame | None = None,
+    valid_frame: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, object]]:
-    train_frame, valid_frame, _, _, _ = load_gold_train_tuning_frames(
-        duckdb_path=duckdb_path,
-        gold_table=gold_table,
-        date_col=DEFAULT_DATE_COL,
-        dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
-        train_sample_fraction=train_sample_fraction,
-        tuning_sample_fraction=tuning_sample_fraction,
-    )
+    resolved_train_frame = train_frame
+    resolved_valid_frame = valid_frame
+    if resolved_train_frame is None or resolved_valid_frame is None:
+        resolved_train_frame, resolved_valid_frame, _, _, _ = load_gold_train_tuning_frames(
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            date_col=DEFAULT_DATE_COL,
+            dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
+            train_sample_fraction=train_sample_fraction,
+            tuning_sample_fraction=tuning_sample_fraction,
+        )
     reference_train = load_reference_split(bakery_reference_train_csv)
     reference_val = load_reference_split(bakery_reference_val_csv)
     reference_test = load_reference_split(bakery_reference_test_csv)
@@ -889,7 +894,14 @@ def _load_gold_reference_mode_frames(
     history_reference = history_reference.sort_values(
         [REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL]
     ).reset_index(drop=True)
-    return train_frame, valid_frame, overlap_test_frame, history_reference, scored_reference_test, overlap_metadata
+    return (
+        resolved_train_frame,
+        resolved_valid_frame,
+        overlap_test_frame,
+        history_reference,
+        scored_reference_test,
+        overlap_metadata,
+    )
 
 
 def build_evaluation_outputs(
