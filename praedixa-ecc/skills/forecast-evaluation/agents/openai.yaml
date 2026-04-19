@@ -1,0 +1,3 @@
+interface:
+  display_name: "Forecast Evaluation"
+  short_description: "Interpret forecast metrics, bias, and business impact"

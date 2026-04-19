@@ -1,0 +1,3 @@
+interface:
+  display_name: "ML Experiment Loop"
+  short_description: "Keep ML work hypothesis-driven and decision-oriented"

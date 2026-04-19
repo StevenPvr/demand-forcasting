@@ -1,0 +1,3 @@
+interface:
+  display_name: "TS Feature Engineering"
+  short_description: "Design safe lags, rolling stats, and exogenous features"

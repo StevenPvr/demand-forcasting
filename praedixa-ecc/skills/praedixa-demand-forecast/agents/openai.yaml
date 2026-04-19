@@ -1,0 +1,3 @@
+interface:
+  display_name: "Praedixa Demand Forecast"
+  short_description: "Frame demand forecasting around waste, stockouts, and margins"

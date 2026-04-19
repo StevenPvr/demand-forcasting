@@ -1,0 +1,36 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "live"
+
+persistent_instructions = "Follow the root AGENTS.md first, then the project-local .codex/AGENTS.md. Prefer Praedixa ECC skills for time series, ML, forecasting, evaluation, and ROI translation work."
+
+[features]
+multi_agent = true
+
+[profiles.strict]
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+web_search = "cached"
+
+[profiles.research]
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "live"
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+[agents.forecast_reviewer]
+description = "Read-only reviewer for leakage, baselines, metrics, and operational realism."
+config_file = "agents/forecast-reviewer.toml"
+
+[agents.experiment_auditor]
+description = "Read-only reviewer for experimental rigor, hypothesis quality, and evidence strength."
+config_file = "agents/experiment-auditor.toml"
+
+[agents.docs_researcher]
+description = "Read-only documentation specialist for APIs, libraries, and release notes."
+config_file = "agents/docs-researcher.toml"

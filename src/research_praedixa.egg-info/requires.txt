@@ -1,0 +1,17 @@
+dbt-duckdb>=1.9.4
+datasets>=4.8.4
+dask[distributed]>=2024.12.1
+duckdb>=1.4.1
+matplotlib>=3.10.7
+numpy>=2.4.4
+optuna>=4.8.0
+pandas>=3.0.2
+polars>=1.33.1
+psycopg[binary]>=3.2.9
+pyarrow>=23.0.1
+pyyaml>=6.0.2
+scikit-learn>=1.7.2
+sqlalchemy>=2.0.44
+xgboost>=3.2.0
+openpyxl>=3.1.5
+ucimlrepo>=0.0.7

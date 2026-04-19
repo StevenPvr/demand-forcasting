@@ -1,0 +1,3 @@
+interface:
+  display_name: "Forecast Debugging"
+  short_description: "Diagnose unstable or weak time series model behavior"

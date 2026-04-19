@@ -1,0 +1,3 @@
+interface:
+  display_name: "Forecast Baselines"
+  short_description: "Choose and compare robust naive and business baselines"
