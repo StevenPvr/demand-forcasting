@@ -40,7 +40,7 @@ class PreparedDistributedArtifacts:
     evaluation_test: Path
     evaluation_history_reference: Path
     evaluation_scored_reference: Path
-    feature_selection_input: Path
+    feature_selection_input: Path | None
     manifest_path: Path
 
 
@@ -55,7 +55,7 @@ def prepare_distributed_runtime(
     run_local_silver_pipeline: bool = False,
     run_local_gold_pipeline: bool = False,
     rebuild_global_dataset: bool = False,
-    feature_selection_input_path: str | Path = "data/data_cleaning/data_train_cleaned.parquet",
+    feature_selection_input_path: str | Path | None = None,
     sync_to_air: bool = False,
 ) -> PreparedDistributedArtifacts:
     target_dir = (config.repo_path / runtime_dir).resolve()
@@ -81,9 +81,6 @@ def prepare_distributed_runtime(
     optimisation_dir.mkdir(parents=True, exist_ok=True)
     evaluation_dir = target_dir / "evaluation"
     evaluation_dir.mkdir(parents=True, exist_ok=True)
-    feature_selection_dir = target_dir / "feature_selection"
-    feature_selection_dir.mkdir(parents=True, exist_ok=True)
-
     train_frame, tuning_frame, sample_store_col, train_sampling_metadata, tuning_sampling_metadata = load_gold_train_tuning_frames(
         duckdb_path=DEFAULT_DUCKDB_PATH,
         gold_table=DEFAULT_GOLD_TABLE,
@@ -124,10 +121,14 @@ def prepare_distributed_runtime(
     downcast_pandas_frame(history_reference_frame).to_parquet(evaluation_history_reference, index=False)
     downcast_pandas_frame(scored_reference_test_frame).to_parquet(evaluation_scored_reference, index=False)
 
-    feature_selection_input_src = (config.repo_path / feature_selection_input_path).resolve()
-    feature_selection_input_dst = feature_selection_dir / feature_selection_input_src.name
-    if feature_selection_input_src != feature_selection_input_dst:
-        shutil.copy2(feature_selection_input_src, feature_selection_input_dst)
+    feature_selection_input_dst: Path | None = None
+    if feature_selection_input_path is not None:
+        feature_selection_dir = target_dir / "feature_selection"
+        feature_selection_dir.mkdir(parents=True, exist_ok=True)
+        feature_selection_input_src = (config.repo_path / feature_selection_input_path).resolve()
+        feature_selection_input_dst = feature_selection_dir / feature_selection_input_src.name
+        if feature_selection_input_src != feature_selection_input_dst:
+            shutil.copy2(feature_selection_input_src, feature_selection_input_dst)
 
     manifest_path = target_dir / "manifest.json"
     _json_dump(
@@ -150,7 +151,7 @@ def prepare_distributed_runtime(
                 "requested_target_col": DEFAULT_REQUESTED_TARGET_COL,
             },
             "feature_selection": {
-                "input_path": str(feature_selection_input_dst),
+                "input_path": str(feature_selection_input_dst) if feature_selection_input_dst is not None else None,
             },
         },
     )

@@ -46,7 +46,7 @@ class PostgresConfig:
     password: str
     data_dir: Path
     log_path: Path
-    air_allow_cidr: str
+    allow_cidrs: tuple[str, ...]
 
     @property
     def sqlalchemy_url(self) -> str:
@@ -176,6 +176,20 @@ def load_distributed_config(config_path: str | Path | None = None) -> Distribute
     runtime_raw = _require_mapping(raw, "runtime")
     pipelines_raw = _require_mapping(raw, "pipelines")
 
+    allow_cidrs_raw = postgres_raw.get("allow_cidrs")
+    if allow_cidrs_raw is None:
+        legacy_air_allow_cidr = postgres_raw.get("air_allow_cidr")
+        if not isinstance(legacy_air_allow_cidr, str) or not legacy_air_allow_cidr:
+            raise ValueError(
+                "Distributed config key `postgres.allow_cidrs` must be a non-empty list "
+                "of CIDRs, or legacy key `postgres.air_allow_cidr` must be provided."
+            )
+        allow_cidrs = (legacy_air_allow_cidr,)
+    elif isinstance(allow_cidrs_raw, list) and allow_cidrs_raw:
+        allow_cidrs = tuple(str(item) for item in allow_cidrs_raw)
+    else:
+        raise ValueError("Distributed config key `postgres.allow_cidrs` must be a non-empty list.")
+
     project = ProjectConfig(
         repo_path=project_root,
         python_bin=str(project_raw["python_bin"]),
@@ -196,7 +210,7 @@ def load_distributed_config(config_path: str | Path | None = None) -> Distribute
         password=str(os.environ.get("PRAEDIXA_OPTUNA_DB_PASSWORD", postgres_raw["password"])),
         data_dir=_resolve_path(project_root, str(postgres_raw["data_dir"])),
         log_path=_resolve_path(project_root, str(postgres_raw["log_path"])),
-        air_allow_cidr=str(postgres_raw["air_allow_cidr"]),
+        allow_cidrs=allow_cidrs,
     )
     pro_raw = _require_mapping(workers_raw, "pro")
     air_raw = _require_mapping(workers_raw, "air")

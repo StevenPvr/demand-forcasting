@@ -37,7 +37,9 @@ def wait_for_workers(
 ) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if len(client.scheduler_info().get("workers", {})) >= minimum_workers:
+        scheduler_info = client.scheduler_info()
+        worker_count = int(scheduler_info.get("n_workers", 0))
+        if worker_count >= minimum_workers:
             return
         time.sleep(0.5)
     raise TimeoutError(f"Timed out waiting for {minimum_workers} Dask workers.")

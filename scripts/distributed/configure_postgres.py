@@ -33,12 +33,12 @@ def _ensure_conf_line(path: Path, prefix: str, value: str) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _ensure_pg_hba(path: Path, air_allow_cidr: str) -> None:
+def _ensure_pg_hba(path: Path, allow_cidrs: tuple[str, ...]) -> None:
     required_lines = [
         "host all all 127.0.0.1/32 scram-sha-256",
         "host all all ::1/128 scram-sha-256",
-        f"host all all {air_allow_cidr} scram-sha-256",
     ]
+    required_lines.extend(f"host all all {cidr} scram-sha-256" for cidr in allow_cidrs)
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     for required in required_lines:
         if required not in lines:
@@ -71,7 +71,7 @@ def main() -> None:
 
     _ensure_conf_line(data_dir / "postgresql.conf", "listen_addresses", f"'{postgres.bind_host}'")
     _ensure_conf_line(data_dir / "postgresql.conf", "port", str(postgres.port))
-    _ensure_pg_hba(data_dir / "pg_hba.conf", postgres.air_allow_cidr)
+    _ensure_pg_hba(data_dir / "pg_hba.conf", postgres.allow_cidrs)
 
     status = subprocess.run([pg_ctl, "-D", str(data_dir), "status"], check=False)
     if status.returncode != 0:
@@ -79,6 +79,8 @@ def main() -> None:
             [pg_ctl, "-D", str(data_dir), "-l", str(log_path), "start"],
             check=True,
         )
+    else:
+        subprocess.run([pg_ctl, "-D", str(data_dir), "reload"], check=True)
 
     role_sql = (
         "DO $$ BEGIN "
@@ -117,6 +119,34 @@ def main() -> None:
             postgres.database,
             "-c",
             f"GRANT ALL PRIVILEGES ON DATABASE {postgres.database} TO {postgres.user};",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            psql,
+            "-h",
+            "127.0.0.1",
+            "-p",
+            str(postgres.port),
+            "-d",
+            "postgres",
+            "-c",
+            f"ALTER DATABASE {postgres.database} OWNER TO {postgres.user};",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            psql,
+            "-h",
+            "127.0.0.1",
+            "-p",
+            str(postgres.port),
+            "-d",
+            postgres.database,
+            "-c",
+            f"ALTER SCHEMA public OWNER TO {postgres.user}; GRANT ALL ON SCHEMA public TO {postgres.user};",
         ],
         check=True,
     )

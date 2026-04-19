@@ -384,196 +384,7 @@ def _build_bakery_reference_feature_frame(
     )
     merged["target_dt"] = merged["dt"] + pd.Timedelta(days=1)
     merged = merged.sort_values(["product_id", "dt"]).reset_index(drop=True)
-
-    product_group = merged.groupby("product_id", sort=False)
-    quantity_series = cast(pd.Series, merged["current_day_demand_qty"]).astype(float)
-    merged["target_demand_qty_d_plus_1"] = product_group["current_day_demand_qty"].shift(-1)
-    merged["lag_1"] = product_group["current_day_demand_qty"].shift(1)
-    merged["lag_7"] = product_group["current_day_demand_qty"].shift(7)
-    merged["lag_14"] = product_group["current_day_demand_qty"].shift(14)
-    merged["lag_21_same_dow"] = product_group["current_day_demand_qty"].shift(21)
-    merged["lag_28"] = product_group["current_day_demand_qty"].shift(28)
-    merged["target_lag_7"] = product_group["current_day_demand_qty"].shift(6)
-    merged["target_lag_14"] = product_group["current_day_demand_qty"].shift(13)
-    merged["target_lag_21"] = product_group["current_day_demand_qty"].shift(20)
-    merged["target_lag_28"] = product_group["current_day_demand_qty"].shift(27)
-    merged["rolling_mean_7"] = (
-        product_group["current_day_demand_qty"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["rolling_mean_14"] = (
-        product_group["current_day_demand_qty"].rolling(window=14, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["rolling_mean_28"] = (
-        product_group["current_day_demand_qty"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["rolling_std_28"] = (
-        product_group["current_day_demand_qty"].rolling(window=28, min_periods=1).std().reset_index(level=0, drop=True)
-    )
-    merged["naive_last_value"] = quantity_series
-    merged["avg_selling_price_lag_1"] = product_group["avg_selling_price"].shift(1)
-    merged["avg_selling_price_lag_7"] = product_group["avg_selling_price"].shift(7)
-    merged["avg_selling_price_lag_28"] = product_group["avg_selling_price"].shift(28)
-    merged["avg_selling_price_rolling_mean_7"] = (
-        product_group["avg_selling_price"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["avg_selling_price_rolling_mean_28"] = (
-        product_group["avg_selling_price"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["observed_discount_amount_lag_1"] = product_group["observed_discount_amount"].shift(1)
-    merged["observed_discount_amount_lag_7"] = product_group["observed_discount_amount"].shift(7)
-    merged["observed_discount_amount_lag_28"] = product_group["observed_discount_amount"].shift(28)
-    merged["observed_discount_amount_rolling_mean_7"] = (
-        product_group["observed_discount_amount"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["observed_discount_amount_rolling_mean_28"] = (
-        product_group["observed_discount_amount"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["promo_flag_lag_1"] = product_group["promo_flag"].shift(1)
-    merged["promo_flag_lag_7"] = product_group["promo_flag"].shift(7)
-    merged["promo_flag_lag_28"] = product_group["promo_flag"].shift(28)
-    merged["promo_rate_7"] = (
-        product_group["promo_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["promo_rate_28"] = (
-        product_group["promo_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["activity_flag_lag_1"] = product_group["activity_flag"].shift(1)
-    merged["activity_flag_lag_7"] = product_group["activity_flag"].shift(7)
-    merged["activity_flag_lag_28"] = product_group["activity_flag"].shift(28)
-    merged["activity_rate_7"] = (
-        product_group["activity_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["activity_rate_28"] = (
-        product_group["activity_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["observed_stockout_flag_lag_1"] = product_group["observed_stockout_flag"].shift(1)
-    merged["observed_stockout_flag_lag_7"] = product_group["observed_stockout_flag"].shift(7)
-    merged["observed_stockout_flag_lag_28"] = product_group["observed_stockout_flag"].shift(28)
-    merged["observed_stockout_rate_7"] = (
-        product_group["observed_stockout_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["observed_stockout_rate_28"] = (
-        product_group["observed_stockout_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_temperature_lag_0"] = merged["weather_temperature"]
-    merged["weather_temperature_lag_1"] = product_group["weather_temperature"].shift(1)
-    merged["weather_temperature_lag_7"] = product_group["weather_temperature"].shift(7)
-    merged["weather_temperature_rolling_mean_7"] = (
-        product_group["weather_temperature"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_temperature_rolling_mean_28"] = (
-        product_group["weather_temperature"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_temperature_min_lag_1"] = product_group["weather_temperature_min"].shift(1)
-    merged["weather_temperature_min_lag_7"] = product_group["weather_temperature_min"].shift(7)
-    merged["weather_temperature_min_rolling_mean_7"] = (
-        product_group["weather_temperature_min"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_temperature_max_lag_1"] = product_group["weather_temperature_max"].shift(1)
-    merged["weather_temperature_max_lag_7"] = product_group["weather_temperature_max"].shift(7)
-    merged["weather_temperature_max_rolling_mean_7"] = (
-        product_group["weather_temperature_max"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_precipitation_lag_0"] = merged["weather_precipitation"]
-    merged["weather_precipitation_lag_1"] = product_group["weather_precipitation"].shift(1)
-    merged["weather_precipitation_lag_7"] = product_group["weather_precipitation"].shift(7)
-    merged["weather_precipitation_rolling_mean_7"] = (
-        product_group["weather_precipitation"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_precipitation_rolling_mean_28"] = (
-        product_group["weather_precipitation"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_humidity_lag_0"] = merged["weather_humidity"]
-    merged["weather_humidity_lag_1"] = product_group["weather_humidity"].shift(1)
-    merged["weather_humidity_lag_7"] = product_group["weather_humidity"].shift(7)
-    merged["weather_humidity_rolling_mean_7"] = (
-        product_group["weather_humidity"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["weather_wind_level_lag_0"] = merged["weather_wind_level"]
-    merged["weather_wind_level_lag_1"] = product_group["weather_wind_level"].shift(1)
-    merged["weather_wind_level_lag_7"] = product_group["weather_wind_level"].shift(7)
-    merged["weather_wind_level_rolling_mean_7"] = (
-        product_group["weather_wind_level"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True)
-    )
-    merged["inflation_cpi_latest_lag_28"] = product_group["inflation_cpi_latest"].shift(28)
-    merged["inflation_cpi_latest_delta_28"] = (
-        merged["inflation_cpi_latest"] - merged["inflation_cpi_latest_lag_28"]
-    )
-    merged["food_cpi_latest_lag_28"] = product_group["food_cpi_latest"].shift(28)
-    merged["food_cpi_latest_delta_28"] = merged["food_cpi_latest"] - merged["food_cpi_latest_lag_28"]
-    merged["policy_rate_latest_lag_28"] = product_group["policy_rate_latest"].shift(28)
-    merged["policy_rate_latest_delta_28"] = (
-        merged["policy_rate_latest"] - merged["policy_rate_latest_lag_28"]
-    )
-    merged["gdp_growth_latest_lag_28"] = product_group["gdp_growth_latest"].shift(28)
-    merged["gdp_growth_latest_delta_28"] = merged["gdp_growth_latest"] - merged["gdp_growth_latest_lag_28"]
-    merged["gdp_quarterly_level_latest_lag_28"] = product_group["gdp_quarterly_level_latest"].shift(28)
-    merged["gdp_quarterly_level_latest_delta_28"] = (
-        merged["gdp_quarterly_level_latest"] - merged["gdp_quarterly_level_latest_lag_28"]
-    )
-    merged["gdp_current_usd_latest_lag_28"] = product_group["gdp_current_usd_latest"].shift(28)
-    merged["gdp_current_usd_latest_delta_28"] = (
-        merged["gdp_current_usd_latest"] - merged["gdp_current_usd_latest_lag_28"]
-    )
-    merged["unemployment_rate_latest_lag_28"] = product_group["unemployment_rate_latest"].shift(28)
-    merged["unemployment_rate_latest_delta_28"] = (
-        merged["unemployment_rate_latest"] - merged["unemployment_rate_latest_lag_28"]
-    )
-    merged["consumer_confidence_latest_lag_28"] = product_group["consumer_confidence_latest"].shift(28)
-    merged["consumer_confidence_latest_delta_28"] = (
-        merged["consumer_confidence_latest"] - merged["consumer_confidence_latest_lag_28"]
-    )
-    merged["retail_sales_index_latest_lag_28"] = product_group["retail_sales_index_latest"].shift(28)
-    merged["retail_sales_index_latest_delta_28"] = (
-        merged["retail_sales_index_latest"] - merged["retail_sales_index_latest_lag_28"]
-    )
-    merged["lending_interest_rate_latest_lag_28"] = product_group["lending_interest_rate_latest"].shift(28)
-    merged["lending_interest_rate_latest_delta_28"] = (
-        merged["lending_interest_rate_latest"] - merged["lending_interest_rate_latest_lag_28"]
-    )
-    merged["government_debt_pct_gdp_latest_lag_28"] = product_group["government_debt_pct_gdp_latest"].shift(28)
-    merged["government_debt_pct_gdp_latest_delta_28"] = (
-        merged["government_debt_pct_gdp_latest"] - merged["government_debt_pct_gdp_latest_lag_28"]
-    )
-    merged["target_holiday_flag"] = product_group["holiday_flag"].shift(-1)
-    merged["target_holiday_name"] = product_group["holiday_name"].shift(-1)
-    merged["target_school_holiday_flag"] = product_group["school_holiday_flag"].shift(-1)
-    merged["target_bridge_day_flag"] = product_group["bridge_day_flag"].shift(-1)
-    merged["target_pre_holiday_flag"] = product_group["pre_holiday_flag"].shift(-1)
-    merged["target_post_holiday_flag"] = product_group["post_holiday_flag"].shift(-1)
-
-    lag_cols = ["lag_7", "lag_14", "lag_21_same_dow", "lag_28"]
-    target_lag_cols = ["target_lag_7", "target_lag_14", "target_lag_21", "target_lag_28"]
-    merged["same_dow_mean_4w"] = merged[lag_cols].mean(axis=1, skipna=True)
-    merged["target_same_dow_mean_4w"] = merged[target_lag_cols].mean(axis=1, skipna=True)
-    merged["seasonal_naive_d7"] = merged["lag_7"]
-    merged["target_seasonal_naive_d7"] = merged["target_lag_7"]
-    merged["moving_average_7"] = merged["rolling_mean_7"]
-    merged["moving_average_28"] = merged["rolling_mean_28"]
-    valid_delta_mask = (
-        merged["target_demand_qty_d_plus_1"].notna()
-        & merged["target_lag_7"].notna()
-        & (merged["target_demand_qty_d_plus_1"] >= 0.0)
-        & (merged["target_lag_7"] >= 0.0)
-    )
-    merged["target_delta_log_wow_d_plus_1"] = np.nan
-    merged.loc[valid_delta_mask, "target_delta_log_wow_d_plus_1"] = (
-        np.log1p(merged.loc[valid_delta_mask, "target_demand_qty_d_plus_1"].astype(float))
-        - np.log1p(merged.loc[valid_delta_mask, "target_lag_7"].astype(float))
-    )
-    merged["target_day_of_week"] = merged["target_dt"].dt.dayofweek
-    merged["target_day_of_month"] = merged["target_dt"].dt.day
-    merged["target_week_of_year"] = merged["target_dt"].dt.isocalendar().week.astype(int)
-    merged["target_month"] = merged["target_dt"].dt.month
-    merged["target_quarter"] = merged["target_dt"].dt.quarter
-    merged["target_year"] = merged["target_dt"].dt.year
-    merged["target_weekend_flag"] = merged["target_day_of_week"].isin([5, 6])
-    merged["sin_target_day_of_week"] = np.sin(2 * np.pi * merged["target_day_of_week"].astype(float) / 7.0)
-    merged["cos_target_day_of_week"] = np.cos(2 * np.pi * merged["target_day_of_week"].astype(float) / 7.0)
-    merged["sin_target_week_of_year"] = np.sin(2 * np.pi * merged["target_week_of_year"].astype(float) / 53.0)
-    merged["cos_target_week_of_year"] = np.cos(2 * np.pi * merged["target_week_of_year"].astype(float) / 53.0)
-    merged["sin_target_month"] = np.sin(2 * np.pi * merged["target_month"].astype(float) / 12.0)
-    merged["cos_target_month"] = np.cos(2 * np.pi * merged["target_month"].astype(float) / 12.0)
+    merged = pd.concat([merged, _build_bakery_overlap_feature_block(merged)], axis=1)
 
     target_rows = merged.merge(
         reference_test.loc[:, [REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL, REFERENCE_TARGET_COL]],
@@ -593,6 +404,153 @@ def _build_bakery_reference_feature_frame(
     target_rows[REFERENCE_PRODUCT_COL] = target_rows[REFERENCE_PRODUCT_COL].astype(str)
     target_rows[REFERENCE_DATE_COL] = pd.to_datetime(target_rows[REFERENCE_DATE_COL])
     return target_rows.sort_values([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL]).reset_index(drop=True)
+
+
+def _build_bakery_overlap_feature_block(merged: pd.DataFrame) -> pd.DataFrame:
+    product_group = merged.groupby("product_id", sort=False)
+    quantity_series = cast(pd.Series, merged["current_day_demand_qty"]).astype(float)
+    target_dt = pd.to_datetime(merged["target_dt"])
+
+    inflation_cpi_latest_lag_28 = product_group["inflation_cpi_latest"].shift(28)
+    food_cpi_latest_lag_28 = product_group["food_cpi_latest"].shift(28)
+    policy_rate_latest_lag_28 = product_group["policy_rate_latest"].shift(28)
+    gdp_growth_latest_lag_28 = product_group["gdp_growth_latest"].shift(28)
+    gdp_quarterly_level_latest_lag_28 = product_group["gdp_quarterly_level_latest"].shift(28)
+    gdp_current_usd_latest_lag_28 = product_group["gdp_current_usd_latest"].shift(28)
+    unemployment_rate_latest_lag_28 = product_group["unemployment_rate_latest"].shift(28)
+    consumer_confidence_latest_lag_28 = product_group["consumer_confidence_latest"].shift(28)
+    retail_sales_index_latest_lag_28 = product_group["retail_sales_index_latest"].shift(28)
+    lending_interest_rate_latest_lag_28 = product_group["lending_interest_rate_latest"].shift(28)
+    government_debt_pct_gdp_latest_lag_28 = product_group["government_debt_pct_gdp_latest"].shift(28)
+
+    feature_map: dict[str, object] = {
+        "target_demand_qty_d_plus_1": product_group["current_day_demand_qty"].shift(-1),
+        "lag_1": product_group["current_day_demand_qty"].shift(1),
+        "lag_7": product_group["current_day_demand_qty"].shift(7),
+        "lag_14": product_group["current_day_demand_qty"].shift(14),
+        "lag_21_same_dow": product_group["current_day_demand_qty"].shift(21),
+        "lag_28": product_group["current_day_demand_qty"].shift(28),
+        "target_lag_7": product_group["current_day_demand_qty"].shift(6),
+        "target_lag_14": product_group["current_day_demand_qty"].shift(13),
+        "target_lag_21": product_group["current_day_demand_qty"].shift(20),
+        "target_lag_28": product_group["current_day_demand_qty"].shift(27),
+        "rolling_mean_7": product_group["current_day_demand_qty"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "rolling_mean_14": product_group["current_day_demand_qty"].rolling(window=14, min_periods=1).mean().reset_index(level=0, drop=True),
+        "rolling_mean_28": product_group["current_day_demand_qty"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "rolling_std_28": product_group["current_day_demand_qty"].rolling(window=28, min_periods=1).std().reset_index(level=0, drop=True),
+        "naive_last_value": quantity_series,
+        "avg_selling_price_lag_1": product_group["avg_selling_price"].shift(1),
+        "avg_selling_price_lag_7": product_group["avg_selling_price"].shift(7),
+        "avg_selling_price_lag_28": product_group["avg_selling_price"].shift(28),
+        "avg_selling_price_rolling_mean_7": product_group["avg_selling_price"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "avg_selling_price_rolling_mean_28": product_group["avg_selling_price"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "observed_discount_amount_lag_1": product_group["observed_discount_amount"].shift(1),
+        "observed_discount_amount_lag_7": product_group["observed_discount_amount"].shift(7),
+        "observed_discount_amount_lag_28": product_group["observed_discount_amount"].shift(28),
+        "observed_discount_amount_rolling_mean_7": product_group["observed_discount_amount"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "observed_discount_amount_rolling_mean_28": product_group["observed_discount_amount"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "promo_flag_lag_1": product_group["promo_flag"].shift(1),
+        "promo_flag_lag_7": product_group["promo_flag"].shift(7),
+        "promo_flag_lag_28": product_group["promo_flag"].shift(28),
+        "promo_rate_7": product_group["promo_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "promo_rate_28": product_group["promo_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "activity_flag_lag_1": product_group["activity_flag"].shift(1),
+        "activity_flag_lag_7": product_group["activity_flag"].shift(7),
+        "activity_flag_lag_28": product_group["activity_flag"].shift(28),
+        "activity_rate_7": product_group["activity_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "activity_rate_28": product_group["activity_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "observed_stockout_flag_lag_1": product_group["observed_stockout_flag"].shift(1),
+        "observed_stockout_flag_lag_7": product_group["observed_stockout_flag"].shift(7),
+        "observed_stockout_flag_lag_28": product_group["observed_stockout_flag"].shift(28),
+        "observed_stockout_rate_7": product_group["observed_stockout_flag"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "observed_stockout_rate_28": product_group["observed_stockout_flag"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_temperature_lag_0": merged["weather_temperature"],
+        "weather_temperature_lag_1": product_group["weather_temperature"].shift(1),
+        "weather_temperature_lag_7": product_group["weather_temperature"].shift(7),
+        "weather_temperature_rolling_mean_7": product_group["weather_temperature"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_temperature_rolling_mean_28": product_group["weather_temperature"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_temperature_min_lag_1": product_group["weather_temperature_min"].shift(1),
+        "weather_temperature_min_lag_7": product_group["weather_temperature_min"].shift(7),
+        "weather_temperature_min_rolling_mean_7": product_group["weather_temperature_min"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_temperature_max_lag_1": product_group["weather_temperature_max"].shift(1),
+        "weather_temperature_max_lag_7": product_group["weather_temperature_max"].shift(7),
+        "weather_temperature_max_rolling_mean_7": product_group["weather_temperature_max"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_precipitation_lag_0": merged["weather_precipitation"],
+        "weather_precipitation_lag_1": product_group["weather_precipitation"].shift(1),
+        "weather_precipitation_lag_7": product_group["weather_precipitation"].shift(7),
+        "weather_precipitation_rolling_mean_7": product_group["weather_precipitation"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_precipitation_rolling_mean_28": product_group["weather_precipitation"].rolling(window=28, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_humidity_lag_0": merged["weather_humidity"],
+        "weather_humidity_lag_1": product_group["weather_humidity"].shift(1),
+        "weather_humidity_lag_7": product_group["weather_humidity"].shift(7),
+        "weather_humidity_rolling_mean_7": product_group["weather_humidity"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "weather_wind_level_lag_0": merged["weather_wind_level"],
+        "weather_wind_level_lag_1": product_group["weather_wind_level"].shift(1),
+        "weather_wind_level_lag_7": product_group["weather_wind_level"].shift(7),
+        "weather_wind_level_rolling_mean_7": product_group["weather_wind_level"].rolling(window=7, min_periods=1).mean().reset_index(level=0, drop=True),
+        "inflation_cpi_latest_lag_28": inflation_cpi_latest_lag_28,
+        "inflation_cpi_latest_delta_28": merged["inflation_cpi_latest"] - inflation_cpi_latest_lag_28,
+        "food_cpi_latest_lag_28": food_cpi_latest_lag_28,
+        "food_cpi_latest_delta_28": merged["food_cpi_latest"] - food_cpi_latest_lag_28,
+        "policy_rate_latest_lag_28": policy_rate_latest_lag_28,
+        "policy_rate_latest_delta_28": merged["policy_rate_latest"] - policy_rate_latest_lag_28,
+        "gdp_growth_latest_lag_28": gdp_growth_latest_lag_28,
+        "gdp_growth_latest_delta_28": merged["gdp_growth_latest"] - gdp_growth_latest_lag_28,
+        "gdp_quarterly_level_latest_lag_28": gdp_quarterly_level_latest_lag_28,
+        "gdp_quarterly_level_latest_delta_28": merged["gdp_quarterly_level_latest"] - gdp_quarterly_level_latest_lag_28,
+        "gdp_current_usd_latest_lag_28": gdp_current_usd_latest_lag_28,
+        "gdp_current_usd_latest_delta_28": merged["gdp_current_usd_latest"] - gdp_current_usd_latest_lag_28,
+        "unemployment_rate_latest_lag_28": unemployment_rate_latest_lag_28,
+        "unemployment_rate_latest_delta_28": merged["unemployment_rate_latest"] - unemployment_rate_latest_lag_28,
+        "consumer_confidence_latest_lag_28": consumer_confidence_latest_lag_28,
+        "consumer_confidence_latest_delta_28": merged["consumer_confidence_latest"] - consumer_confidence_latest_lag_28,
+        "retail_sales_index_latest_lag_28": retail_sales_index_latest_lag_28,
+        "retail_sales_index_latest_delta_28": merged["retail_sales_index_latest"] - retail_sales_index_latest_lag_28,
+        "lending_interest_rate_latest_lag_28": lending_interest_rate_latest_lag_28,
+        "lending_interest_rate_latest_delta_28": merged["lending_interest_rate_latest"] - lending_interest_rate_latest_lag_28,
+        "government_debt_pct_gdp_latest_lag_28": government_debt_pct_gdp_latest_lag_28,
+        "government_debt_pct_gdp_latest_delta_28": merged["government_debt_pct_gdp_latest"] - government_debt_pct_gdp_latest_lag_28,
+        "target_holiday_flag": product_group["holiday_flag"].shift(-1),
+        "target_holiday_name": product_group["holiday_name"].shift(-1),
+        "target_school_holiday_flag": product_group["school_holiday_flag"].shift(-1),
+        "target_bridge_day_flag": product_group["bridge_day_flag"].shift(-1),
+        "target_pre_holiday_flag": product_group["pre_holiday_flag"].shift(-1),
+        "target_post_holiday_flag": product_group["post_holiday_flag"].shift(-1),
+        "target_day_of_week": target_dt.dt.dayofweek,
+        "target_day_of_month": target_dt.dt.day,
+        "target_week_of_year": target_dt.dt.isocalendar().week.astype(int),
+        "target_month": target_dt.dt.month,
+        "target_quarter": target_dt.dt.quarter,
+        "target_year": target_dt.dt.year,
+    }
+    feature_frame = pd.DataFrame(feature_map, index=merged.index)
+    lag_cols = ["lag_7", "lag_14", "lag_21_same_dow", "lag_28"]
+    target_lag_cols = ["target_lag_7", "target_lag_14", "target_lag_21", "target_lag_28"]
+    valid_delta_mask = (
+        feature_frame["target_demand_qty_d_plus_1"].notna()
+        & feature_frame["target_lag_7"].notna()
+        & (feature_frame["target_demand_qty_d_plus_1"] >= 0.0)
+        & (feature_frame["target_lag_7"] >= 0.0)
+    )
+    feature_frame["same_dow_mean_4w"] = feature_frame[lag_cols].mean(axis=1, skipna=True)
+    feature_frame["target_same_dow_mean_4w"] = feature_frame[target_lag_cols].mean(axis=1, skipna=True)
+    feature_frame["seasonal_naive_d7"] = feature_frame["lag_7"]
+    feature_frame["target_seasonal_naive_d7"] = feature_frame["target_lag_7"]
+    feature_frame["moving_average_7"] = feature_frame["rolling_mean_7"]
+    feature_frame["moving_average_28"] = feature_frame["rolling_mean_28"]
+    feature_frame["target_delta_log_wow_d_plus_1"] = np.nan
+    feature_frame.loc[valid_delta_mask, "target_delta_log_wow_d_plus_1"] = (
+        np.log1p(feature_frame.loc[valid_delta_mask, "target_demand_qty_d_plus_1"].astype(float))
+        - np.log1p(feature_frame.loc[valid_delta_mask, "target_lag_7"].astype(float))
+    )
+    feature_frame["target_weekend_flag"] = feature_frame["target_day_of_week"].isin([5, 6])
+    feature_frame["sin_target_day_of_week"] = np.sin(2 * np.pi * feature_frame["target_day_of_week"].astype(float) / 7.0)
+    feature_frame["cos_target_day_of_week"] = np.cos(2 * np.pi * feature_frame["target_day_of_week"].astype(float) / 7.0)
+    feature_frame["sin_target_week_of_year"] = np.sin(2 * np.pi * feature_frame["target_week_of_year"].astype(float) / 53.0)
+    feature_frame["cos_target_week_of_year"] = np.cos(2 * np.pi * feature_frame["target_week_of_year"].astype(float) / 53.0)
+    feature_frame["sin_target_month"] = np.sin(2 * np.pi * feature_frame["target_month"].astype(float) / 12.0)
+    feature_frame["cos_target_month"] = np.cos(2 * np.pi * feature_frame["target_month"].astype(float) / 12.0)
+    return feature_frame
 
 
 def _to_reference_frame(
