@@ -47,7 +47,12 @@ def _prepare_prediction_frame(
 
 
 def _prediction_output_to_numpy(prediction: Any) -> np.ndarray:
-    resolved = np.asarray(prediction.output.detach().cpu().numpy(), dtype=float)
+    output_tensor = prediction.output.detach()
+    float_dtype = getattr(output_tensor, "float", None)
+    if callable(float_dtype):
+        output_tensor = float_dtype()
+    output_tensor_any = cast(Any, output_tensor)
+    resolved = np.asarray(output_tensor_any.cpu().numpy(), dtype=float)
     if resolved.ndim == 3 and resolved.shape[1] == 1:
         return resolved[:, 0, :]
     return resolved
