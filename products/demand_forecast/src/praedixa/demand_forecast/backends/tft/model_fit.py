@@ -132,13 +132,14 @@ def _build_trainer(
             save_last=False,
         )
         callbacks.append(checkpoint_callback)
+    deterministic_mode: bool | str = "warn" if str(cast(Any, resolved_params["accelerator"])) == "gpu" else True
     trainer = imports["Trainer"](
         accelerator=str(cast(Any, resolved_params["accelerator"])),
         devices=int(cast(Any, resolved_params["devices"])),
         precision=str(cast(Any, resolved_params["precision"])),
         max_epochs=int(cast(Any, resolved_params["max_epochs"])),
         gradient_clip_val=float(cast(Any, resolved_params["gradient_clip_val"])),
-        deterministic=True,
+        deterministic=deterministic_mode,
         benchmark=False,
         enable_checkpointing=bool(checkpoint_callback),
         enable_progress_bar=False,
@@ -153,7 +154,11 @@ def _build_trainer(
 def _seed_tft_runtime(imports: dict[str, Any], resolved_params: dict[str, object]) -> None:
     random_state = int(cast(Any, resolved_params.get("random_state", 7)))
     imports["seed_everything"](random_state, workers=True)
-    imports["torch"].use_deterministic_algorithms(True)
+    use_deterministic_algorithms = imports["torch"].use_deterministic_algorithms
+    if str(cast(Any, resolved_params.get("accelerator", "cpu"))) == "gpu":
+        use_deterministic_algorithms(True, warn_only=True)
+    else:
+        use_deterministic_algorithms(True)
     set_matmul_precision = getattr(imports["torch"], "set_float32_matmul_precision", None)
     if callable(set_matmul_precision):
         set_matmul_precision(str(cast(Any, resolved_params.get("matmul_precision", "highest"))))
