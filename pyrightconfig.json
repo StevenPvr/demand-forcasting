@@ -1,0 +1,41 @@
+{
+  "include": [
+    "apps",
+    "platform/python/src",
+    "products/demand_forecast/src",
+    "praedixa",
+    "tests"
+  ],
+  "extraPaths": [
+    "platform/python/src",
+    "products/demand_forecast/src"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "apps",
+      "extraPaths": [
+        "platform/python/src",
+        "products/demand_forecast/src"
+      ]
+    },
+    {
+      "root": "tests",
+      "extraPaths": [
+        "platform/python/src",
+        "products/demand_forecast/src"
+      ]
+    },
+    {
+      "root": "platform/python/src"
+    },
+    {
+      "root": "products/demand_forecast/src"
+    }
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "strict",
+  "useLibraryCodeForTypes": true,
+  "reportMissingTypeStubs": "none"
+}

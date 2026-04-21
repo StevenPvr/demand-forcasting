@@ -1,0 +1,73 @@
+version: 2
+
+models:
+  - name: gold_feature_panel_d1
+    columns:
+      - name: dataset_source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  [
+                    "freshretail",
+                    "freshretail_lt",
+                    "uci_online_retail",
+                    "uci_online_retail_ii",
+                    "mendeley_ecommerce",
+                    "mendeley_pharmacy_id",
+                    "mendeley_bangladesh_retail",
+                    "bakery",
+                    "first_party_daily",
+                    "synthetic_v1",
+                  ]
+      - name: dt
+        tests:
+          - not_null
+      - name: split_bucket
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["train", "val", "test"]
+      - name: location_id
+        tests:
+          - not_null
+      - name: product_id
+        tests:
+          - not_null
+      - name: series_id
+        tests:
+          - not_null
+      - name: target_demand_qty_d_plus_1
+        tests:
+          - not_null
+      - name: target_delta_log_wow_d_plus_1
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - dt
+              - location_id
+              - product_id
+
+  - name: gold_daily_product_forecast_panel_d1
+    columns:
+      - name: dataset_source
+        tests:
+          - not_null
+      - name: dt
+        tests:
+          - not_null
+      - name: target_dt
+        tests:
+          - not_null
+      - name: split_bucket
+        tests:
+          - not_null
+      - name: target_demand_qty_d_plus_1
+        tests:
+          - not_null
+      - name: target_delta_log_wow_d_plus_1

@@ -1,3 +1,0 @@
-interface:
-  display_name: "Anti-Leakage Audit"
-  short_description: "Find temporal leakage and invalid offline evaluation logic"

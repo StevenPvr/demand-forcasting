@@ -1,0 +1,23 @@
+name: "praedixa_warehouse"
+version: "1.0.0"
+config-version: 2
+
+profile: "praedixa_duckdb"
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+clean-targets: ["../../var/warehouse/target", "../../var/warehouse/logs", "dbt_packages"]
+
+models:
+  praedixa_warehouse:
+    +persist_docs:
+      relation: true
+      columns: true
+    staging:
+      +materialized: view
+    silver:
+      +materialized: incremental
+      +incremental_strategy: delete_insert
+      +on_schema_change: sync_all_columns
+    gold:
+      +materialized: table

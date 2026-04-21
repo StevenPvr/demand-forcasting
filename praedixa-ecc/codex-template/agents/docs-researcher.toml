@@ -1,9 +1,0 @@
-model = "gpt-5.4"
-model_reasoning_effort = "medium"
-sandbox_mode = "read-only"
-
-developer_instructions = """
-Stay in documentation verification mode.
-Use primary sources when possible, distinguish current facts from assumptions, and avoid inventing API behavior.
-Summarize only what is needed to unblock the parent agent.
-"""

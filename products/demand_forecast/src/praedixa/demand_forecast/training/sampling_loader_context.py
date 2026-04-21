@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+from praedixa.demand_forecast.contracts.targets import TargetContract, resolve_target_contract
+
+
+def parquet_relation_sql(path: Path) -> str:
+    return f"select * from parquet_scan('{path.as_posix()}')"
+
+
+def relation_sql_with_dataset_source(
+    *,
+    base_relation_sql: str,
+    columns: list[str],
+    dataset_source_col: str,
+) -> tuple[str, list[str]]:
+    if dataset_source_col in columns:
+        return base_relation_sql, columns
+    return (
+        f"select *, 'legacy' as {dataset_source_col} from ({base_relation_sql}) as parquet_source",
+        [*columns, dataset_source_col],
+    )
+
+
+def common_schema_previews(
+    *,
+    train_schema_preview: pd.DataFrame,
+    tuning_schema_preview: pd.DataFrame,
+    dataset_source_col: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    common_columns = [
+        column
+        for column in train_schema_preview.columns
+        if column in set(tuning_schema_preview.columns)
+    ]
+    train_target_schema_preview = train_schema_preview.loc[:, common_columns].copy()
+    tuning_target_schema_preview = tuning_schema_preview.loc[:, common_columns].copy()
+    if dataset_source_col not in train_target_schema_preview.columns:
+        train_target_schema_preview[dataset_source_col] = "legacy"
+    if dataset_source_col not in tuning_target_schema_preview.columns:
+        tuning_target_schema_preview[dataset_source_col] = "legacy"
+    return train_target_schema_preview, tuning_target_schema_preview
+
+
+def target_filter_columns(
+    *,
+    train_columns: list[str],
+    tuning_columns: list[str],
+    train_target_schema_preview: pd.DataFrame,
+    tuning_target_schema_preview: pd.DataFrame,
+    target_col: str,
+) -> tuple[TargetContract, str, str]:
+    target_contract = resolve_target_contract(
+        train_target_schema_preview,
+        tuning_target_schema_preview,
+        requested_target_col=target_col,
+    )
+    train_target_filter_col = (
+        target_contract.learning_target_col
+        if target_contract.learning_target_col in train_columns
+        else target_contract.absolute_target_col
+    )
+    tuning_target_filter_col = (
+        target_contract.learning_target_col
+        if target_contract.learning_target_col in tuning_columns
+        else target_contract.absolute_target_col
+    )
+    return target_contract, train_target_filter_col, tuning_target_filter_col
+
+
+__all__ = [
+    "common_schema_previews",
+    "parquet_relation_sql",
+    "relation_sql_with_dataset_source",
+    "target_filter_columns",
+]

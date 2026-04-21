@@ -1,0 +1,8 @@
+praedixa_duckdb:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('PRAEDIXA_DUCKDB_TARGET_PATH', env_var('PRAEDIXA_DUCKDB_LOCAL_PATH', 'var/warehouse/praedixa.duckdb')) }}"
+      schema: "{{ env_var('PRAEDIXA_DUCKDB_SILVER_SCHEMA', 'silver') }}"
+      threads: "{{ env_var('PRAEDIXA_DBT_THREADS', '4') | int }}"

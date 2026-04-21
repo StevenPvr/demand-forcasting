@@ -292,12 +292,10 @@ Architecture data envisagée :
 Stack / approche technique évoquée :
 - Python
 - SQL
-- ML tabulaire
 - séries temporelles
-- XGBoost
-- XGBoost
+- TFT / Temporal Fusion Transformer comme cible de pipeline unique pour la prevision
 - SARIMAX / économétrie selon cas
-- LLM plutôt comme couche d’interface / agent / orchestration que comme moteur prédictif principal sur les données tabulaires
+- LLM plutôt comme couche d’interface / agent / orchestration que comme moteur prédictif principal sur les données opérationnelles
 
 ========================
 14. PHILOSOPHIE TECHNIQUE

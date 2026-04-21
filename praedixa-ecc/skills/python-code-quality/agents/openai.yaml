@@ -1,3 +1,0 @@
-interface:
-  display_name: "Python Code Quality"
-  short_description: "Apply the repo's Python structure, typing, and test rules"

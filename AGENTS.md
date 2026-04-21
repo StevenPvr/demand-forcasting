@@ -1,6 +1,8 @@
-# Bonnes Pratiques -- prevision-sp500
+# Bonnes Pratiques -- praedixa-demand-forecast
 
-> Document de reference pour le projet de prevision du S&P 500 / pipeline XTB CFD.
+> Document de reference pour le projet Praedixa de prevision de demande.
+> Cible analytique ideale : **demande latente** quand les signaux de censure sont disponibles.
+> Cible de repli : **ventes observees** quand on ne peut pas reconstruire proprement la demande latente.
 > Chaque regle est concrete et actionnable. Les exemples DO/DON'T s'appuient sur le code existant.
 
 ---
@@ -9,7 +11,7 @@
 
 1. [Data Science generales](#1-data-science-generales)
 2. [Machine Learning](#2-machine-learning)
-3. [Finance quantitative](#3-finance-quantitative)
+3. [Forecasting demande latente](#3-forecasting-demande-latente)
 4. [Series temporelles](#4-series-temporelles)
 5. [Regles specifiques au projet](#5-regles-specifiques-au-projet)
 
@@ -30,26 +32,63 @@ sample = data.sample(frac=0.05, random_state=config.random_seed)
 sample = data.sample(frac=0.05)  # non reproductible
 ```
 
-**Versioning des donnees** -- Nommer les fichiers avec la plage temporelle (`sp500_prices_2004_2025.parquet`, deja en place). Ajouter un hash SHA-256 ou `manifest.json` pour detecter les corruptions. Ne jamais committer les donnees volumineuses dans git (utiliser DVC ou stockage externe).
+**Versioning des donnees** -- Nommer les fichiers avec une convention lisible (`commercial_external_daily.parquet`, `train_selection_70_selected.parquet`, etc.). Ajouter un hash SHA-256 ou `manifest.json` pour detecter les corruptions. Ne jamais committer les donnees volumineuses dans git (utiliser DVC ou stockage externe).
 
-**Environnements** -- Verrouiller les dependances avec `uv.lock` (fait). Travailler dans `.venv/bin/python`. Epingler Python dans `.python-version` (fait : `3.11`).
+**Environnements** -- Verrouiller les dependances avec `uv.lock` (fait). Travailler dans `.venv/bin/python`. Epingler Python dans `.python-version` (fait : `3.13`).
+
+### 1.1.b Reproductibilite Deep Learning
+
+Pour un backend TFT de reference, la reproductibilite ne doit pas dependre seulement de `numpy` ou `pandas`.
+
+```python
+from lightning.pytorch import Trainer, seed_everything
+
+seed_everything(config.random_seed, workers=True)
+torch.use_deterministic_algorithms(True)
+
+trainer = Trainer(
+    deterministic=True,
+    benchmark=False,
+)
+```
+
+- [ ] Logger `python`, `torch`, `lightning`, `cuda`, `cudnn`, type de GPU et nombre de devices.
+- [ ] Interdire `DataLoader(..., in_order=False)` pour les runs de reference.
+- [ ] Geler l'ordre des series et des batches pour les backtests de reference.
+- [ ] Ajouter un test `meme seed => memes metriques a tolerance fixee`.
+
+### 1.1.c DISCIPLINE D'EXECUTION -- ARRET DES ITERATIONS COUTEUSES
+
+- [ ] AVANT TOUT RUN LONG, FAIRE UNE PHASE DE RAISONNEMENT COMPLETE : LIRE LE CODE IMPACTE, IDENTIFIER LES DEPENDANCES, VERIFIER LE SCHEMA, ET PREPARER UN PLAN DE MODIFICATION COHERENT.
+- [ ] INTERDICTION DE LANCER DES RUNS DE 10-30 MINUTES EN BOUCLE POUR DECOUVRIR LE PROBLEME PAR ESSAIS SUCCESSIFS.
+- [ ] SI UN RUN LONG EST NECESSAIRE, IL DOIT ETRE JUSTIFIE PAR UNE HYPOTHESE CLAIRE ET ETRE PRECEDE D'UN MAXIMUM DE VERIFICATIONS RAPIDES : TESTS UNITAIRES, `dbt parse`, LECTURE DU SQL COMPILE OU INSPECTION CIBLEE.
+- [ ] APRES UN ECHEC, NE PAS RELANCER IMMEDIATEMENT UN AUTRE RUN LONG. PRENDRE LE TEMPS D'ANALYSER LA CAUSE, VALIDER LE PATCH LE PLUS COMPLET POSSIBLE, PUIS RELANCER UNE SEULE FOIS.
+- [ ] L'OBJECTIF EST DE FAIRE LE TRAVAIL CORRECTEMENT DES LA PREMIERE ITERATION UTILE, PAS D'UTILISER LE PIPELINE COMPLET COMME OUTIL DE DEBUG PRINCIPAL.
+- [ ] EN CAS DE DOUTE SUR L'IMPACT D'UN CHANGEMENT TFT/DBT, PRIVILEGIER D'ABORD LES PREUVES LOCALES ET PEU COUTEUSES, PUIS SEULEMENT ENSUITE LE RUN COMPLET.
 
 ### 1.2 Gestion des donnees manquantes
 
 ```python
 # DO -- strategie explicite, documentee, tracable
-df["adj_close"] = df.groupby("ticker")["adj_close"].transform(
+df["target_demand_qty_d_plus_1"] = df.groupby("series_id")["target_demand_qty_d_plus_1"].transform(
     lambda s: s.ffill(limit=5)  # forward-fill max 5 jours
 )
-LOGGER.info("NaN restants apres ffill(5) : %d", df["adj_close"].isna().sum())
+LOGGER.info("NaN restants apres ffill(5) : %d", df["target_demand_qty_d_plus_1"].isna().sum())
 
 # DON'T -- fillna silencieux sans limite
-df["adj_close"].fillna(method="ffill", inplace=True)  # propage indefiniment
+df["target_demand_qty_d_plus_1"].fillna(method="ffill", inplace=True)  # propage indefiniment
 ```
 
 - [ ] Compter et logger les NaN avant et apres traitement.
-- [ ] Distinguer NaN "donnees absentes" des NaN "marche ferme" (weekend, jour ferie).
-- [ ] Documenter la strategie dans un docstring. Ne jamais interpoler entre tickers.
+- [ ] Distinguer NaN "donnees absentes" des NaN "site ferme / produit inactif / donnee manquante".
+- [ ] Documenter la strategie dans un docstring. Ne jamais interpoler entre series metier distinctes.
+
+### 1.2.b Contrats de donnees et de config
+
+- [ ] Chaque entree/sortie de pipeline a un schema executable `pandera`.
+- [ ] Chaque config a un modele `Pydantic` avec `extra='forbid'`.
+- [ ] Aucun champ sensible ne doit apparaitre en clair dans les logs.
+- [ ] Chaque schema porte une `schema_version`.
 
 ### 1.3 Documentation du pipeline
 
@@ -58,14 +97,14 @@ Chaque module (`data_fetching`, `data_cleaning`, `data_preprocessing`) doit cont
 ```python
 # DO
 def build_dataset(config: PipelineConfig) -> pd.DataFrame:
-    """Construit le DataFrame complet des prix S&P 500.
+    """Construit le panel de prevision complet.
 
-    Etapes : 1) Charge les constituants  2) Telecharge les prix  3) Applique le zero-fill.
+    Etapes : 1) Charge les sources  2) Aligne le schema canonique  3) Controle la qualite temporelle.
 
     Args:
         config: Configuration du pipeline (dates, chemins, retries).
     Returns:
-        DataFrame [date, ticker, adj_close], trie par (date, ticker).
+        DataFrame trie par (dt, series_id).
     """
 ```
 
@@ -73,15 +112,13 @@ def build_dataset(config: PipelineConfig) -> pd.DataFrame:
 
 | Etape | Module | Entree | Sortie |
 |---|---|---|---|
-| Broker snapshot | `core/src/meta_model/broker_xtb/` | PDF XTB officiel | `core/data/reference/xtb/xtb_instrument_specs.json` |
-| Reference data | `core/src/meta_model/data/data_reference/` | WRDS / bootstrap public | `core/data/reference/*.csv` |
-| Fetching | `core/src/meta_model/data/data_fetching/` | Références PIT + providers marché/date-level | `core/data/data_fetching/dataset_2004_2025.parquet` |
-| Cleaning | `core/src/meta_model/data/data_cleaning/` | `dataset_2004_2025.parquet` | `dataset_cleaned_2004_2025.parquet` |
-| Features | `core/src/meta_model/features_engineering/` | `dataset_cleaned_2004_2025.parquet` | `dataset_features_2004_2025.parquet` |
-| Preprocessing | `core/src/meta_model/data/data_preprocessing/` | `dataset_features_2004_2025.parquet` | `dataset_preprocessed_2009_2025.parquet` |
-| Feature selection | `core/src/meta_model/feature_selection/` | `dataset_preprocessed_2009_2025.parquet` | `dataset_preprocessed_feature_selected.parquet` |
-| Optimize | `core/src/meta_model/optimize_parameters/` | dataset filtré | `trial_ledger.parquet`, `overfitting_report.json` |
-| Evaluate | `core/src/meta_model/evaluate/` | prédictions + labels + contraintes portefeuille | métriques, backtests, exports manuels |
+| Bronze | `apps/warehouse/load_bronze/main.py` | sources brutes / exports / open data | tables bronze |
+| Silver | `apps/warehouse/run_silver/main.py` | bronze + enrichissements | tables silver |
+| Gold | `apps/warehouse/run_gold/main.py` | silver | panel gold canonique |
+| Global dataset | `platform/python/src/praedixa/platform/datasets/standardization/` | sources compatibles commerce | parquet canonique |
+| Feature prep | `products/demand_forecast/src/praedixa/demand_forecast/feature_screening/` | panel nettoye | jeux de travail locaux |
+| Optimize | `products/demand_forecast/src/praedixa/demand_forecast/training/` | jeux train / tuning | artefacts d'optimisation |
+| Evaluate | `products/demand_forecast/src/praedixa/demand_forecast/evaluation/` | predictions + labels + baselines | metriques, diagnostics, model card |
 
 Chaque etape lit un fichier et en produit un autre. Ne pas tout mettre dans une seule fonction.
 
@@ -101,16 +138,16 @@ Le projet utilise deja `logging` (`LOGGER = logging.getLogger(__name__)`) -- bie
 
 ```python
 # DO -- niveaux de log coherents
-LOGGER.info("Fetching %d tickers", len(symbols))             # progression
-LOGGER.warning("yfinance batch failed (%s/%s)", attempts, n)  # recuperable
-LOGGER.error("No price data retrieved")                       # echec
+LOGGER.info("Fetching %d series", len(series_ids))             # progression
+LOGGER.warning("One source batch failed (%s/%s)", attempts, n)  # recuperable
+LOGGER.error("No usable dataset rows retrieved")                # echec
 
 # DON'T
-print(f"Fetching {len(symbols)} tickers")  # invisible en prod, non filtrable
+print(f"Fetching {len(series_ids)} rows")  # invisible en prod, non filtrable
 ```
 
 - [ ] `logging` toujours, `print` jamais en production.
-- [ ] Logger le nombre de lignes/tickers a chaque etape.
+- [ ] Logger le nombre de lignes/series a chaque etape.
 - [ ] Logger les temps d'execution (`time.perf_counter()`).
 
 ### 1.7 Typage strict
@@ -123,12 +160,12 @@ def _parse_date(value: str | dt.date | dt.datetime) -> dt.date:
     ...
 
 def _fetch_prices(
-    symbols: list[str],
+    series_ids: list[str],
     start_date: str,
     end_date: str,
     config: PipelineConfig,
 ) -> dict[str, pd.Series]:
-    aliases: dict[str, str] = _load_aliases(config.ticker_aliases_csv)
+    aliases: dict[str, str] = _load_aliases(config.series_aliases_csv)
     results: dict[str, pd.Series] = {}
     ...
 
@@ -143,10 +180,10 @@ results = {}
 
 - [ ] `from __future__ import annotations` en premiere ligne de chaque fichier (union `X | Y` compatible Python 3.10+).
 - [ ] Installer les stubs pour les librairies tierces (`pandas-stubs`, `types-requests`, `types-pytz`).
-- [ ] Pour les librairies sans stubs (yfinance, pandas_datareader), creer des stubs dans `typings/` (convention Pylance).
+- [ ] Pour les librairies sans stubs, creer des stubs dans `typings/` si on depend vraiment d'elles.
 - [ ] Utiliser `X | None` au lieu de `Optional[X]`.
 - [ ] Typer les variables locales importantes (DataFrames, dictionnaires, listes).
-- [ ] **Jamais** de `# type: ignore` -- utiliser `cast()` ou `Any` quand le type checker ne peut pas inferer.
+- [ ] **Jamais** de `# type: ignore` nu -- utiliser `cast()` ou `Any` quand le type checker ne peut pas inferer, ou un `# type: ignore[code]` cible avec justification courte.
 - [ ] **Zero erreur Pylance** dans tous les fichiers.
 
 ```python
@@ -160,7 +197,7 @@ raw_result: Any = external_lib.some_call()
 data: pd.DataFrame = raw_result
 
 # DON'T
-data = pdr.get_data_stooq(...)  # type: ignore[union-attr]
+data = external_provider.fetch(...)  # type: ignore[union-attr]
 ```
 
 ### 1.8 Limites de taille
@@ -203,14 +240,44 @@ splits = [
 - Utiliser `TimeSeriesSplit` comme point de depart, mais verifier les frontieres par **date** (pas par index).
 - Laisser un **gap** d'au moins 1-5 jours entre train et validation pour eviter la fuite via lags/rolling.
 
+### 2.2.b Taxonomie TFT des variables
+
+Chaque feature doit porter un role explicite compatible TFT.
+
+```yaml
+price_planned:
+  role: time_varying_known_real
+  available_at_prediction: true
+  source_system: pricing
+  max_publication_lag_hours: 0
+
+weather_observed:
+  role: time_varying_unknown_real
+  available_at_prediction: false
+  source_system: weather_observed
+
+promo_flag:
+  role: time_varying_known_categorical
+  available_at_prediction: true
+
+series_id:
+  role: static_categorical
+  available_at_prediction: true
+```
+
+- [ ] Aucune feature n'entre dans le modele sans `role`.
+- [ ] Aucune feature n'entre dans le modele sans `available_at_prediction`.
+- [ ] Une meteo observee n'est jamais declaree `known`.
+- [ ] La cible reelle doit etre dans `time_varying_unknown_reals`.
+
 ### 2.3 Prevention du data leakage
 
 | Source de fuite | Exemple | Prevention |
 |---|---|---|
 | Feature calculee sur tout le dataset | `StandardScaler().fit(df_complet)` | Fit uniquement sur train |
 | Information future dans les features | rolling mean sans `min_periods` | Toujours `min_periods=window` |
-| Target qui fuit dans les features | `return_t+1` accessible a `t` | Verifier l'alignement temporel |
-| Donnees corporate publiees apres coup | Revision de BPA | Donnees point-in-time |
+| Target qui fuit dans les features | `target_d_plus_1` accessible a `t` | Verifier l'alignement temporel |
+| Donnees publiees apres coup | meteo observee ou KPI revise | Donnees point-in-time |
 
 ```python
 # DO -- pipeline sklearn avec fit sur train uniquement
@@ -222,30 +289,67 @@ preds = pipe.predict(X_test)     # applique les params du train au test
 df_scaled = StandardScaler().fit_transform(df_all)  # FUITE
 ```
 
-### 2.4 Metriques adaptees a la finance
+### 2.3.b Dataset train/val/test/inference pour TFT
+
+Le dataset train fait foi pour les encoders, normalizers et parametres de reconstruction.
+
+```python
+training = TimeSeriesDataSet(...)
+validation = TimeSeriesDataSet.from_dataset(training, val_df, stop_randomization=True)
+
+dataset_parameters: dict[str, Any] = training.get_parameters()
+inference_ds = TimeSeriesDataSet.from_parameters(
+    dataset_parameters,
+    future_df,
+    predict=True,
+)
+```
+
+- [ ] `training = TimeSeriesDataSet(train_df, ...)`
+- [ ] `validation = TimeSeriesDataSet.from_dataset(training, val_df, stop_randomization=True)`
+- [ ] `test = TimeSeriesDataSet.from_dataset(training, test_df, stop_randomization=True)`
+- [ ] L'inference reconstruit avec `from_parameters()`, jamais avec un nouveau fit.
+- [ ] `allow_missing_timesteps=True` n'est autorise que si la semantique business des trous est documentee.
+
+### 2.3.c Normalisation, cold start et categories non vues
+
+- [ ] `GroupNormalizer` par defaut pour la cible.
+- [ ] `EncoderNormalizer` uniquement avec justification ecrite.
+- [ ] Toute categorie inconnue en prod doit tomber dans un bucket explicite.
+- [ ] Le comportement cold start doit etre teste pour `new_product`, `new_site`, `new_series_id`.
+
+### 2.4 Metriques adaptees au forecasting operationnel
 
 Les metriques classiques (MSE, RMSE) ne suffisent pas. Ajouter :
 
-| Metrique | Mesure | Cible indicative |
+| Metrique | Mesure | Usage |
 |---|---|---|
-| **Sharpe Ratio** | Rendement ajuste du risque (annualise) | > 1.0 interessant, > 2.0 excellent |
-| **Max Drawdown** | Pire perte depuis un pic | Le plus faible possible |
-| **Hit Ratio** | % de predictions de direction correctes | > 55% pour etre exploitable |
-| **Profit Factor** | Gains bruts / Pertes brutes | > 1.5 |
-| **Calmar Ratio** | Rendement annuel / Max Drawdown | > 1.0 |
+| **WAPE** | Erreur absolue ponderee par le volume | Metrique principale cross-series |
+| **MAE** | Erreur absolue moyenne | Lecture directe en unites |
+| **Bias** | Sur/sous-prevision moyenne | Controle du drift operationnel |
+| **Stockout-weighted error** | Erreur sur jours tendus | Important si la demande latente est visee |
+| **Waste-weighted error** | Erreur sur jours de surproduction | Important pour le cout matiere |
 
 ```python
-def sharpe_ratio(returns: pd.Series, rf: float = 0.0, periods: int = 252) -> float:
-    excess = returns - rf / periods
-    return np.sqrt(periods) * excess.mean() / excess.std()
+def wape(y_true: pd.Series, y_pred: pd.Series, eps: float = 1e-8) -> float:
+    denom: float = float(y_true.abs().sum())
+    if denom < eps:
+        return float("nan")
+    return float(y_true.sub(y_pred).abs().sum() / denom)
 
-def max_drawdown(cumulative_returns: pd.Series) -> float:
-    peak = cumulative_returns.cummax()
-    return ((cumulative_returns - peak) / peak).min()
+def bias(y_true: pd.Series, y_pred: pd.Series) -> float:
+    return float((y_pred - y_true).mean())
 ```
 
 - [ ] Metriques calculees sur le set de test out-of-sample uniquement.
-- [ ] Comparer a un baseline naif (buy & hold, prevision = rendement moyen).
+- [ ] Comparer a un baseline naif saisonnier ou last-value, pas seulement a un modele complexe.
+
+### 2.4.b Forecast probabiliste et calibration
+
+- [ ] Le backend TFT doit produire au minimum `P10`, `P50`, `P90`.
+- [ ] Les metriques obligatoires deviennent : pinball loss par quantile, couverture empirique des intervalles, largeur moyenne d'intervalle, WAPE, MAE, Bias, cout rupture, cout surstock.
+- [ ] Toutes les metriques doivent etre lues par horizon `h=1..H`, pas seulement en agrege.
+- [ ] TFT n'est jamais promu seul : il doit battre `Baseline`, un naif saisonnier, et un challenger plus simple.
 
 ### 2.5 Calibration et overfitting
 
@@ -254,13 +358,13 @@ def max_drawdown(cumulative_returns: pd.Series) -> float:
 model = Ridge(alpha=1.0)  # baseline lineaire regulariee
 
 # DON'T -- complexite prematuree
-model = XGBRegressor(n_estimators=5000, max_depth=12)  # overfitting garanti
+model = ComplexBoostingModel(...)  # surapprentissage probable
 ```
 
 - [ ] Regularisation systematique (L1/L2, dropout, early stopping).
 - [ ] Limiter les features a ~10-20x le nombre d'observations independantes.
-- [ ] Sharpe in-sample > 3.0 et out-of-sample < 0.5 = overfitting.
-- [ ] Documenter le nombre de combinaisons testees (Bonferroni / deflated Sharpe).
+- [ ] Un gain massif offline sans robustesse par split temporel = signal d'overfitting.
+- [ ] Documenter le nombre de combinaisons testees et les hypotheses de selection.
 
 ### 2.6 Feature importance et interpretabilite
 
@@ -268,98 +372,104 @@ model = XGBRegressor(n_estimators=5000, max_depth=12)  # overfitting garanti
 - [ ] Eliminer les features negligeables -- elles ajoutent du bruit.
 - [ ] Verifier que les features importantes ont un sens economique.
 
+### 2.6.b Interpretabilite propre au TFT
+
+- [ ] Sauvegarder les sorties de `interpret_output()` pour le meilleur checkpoint.
+- [ ] Logger les poids de selection de variables par segment et par horizon.
+- [ ] Ne jamais presenter attention/importance comme une causalite.
+
+### 2.7 Production training loop Lightning
+
+```python
+callbacks = [
+    EarlyStopping(
+        monitor="val_wape",
+        mode="min",
+        patience=config.patience,
+        strict=True,
+        check_finite=True,
+    ),
+    ModelCheckpoint(
+        monitor="val_wape",
+        mode="min",
+        save_top_k=3,
+        save_last=True,
+        filename="{epoch:03d}-{val_wape:.4f}",
+    ),
+    LearningRateMonitor(logging_interval="epoch"),
+]
+```
+
+- [ ] `EarlyStopping` obligatoire sur une metrique metier de validation.
+- [ ] `ModelCheckpoint(save_top_k=3, save_last=True)` obligatoire.
+- [ ] `LearningRateMonitor` obligatoire.
+- [ ] `gradient_clip_val` obligatoire via config.
+- [ ] `detect_anomaly=True` seulement en debug.
+- [ ] `DeviceStatsMonitor` active sur les runs GPU.
+
 ---
 
-## 3. Finance quantitative
+## 3. Forecasting demande latente
 
-### 3.1 Survivorship bias
+### 3.1 Demande latente vs ventes observees
 
-Le pipeline gere deja ce biais via `_load_constituents_from_wikipedia` (historique ajouts/retraits). Points d'attention :
+La cible ideale du projet est la **demande latente** :
 
-- [ ] Les changements Wikipedia ne remontent que jusqu'a une certaine date (deja logue). Documenter cette limitation.
-- [ ] Le zero-fill (`_apply_delisting_zero`) preserve les tickers delistes. Exclure les `0.0` du calcul des rendements.
+- ce que le client aurait voulu vendre ou servir sans rupture, fermeture partielle ou contrainte de capacite
+- ce que l'on cherche a approcher quand les signaux de censure existent
 
-```python
-# DO -- exclure les prix a 0 du calcul des rendements
-returns = df[df["adj_close"] > 0].groupby("ticker")["adj_close"].pct_change()
+Quand ce n'est pas possible, la cible de repli reste la **vente observee**.
 
-# DON'T -- calculer des rendements incluant la transition vers 0.0
-returns = df.groupby("ticker")["adj_close"].pct_change()  # -100% puis NaN/inf
-```
+- [ ] Toujours documenter explicitement si la cible d'un run est `demande latente estimee` ou `vente observee`.
+- [ ] Ne jamais presenter une prediction de ventes observees comme une prediction de demande latente.
 
-### 3.2 Look-ahead bias
+### 3.2 Censure operationnelle
 
-Utiliser une information non disponible au moment de la decision. Distinct du data leakage (probleme de pipeline ML) : ici c'est un probleme de temporalite des donnees.
+Les signaux suivants doivent etre traites comme des indices de censure potentielle :
 
-- Composition de l'indice connue ex-post (gere par le pipeline).
-- Donnees fondamentales revisees (earnings restated).
-- Prix ajustes retroactivement pour splits/dividendes : yfinance fournit un `Adj Close` recalcule retroactivement. Pour un backtest strict, stocker aussi le `Close` brut.
+- `observed_stockout_flag`
+- `location_closed_flag`
+- `product_active_flag = False`
+- `channel_disabled_flag`
+- `kitchen_saturation_flag`
+- `assortment_restriction_flag`
 
-### 3.3 Rendements vs prix
+- [ ] Si ces signaux existent, les exploiter dans la lecture de la cible et dans l'evaluation.
+- [ ] Si ces signaux n'existent pas, documenter que le pipeline predit des ventes observees et non une demande pure.
 
-Travailler sur les rendements, **jamais** les prix bruts (non-stationnaires) :
+### 3.2.b Qualite de label et censure
 
-```python
-# Arithmetique -- interpretation directe en %, portefeuille multi-actifs
-df["return_simple"] = df.groupby("ticker")["adj_close"].pct_change()
+Colonnes canoniques a ajouter ou maintenir dans les datasets de travail :
 
-# Logarithmique -- additivite temporelle, modelisation statistique
-df["return_log"] = np.log(df["adj_close"] / df.groupby("ticker")["adj_close"].shift(1))
-```
+- `target_semantics` = `latent_demand_estimated` | `observed_sales`
+- `censor_flag`
+- `target_source`
+- `label_quality_score`
+- `usable_for_training_flag`
 
-- [ ] Log-returns pour la modelisation, arithmetique pour le reporting.
+- [ ] Un run `latent demand` ne doit jamais apprendre silencieusement sur des ventes observees censurees sans masque, ponderation ou strategie explicite.
+- [ ] Les jours censures doivent etre separes dans l'evaluation.
+- [ ] Les agregats de performance doivent toujours distinguer `clean`, `censored`, `estimated-latent`.
 
-### 3.4 Couts de transaction et slippage
-
-Un backtest sans couts est un backtest faux.
-
-```python
-COST_BPS = 10  # 10 points de base aller-retour (conservateur)
-
-def net_return(gross_return: float, turnover: float) -> float:
-    return gross_return - turnover * COST_BPS / 10_000
-```
-
-- [ ] Documenter : couts (bps), slippage, delai d'execution (cloture ? ouverture J+1 ?).
-
-### 3.5 Regime changes et non-stationnarite
-
-```python
-# DO -- walk-forward qui re-entraine regulierement
-for train_end, test_start, test_end in walk_forward_splits:
-    model.fit(X_train)  # re-entrainement a chaque fenetre
-    preds = model.predict(X_test)
-
-# DON'T -- entrainer une fois et predire sur 10 ans
-model.fit(X_2004_2014)
-preds = model.predict(X_2015_2025)  # les relations ont change
-```
-
-- [ ] Tester la performance par regime (bull/bear/sideways).
-- [ ] Monitorer la stabilite des coefficients dans le temps.
-
-### 3.6 Backtesting realiste -- checklist
-
-- [ ] Couts de transaction inclus.
-- [ ] Slippage inclus (ou modele simplifie).
-- [ ] Aucun look-ahead bias ni survivorship bias.
-- [ ] Pas de fill au prix de cloture si la decision est prise a la cloture.
-- [ ] Position sizing realiste (pas de levier infini).
-- [ ] Comparer au benchmark (buy & hold S&P 500).
-- [ ] Reporter sur plusieurs periodes (pas cherry-picker la meilleure).
-
-### 3.7 Point-in-time data
+### 3.3 Point-in-time data
 
 Les donnees doivent refleter ce qui etait **reellement disponible** au moment de la decision.
 
 ```python
-# DO -- horodater avec la date de publication reelle
-gdp_data = pd.DataFrame({
-    "period": ["2023-Q4"], "value": [5.2],
-    "release_date": ["2024-03-28"],  # PIB Q4 publie fin mars
-})
-# DON'T -- utiliser la date de la periode comme date de disponibilite (= look-ahead)
+# DO -- n'utiliser que les signaux disponibles au moment de la prediction
+frame["weather_known_at_decision"] = weather_forecast["temperature"]
+
+# DON'T -- utiliser une observation publiee ou mesuree apres coup comme si elle etait connue
+frame["weather_known_at_decision"] = weather_observed["temperature"]
 ```
+
+### 3.4 Evaluation realiste -- checklist
+
+- [ ] Aucun look-ahead bias.
+- [ ] Distinction explicite entre jours normaux et jours censures.
+- [ ] Comparaison a des baselines statistiques simples.
+- [ ] Reporting separe pour les segments a forte valeur operationnelle.
+- [ ] Lecture economique des erreurs : gaspillage, ruptures, cout matiere, niveau de service.
 
 ---
 
@@ -367,7 +477,7 @@ gdp_data = pd.DataFrame({
 
 ### 4.1 Stationnarite
 
-Les prix ne sont pas stationnaires ; les rendements le sont (souvent). Tester avant de modeliser.
+La demande brute n'est pas stationnaire ; les variations, residus ou cibles transformees le sont souvent davantage. Tester avant de modeliser.
 
 ```python
 from statsmodels.tsa.stattools import adfuller, kpss
@@ -388,62 +498,55 @@ kpss_pval = kpss(series.dropna(), regression="c")[1]
 
 ### 4.2 Autocorrelation
 
-- L'autocorrelation dans les rendements bruts est faible (marche efficient), mais presente dans la **volatilite** (GARCH).
-- L'autocorrelation dans les residus du modele = mauvaise specification.
-- Les erreurs standard classiques sont biaisees avec autocorrelation (utiliser Newey-West).
+- L'autocorrelation dans la demande et les ventes est souvent forte a court terme.
+- L'autocorrelation dans les residus du modele = specification incomplete ou leakage.
+- Les erreurs et les metriques doivent etre lues par regime, pas seulement en moyenne globale.
 
 ### 4.3 Feature engineering temporel
 
 ```python
 # Lags
-for lag in [1, 2, 5, 10, 21]:
-    df[f"return_lag_{lag}"] = df.groupby("ticker")["return_log"].shift(lag)
+for lag in [1, 2, 7, 14, 28]:
+    df[f"demand_lag_{lag}"] = df.groupby("series_id")["target"].shift(lag)
 
-# Rolling statistics (1 semaine, 1 mois, 1 trimestre)
-for w in [5, 21, 63]:
-    df[f"vol_{w}d"] = df.groupby("ticker")["return_log"].transform(
-        lambda s: s.rolling(w, min_periods=w).std()
+# Rolling statistics
+for w in [7, 14, 28]:
+    df[f"demand_mean_{w}d"] = df.groupby("series_id")["target"].transform(
+        lambda s: s.rolling(w, min_periods=w).mean()
     )
-    df[f"mom_{w}d"] = df.groupby("ticker")["return_log"].transform(
-        lambda s: s.rolling(w, min_periods=w).sum()
+    df[f"demand_std_{w}d"] = df.groupby("series_id")["target"].transform(
+        lambda s: s.rolling(w, min_periods=w).std()
     )
 
 # Calendrier
 df["day_of_week"] = df["date"].dt.dayofweek     # 0=lundi
 df["month"] = df["date"].dt.month                # effet janvier
-df["quarter_end"] = df["date"].dt.is_quarter_end # window dressing
+df["quarter_end"] = df["date"].dt.is_quarter_end
 ```
 
 - [ ] Toujours `min_periods=window` dans les rolling.
 - [ ] Toujours `shift(1)` le target ou les features derivees du target.
-- [ ] Features de calendrier = jours de **trading**, pas jours calendaires.
+- [ ] Features de calendrier = jours operationnels reels, pas interpretation calendaire naive.
 
 ### 4.4 Jours feries et weekends
 
-Le projet utilise `pd.bdate_range` -- correct mais insuffisant (ignore les jours feries US).
+Le projet doit raisonner avec le calendrier operationnel reel du site, pas seulement avec un calendrier ouvrable generique.
 
 ```python
-# DO -- calendrier boursier precis
-import exchange_calendars as xcals
-nyse = xcals.get_calendar("XNYS")
-sessions = nyse.sessions_in_range(start, end)
-
-# Alternative sans dependance supplementaire :
-from pandas.tseries.holiday import USFederalHolidayCalendar
-from pandas.tseries.offsets import CustomBusinessDay
-us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+# DO -- calendrier metier precis
+site_calendar = build_site_calendar(site_id, start, end)
 
 # DON'T
-index = pd.bdate_range(start, end)  # inclut les jours feries federaux
+index = pd.date_range(start, end)  # ignore ouvertures, fermetures et jours speciaux
 ```
 
 ### 4.5 Frequence et alignement temporel
 
 ```python
-# Merger des donnees de frequences differentes (prix journalier + macro mensuel)
+# Merger des donnees de frequences differentes (demandes journalieres + macro mensuelle)
 macro["date"] = macro["date"] + pd.offsets.MonthEnd(0)
 df = df.merge(macro, on="date", how="left")
-df["macro_feat"] = df.groupby("ticker")["macro_feat"].ffill()
+df["macro_feat"] = df.groupby("series_id")["macro_feat"].ffill()
 
 # DON'T -- merger sans aligner => perd 95% des lignes
 df = prices.merge(macro, on="date")
@@ -451,8 +554,8 @@ df = prices.merge(macro, on="date")
 
 ### 4.6 Saisonnalite
 
-- La saisonnalite dans les rendements est faible et instable (effet janvier, effet lundi). Ne pas la surestimer.
-- Utile surtout pour la **volatilite** (publication de resultats, expirations d'options).
+- La saisonnalite dans la demande est souvent forte et utile, surtout en alimentaire perissable.
+- Les patterns jour de semaine, vacances, fériés, météo et événements sont prioritaires.
 - Tester la significativite statistique avant d'integrer une composante saisonniere.
 
 ---
@@ -461,93 +564,142 @@ df = prices.merge(macro, on="date")
 
 ### 5.0 Etat courant du repo
 
-- Le seul pipeline supporté est le pipeline `meta_model` XTB-first.
-- Les couches legacy `secondary_model`, `feature_corr_pca` et `feature_selection_lag` ne font plus partie du canonique.
-- Les artefacts runtime vivent dans `core/data/` et ce dossier est gitignoré.
-- Le bootstrap canonique avant un vrai run est:
-  1. `core/src/meta_model/broker_xtb/main.py`
-  2. `core/src/meta_model/data/data_reference/main.py`
-  3. `core/src/meta_model/launch/main.py`
-  4. puis la chaîne `data_fetching -> data_cleaning -> features_engineering -> data_preprocessing -> feature_selection -> optimize_parameters -> evaluate`
-- `data_fetching` est broker-aware:
-  - univers PIT S&P 500 intersecté avec les `stock_cfd` XTB,
-  - fondamentaux PIT depuis WRDS direct si `ID_WRDS` / `PASSWORD_WRDS` existent,
-  - fallback prix `yfinance -> stooq -> Tiingo`.
-- Les warnings `possibly delisted; no timezone found` venant de `yfinance` sont attendus sur certains anciens symboles; le pipeline continue avec les fallbacks puis élimine les tickers trop incomplets.
-- `launch/main.py` est le juge officiel de readiness minimale, pas une promesse que tous les étages aval ont été rerun dans la session en cours.
+- Le repo est centré sur la prevision de demande Praedixa.
+- La couche canonique est le pipeline medaillon `bronze -> silver -> gold` dans `platform/warehouse/`.
+- Les points d'entree locaux actifs sont :
+  1. `apps/warehouse/run_silver/main.py`
+  2. `apps/warehouse/run_gold/main.py`
+  3. `apps/platform/build_global_dataset/main.py`
+- `features_selection_lag` reste utile pour la preparation et l'analyse locale, mais ce n'est pas la vision finale du backend modele.
+- `optimisation` et `evaluation` doivent etre pensees pour un backend TFT unique, meme si ce backend n'est pas encore branche completement. Tant que ce backend n'est pas connecte, ces etapes doivent se comporter comme des placeholders explicites.
+- La cible ideale reste la demande latente. Quand elle n'est pas reconstructible proprement, le repo doit parler explicitement de ventes observees.
 
 ### 5.1 Convention de nommage des fichiers
 
 ```
-core/data/{etape}/{description}_{debut}_{fin}.{format}
+var/{etape}/{description}.{format}
 
 Exemples :
-  core/data/data_fetching/sp500_prices_2004_2025.parquet
-  core/data/data_cleaning/sp500_prices_clean_2004_2025.parquet
-  core/data/data_preprocessing/sp500_features_2004_2025.parquet
+  var/warehouse/praedixa.duckdb
+  var/datasets/global_dataset/commercial_external_daily.parquet
+  var/experiments/demand_forecast/feature_screening/train_selection_70_selected.parquet
 ```
 
 - [ ] Minuscules, underscores. Plage de dates dans le nom. Parquet principal, CSV pour debug.
 
 ### 5.2 Structure des DataFrames
 
-Le DataFrame principal (sortie de `data_fetching`) suit un format long (tidy) :
+Le panel principal suit un format long (tidy) :
 
 | Colonne | Type | Description |
 |---|---|---|
-| `date` | `datetime64[ns]` | Date du jour de trading |
-| `ticker` | `str` | Symbole du titre (ex: `AAPL`, `MSFT`) |
-| `adj_close` | `float64` | Prix ajuste de cloture |
+| `dt` | `datetime64[ns]` | Date de decision |
+| `series_id` | `str` | Identifiant serie site x produit |
+| `target_demand_qty_d_plus_1` | `float64` | Cible absolue D+1 |
 
-Colonnes ajoutees par les etapes suivantes : `adj_close_clean`, `is_missing`, `is_delisted` (cleaning), `return_log`, `volatility_21d`, `momentum_63d` (preprocessing).
+Colonnes frequentes ensuite : `location_id`, `product_id`, `lag_1`, `lag_7`, `rolling_mean_7`, `holiday_flag`, `weather_temperature`, `observed_stockout_flag`.
 
 ```python
-EXPECTED_DTYPES = {"date": "datetime64[ns]", "ticker": "object", "adj_close": "float64"}
+class SchemaValidationError(ValueError):
+    """Erreur de validation de schema pour les DataFrames canoniques."""
+
+
+EXPECTED_DTYPES: dict[str, str] = {
+    "dt": "datetime64[ns]",
+    "series_id": "object",
+    "target_demand_qty_d_plus_1": "float64",
+}
+
 
 def validate_schema(df: pd.DataFrame) -> None:
-    for col, dtype in EXPECTED_DTYPES.items():
-        assert col in df.columns, f"Colonne manquante : {col}"
-        assert str(df[col].dtype) == dtype, f"{col}: {df[col].dtype} != {dtype}"
+    missing: list[str] = [col for col in EXPECTED_DTYPES if col not in df.columns]
+    if missing:
+        raise SchemaValidationError(f"Colonnes manquantes: {missing}")
+
+    bad_types: dict[str, tuple[str, str]] = {
+        col: (str(df[col].dtype), expected)
+        for col, expected in EXPECTED_DTYPES.items()
+        if str(df[col].dtype) != expected
+    }
+    if bad_types:
+        raise SchemaValidationError(f"Dtypes invalides: {bad_types}")
 ```
 
 - [ ] Ne jamais utiliser l'index pour stocker des donnees (toujours `reset_index`).
 
-### 5.3 Gestion du delisting
+### 5.2.b Bundle d'artefacts, securite et serialisation
 
-Le pipeline zero-fill (`_apply_delisting_zero`) met le prix a 0.0 apres la derniere cotation. Dans les etapes suivantes :
+Le bundle minimal d'un run promouvable doit etre :
 
-- [ ] Filtrer `adj_close > 0` avant de calculer les rendements.
-- [ ] Le rendement du dernier jour = -100% (correct pour le survivorship bias).
-- [ ] Documenter dans chaque notebook/script si les delistes sont inclus ou exclus.
+```text
+artifacts/run_YYYYMMDD_HHMMSS/
+  model.ckpt
+  dataset_parameters.json
+  encoders.pkl
+  feature_manifest.yaml
+  input_schema.json
+  output_schema.json
+  split_manifest.json
+  metrics.json
+  config.yaml
+  model_card.md
+  git_sha.txt
+  data_hashes.json
+```
+
+- [ ] Chargement par defaut via `state_dict` / `weights_only=True`.
+- [ ] Jamais de refit d'encoder au chargement.
+- [ ] Signatures d'entree/sortie versionnees.
+- [ ] Si modele pre-entraine/fine-tune : stocker aussi `parent_checkpoint_id`, couches gelees, strategie de fine-tuning`.
+
+### 5.3 Gestion de la censure et des contraintes
+
+Le repo doit distinguer autant que possible :
+
+- demande latente
+- ventes observees
+- ventes censurees par rupture, fermeture ou contrainte operationnelle
+
+- [ ] Utiliser les flags de censure quand ils existent.
+- [ ] Documenter quand une cible est seulement une vente observee.
+- [ ] Ne pas melanger silencieusement des regimes normaux et censes dans l'analyse.
+
+### 5.3.b Serving, inference et performance
+
+- [ ] `model.eval()` + `torch.inference_mode()` obligatoires en prediction.
+- [ ] Benchmark obligatoire entre eager, AMP, et eventuellement `torch.compile`.
+- [ ] Export seulement apres test de parite numerique.
+- [ ] Toute route d'inference a un fallback baseline si contrat de features casse.
 
 ### 5.4 Activation des pipelines via `main.py`
 
 **Chaque module/etape du pipeline doit avoir un fichier `main.py`** qui sert de point d'entree unique. Ce fichier doit etre directement executable en cliquant dessus dans l'IDE (pas besoin de terminal).
 
 ```python
-# core/src/meta_model/data/data_fetching/main.py
-
-import sys
-from pathlib import Path
-
-# Remonter jusqu'a la racine du projet pour que tous les imports fonctionnent
-PROJECT_ROOT = Path(__file__).resolve().parents[5]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from core.src.meta_model.data.data_fetching.sp500_pipeline import PipelineConfig, run_pipeline
+# platform/python/src/praedixa/platform/datasets/standardization/pipeline.py
 
 def main() -> None:
-    config = PipelineConfig()
-    run_pipeline(config)
+    build_global_daily_standardization()
+```
+
+```python
+# apps/platform/build_global_dataset/main.py
+
+from praedixa.platform.datasets.standardization.main import main
 
 if __name__ == "__main__":
     main()
 ```
 
 - [ ] **Tout** pipeline s'active via son `main.py`, jamais en important directement un module.
-- [ ] Le `sys.path` est configure en haut du fichier pour garantir l'execution directe.
+- [ ] Le `sys.path` n'est autorise que dans un wrapper mince si l'execution locale le rend necessaire.
 - [ ] Le `if __name__ == "__main__"` est obligatoire.
+
+### 5.4.c Packaging et entrypoints
+
+- [ ] Les hacks `sys.path` sont tolerables uniquement dans des wrappers minces, jamais dans la logique importable sous `src/`.
+- [ ] La logique metier vit dans `pipeline.py`, `service.py` ou `app.py`.
+- [ ] `__main__.py` et `apps/` servent uniquement de wrappers d'execution.
 
 ### 5.4.b Modularite stricte du pipeline
 
@@ -556,7 +708,7 @@ Toute logique metier (cleaning, outliers, feature engineering, validation schema
 
 ```python
 # DO -- main orchestration only
-from core.src.data.data_cleaning.outlier_pipeline import apply_outlier_flags
+from praedixa.platform.datasets.standardization.outlier_pipeline import apply_outlier_flags
 
 def main() -> None:
     df = load_raw_dataset(INPUT_PATH)
@@ -574,41 +726,34 @@ def main() -> None:
 
 ### 5.5 Fichiers `paths.py` et `constants.py`
 
-Ces fichiers se placent **a la racine du module data actif**. Pour le pipeline canonique actuel: `core/src/meta_model/data/paths.py` et `core/src/meta_model/data/constants.py`.
+Ces fichiers se placent **a la racine du module data actif** quand ils deviennent necessaires. Pour le repo actuel, la logique de chemins vit surtout dans `platform/python/src/praedixa/platform/runtime/` et dans les modules produit sous `products/demand_forecast/src/praedixa/demand_forecast/`.
 
 **`paths.py`** -- centralise tous les chemins du pipeline.
 
 ```python
-# core/src/meta_model/data/paths.py
+# platform/python/src/praedixa/platform/runtime/paths.py
 
 from __future__ import annotations
 from pathlib import Path
 
-PROJECT_ROOT: Path = Path(__file__).resolve().parents[4]
-CORE_DIR: Path = PROJECT_ROOT / "core"
-DATA_DIR: Path = CORE_DIR / "data"
-
-DATA_FETCHING_DIR: Path = DATA_DIR / "data_fetching"
-OUTPUT_PARQUET: Path = DATA_FETCHING_DIR / "sp500_prices_2004_2025.parquet"
-OUTPUT_SAMPLE_CSV: Path = DATA_FETCHING_DIR / "sp500_prices_2004_2025_sample_5pct.csv"
-
-DATA_CLEANING_DIR: Path = DATA_DIR / "data_cleaning"
-DATA_PREPROCESSING_DIR: Path = DATA_DIR / "data_preprocessing"
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[6]
+VAR_DIR: Path = PROJECT_ROOT / "var"
+WAREHOUSE_DIR: Path = VAR_DIR / "warehouse"
+GLOBAL_DATASET_DIR: Path = VAR_DIR / "datasets" / "global_dataset"
+FEATURE_SELECTION_DIR: Path = VAR_DIR / "experiments" / "demand_forecast" / "feature_screening"
 ```
 
 **`constants.py`** -- centralise les constantes metier reutilisables.
 
 ```python
-# core/src/meta_model/data/constants.py
+# platform/python/src/praedixa/platform/runtime/constants.py
 
 from __future__ import annotations
 
-WIKIPEDIA_SP500_URL: str = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-DEFAULT_START_DATE: str = "2004-01-01"
-DEFAULT_END_DATE: str = "2025-12-31"
+DEFAULT_TARGET_COL: str = "target_demand_qty_d_plus_1"
+DEFAULT_DATE_COL: str = "dt"
 SAMPLE_FRAC: float = 0.05
 RANDOM_SEED: int = 7
-CHUNK_SIZE: int = 50
 MAX_RETRIES: int = 3
 RETRY_SLEEP: float = 2.0
 ```
@@ -619,220 +764,209 @@ RETRY_SLEEP: float = 2.0
 
 ```python
 # DO
-from core.src.data.paths import OUTPUT_PARQUET
-from core.src.data.constants import MAX_RETRIES
+from praedixa.platform.runtime.paths import GLOBAL_DATASET_DIR
+from praedixa.platform.runtime.constants import MAX_RETRIES
 
 # DON'T
-output_path = Path("core/data/data_fetching/sp500_prices_2004_2025.parquet")  # chemin en dur
+output_path = Path("var/datasets/global_dataset/commercial_external_daily.parquet")  # chemin en dur
 max_retries = 3  # constante magique
 ```
 
 ### 5.6 Tests unitaires -- architecture miroir
 
-Les tests dans `tests/` **reproduisent exactement** l'arborescence de `core/src/` :
+Les tests dans `tests/` doivent suivre au plus près l'arborescence logique des packages sous `platform/python/src/` et `products/demand_forecast/src/` :
 
 ```
-core/src/data/data_fetching/sp500_pipeline.py
-tests/data/data_fetching/test_sp500_pipeline.py
+platform/python/src/praedixa/platform/datasets/standardization/pipeline.py
+tests/platform/datasets/standardization/test_pipeline.py
 
-core/src/data/data_cleaning/cleaning.py
-tests/data/data_cleaning/test_cleaning.py
+products/demand_forecast/src/praedixa/demand_forecast/training/pipeline.py
+tests/products/demand_forecast/training/test_pipeline.py
 
-core/src/data/data_preprocessing/preprocessing.py
-tests/data/data_preprocessing/test_preprocessing.py
+products/demand_forecast/src/praedixa/demand_forecast/evaluation/pipeline.py
+tests/products/demand_forecast/evaluation/test_pipeline.py
 ```
 
 - [ ] Un fichier source = un fichier de test correspondant.
 - [ ] Le fichier de test est nomme `test_{nom_du_fichier_source}.py`.
 - [ ] Ecrire les tests **immediatement** apres l'ecriture d'une fonction ou d'un fichier, pas apres coup.
 
+### 5.6.b CI, lint, typing et tests de non-regression
+
+- [ ] Interdire `# type: ignore` nu.
+- [ ] Autoriser uniquement `# type: ignore[code]` avec justification courte et ticket.
+- [ ] Activer `warn-unused-ignores`.
+- [ ] Ajouter un test anti-leakage sur toutes les features `known future`.
+- [ ] Ajouter un test round-trip checkpoint => meme prediction.
+- [ ] Ajouter un test `from_parameters()` => meme encodage que le train.
+- [ ] Ajouter un test cold start categories non vues.
+- [ ] Ajouter un test series vides / all-zero / trous de calendrier.
+- [ ] Ajouter un test non-regression des metriques sur un mini backtest fige.
+
+Commandes de gate :
+
+```bash
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy --strict platform/python/src products/demand_forecast/src
+.venv/bin/python -m unittest discover -s tests
+```
+
 ### 5.7 Tests directement executables
 
-Chaque fichier de test doit etre executable de **deux facons** : individuellement (clic dans l'IDE) et via pytest.
+Chaque fichier de test doit etre executable de **deux facons** : individuellement (clic dans l'IDE) et via `unittest`.
 
 ```python
-# tests/data/data_fetching/test_sp500_pipeline.py
+# tests/platform/datasets/standardization/test_pipeline.py
 
 import sys
 from pathlib import Path
 
 # Remonter jusqu'a la racine du projet
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
+import unittest
 import numpy as np
 import pandas as pd
 
-from core.src.data.data_fetching.sp500_pipeline import (
-    _apply_delisting_zero,
-    _extract_tickers,
-    _parse_date,
-)
+from praedixa.demand_forecast.contracts.targets import ensure_learning_target_column
 
 
-def test_parse_date_string():
-    assert _parse_date("2020-01-15").isoformat() == "2020-01-15"
-
-
-def test_extract_tickers_comma_separated():
-    assert _extract_tickers("AAPL, MSFT, GOOG") == ["AAPL", "MSFT", "GOOG"]
-
-
-def test_delisting_zero_fill():
-    index = pd.bdate_range("2020-01-01", "2020-01-10")
-    series = pd.Series([100, 101, 102, np.nan, np.nan], index=index[:5])
-    result = _apply_delisting_zero(series, index)
-    assert result.iloc[-1] == 0.0
-
-
-def test_empty_price_map_raises():
-    # Exemple avec config qui pointe vers un CSV vide
-    with pytest.raises(RuntimeError, match="No price data"):
+class ExamplePipelineTests(unittest.TestCase):
+    def test_learning_target_column_is_created(self) -> None:
         ...
+
+    def test_empty_price_map_raises(self) -> None:
+        # Exemple avec config qui pointe vers un CSV vide
+        with self.assertRaisesRegex(RuntimeError, "No price data"):
+            ...
 
 
 # --- Execution directe (clic dans l'IDE) ---
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main()
 ```
 
-- [ ] Framework : `pytest`. Lancer tout avec `uv run pytest tests/`.
-- [ ] Lancer un seul fichier : clic direct ou `uv run python tests/data/data_fetching/test_sp500_pipeline.py`.
-- [ ] Le bloc `if __name__ == "__main__": pytest.main([__file__, "-v"])` est **obligatoire** dans chaque fichier de test.
+- [ ] Framework : `unittest`. Lancer tout avec `.venv/bin/python -m unittest discover -s tests`.
+- [ ] Lancer un seul fichier : clic direct ou `.venv/bin/python tests/platform/datasets/standardization/test_pipeline.py`.
+- [ ] Le bloc `if __name__ == "__main__": unittest.main()` est **obligatoire** dans chaque fichier de test.
 - [ ] Le `sys.path` en haut du fichier est **obligatoire** pour l'execution directe.
-- [ ] Fixtures legeres dans `conftest.py` (10-20 tickers, 30 jours).
-- [ ] **Jamais** d'appels API reels dans les tests -- mocker yfinance/stooq.
+- [ ] Fixtures legeres dans `conftest.py` ou dans les tests.
+- [ ] **Jamais** d'appels API reels dans les tests.
+
+### 5.8 Monitoring prod, registry et promotion
+
+- [ ] `null rate` et `out-of-range` par feature.
+- [ ] `unseen category rate`.
+- [ ] `stale known-future covariates rate`.
+- [ ] WAPE / Bias par horizon et segment.
+- [ ] Couverture empirique P50/P90 quand les labels arrivent.
+- [ ] `p95 latency`, taux d'echec, taille de batch, memoire GPU/CPU.
+- [ ] Un alias `candidate`.
+- [ ] Un alias `champion`.
+- [ ] Rollback possible sans refit.
+
+### 5.9 Model card, datasheet et coherence hierarchique
+
+- [ ] Le model card doit contenir `target_semantics`, fenetre d'entrainement, segments/horizons evalues, performance `clean` vs `censored`, covariables `known` vs `observed`, limites connues et fallback.
+- [ ] Si les decisions existent a plusieurs niveaux (`SKU`, `site`, `categorie`, `reseau`), le repo doit soit reconcilier les previsions, soit documenter explicitement pourquoi il ne le fait pas.
+- [ ] Les metriques de promotion doivent etre calculees aussi aux niveaux d'agregation reellement utilises par l'operationnel.
 
 ---
 
 ## Checklist avant chaque commit
 
 ```
-[ ] Les tests passent (uv run pytest tests/)
+[ ] Les tests passent (.venv/bin/python -m unittest discover -s tests)
 [ ] Pas de print() en dehors des notebooks
 [ ] Les seeds sont fixes et passent par la config
 [ ] Les nouvelles features utilisent min_periods et shift correctement
 [ ] Le schema du DataFrame de sortie est documente et valide
 [ ] Le logging trace le nombre de lignes a chaque etape
 [ ] Les fichiers de donnees ne sont pas commites dans git
-[ ] Si le changement touche le bootstrap, `broker_xtb/main.py`, `data_reference/main.py` ou `launch/main.py` ont ete verifies
+[ ] Si le changement touche le pipeline medaillon, `apps/warehouse/run_silver/main.py` et `apps/warehouse/run_gold/main.py` ont ete verifies
 [ ] Chaque nouveau fichier source a son fichier de test miroir
 [ ] Les main.py et fichiers de test sont directement executables (sys.path + __main__)
 [ ] Les chemins passent par paths.py, les constantes par constants.py
 ```
-
-# AGENTS Routing -- research_praedixa
-
-Ce `AGENTS.md` est un routeur.
-Les regles detaillees ne vivent plus ici : elles vivent dans les skills et les fichiers du framework `praedixa-ecc/`.
-
-## Cadre du repo
-
-- Projet : prevision de la demande retail / alimentaire perissable
-- Wedge Praedixa prioritaire : prevision de la demande et des besoins en effectifs
-- Code source : `src/research_praedixa/`
-- Tests : `tests/`
-- Framework local : `praedixa-ecc/`
-
-## Quel fichier utiliser selon la situation
-
-### Si la tache porte sur la qualite du code Python
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/python-code-quality/SKILL.md`
-
-Puis utiliser si besoin :
-
-- `praedixa-ecc/scripts/python_doctor.py`
-- `praedixa-ecc/scripts/quality_gate.py`
-
-### Si la tache porte sur les contrats de donnees time series
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/timeseries-dataset-contracts/SKILL.md`
-- `praedixa-ecc/templates/dataset-manifest.md`
-
-### Si la tache porte sur le feature engineering time series
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/timeseries-feature-engineering/SKILL.md`
-
-### Si la tache porte sur le leakage, les lags, les rollings, ou la disponibilite des signaux
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/anti-leakage-audit/SKILL.md`
-
-### Si la tache porte sur les splits temporels, walk-forward, ou le backtesting
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/temporal-backtesting/SKILL.md`
-- `praedixa-ecc/templates/experiment-spec.md`
-- `praedixa-ecc/templates/backtest-report.md`
-
-### Si la tache porte sur les baselines forecast
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/forecast-baselines/SKILL.md`
-
-### Si la tache porte sur les metriques ou l'interpretation business des resultats
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/forecast-evaluation/SKILL.md`
-- `praedixa-ecc/skills/praedixa-roi-translation/SKILL.md`
-
-### Si la tache porte sur une experience ML ou une comparaison de modeles
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/ml-experiment-loop/SKILL.md`
-- `praedixa-ecc/templates/decision-log.md`
-
-### Si la tache porte sur la demande Praedixa
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/praedixa-demand-forecast/SKILL.md`
-- `praedixa-ecc/skills/praedixa-retail-signals/SKILL.md`
-
-### Si la tache porte sur le staffing Praedixa
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/praedixa-staffing-forecast/SKILL.md`
-
-### Si la tache porte sur les signaux internes / externes
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/praedixa-retail-signals/SKILL.md`
-
-### Si la tache porte sur la traduction ROI / operations / pilot delivery
-
-Lire d'abord :
-
-- `praedixa-ecc/skills/praedixa-roi-translation/SKILL.md`
-- `praedixa-ecc/templates/business-translation-memo.md`
 
 ## Verification
 
 Pour une modification Python non triviale, utiliser :
 
 ```bash
-.venv/bin/python praedixa-ecc/scripts/quality_gate.py <python-paths...>
+.venv/bin/python -m compileall praedixa platform/python/src products/demand_forecast/src apps
+.venv/bin/python -m unittest discover -s tests
 ```
 
-Pour verifier la structure du framework :
+Pour verifier le warehouse local :
 
 ```bash
-.venv/bin/python praedixa-ecc/scripts/validate_framework.py
-.venv/bin/python praedixa-ecc/scripts/doctor.py
+dbt parse --project-dir platform/warehouse --profiles-dir platform/warehouse
 ```
+
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---

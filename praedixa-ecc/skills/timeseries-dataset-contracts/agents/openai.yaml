@@ -1,3 +1,0 @@
-interface:
-  display_name: "TS Dataset Contracts"
-  short_description: "Validate grain, schema, keys, and censoring in forecast datasets"

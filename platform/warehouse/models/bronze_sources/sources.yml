@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: "{{ env_var('PRAEDIXA_DUCKDB_BRONZE_SCHEMA', 'bronze') }}"
+    tables:
+      - name: bronze_freshretail_daily
+      - name: bronze_bakery_order_lines
+      - name: bronze_commercial_external_daily
+      - name: bronze_open_location_metadata
+      - name: bronze_open_location_catchment
+      - name: bronze_open_public_holidays
+      - name: bronze_open_school_holidays
+      - name: bronze_open_weather_daily
+      - name: bronze_open_macro_annual
+      - name: bronze_open_macro_timeseries
