@@ -10,6 +10,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 .python-version
+.vscode/
+*.egg-info/
 
 .venv/
 bakery_sales/.venv/
@@ -17,6 +19,7 @@ bakery_sales/.venv/
 data/
 artifacts/
 logs/
+var/
 
 bakery_sales/data/
 bakery_sales/.pytest_cache/
@@ -27,3 +30,6 @@ bakery_sales/tests/__pycache__/
 warehouse/target/
 warehouse/logs/
 warehouse/dbt_packages/
+platform/warehouse/target/
+platform/warehouse/logs/
+platform/warehouse/dbt_packages/
