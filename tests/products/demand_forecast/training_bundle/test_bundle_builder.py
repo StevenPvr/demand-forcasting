@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 
+import duckdb
 import pandas as pd
 
 
@@ -44,6 +45,27 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             self._assert_target_contract(artifacts)
             self._assert_bundle_manifest(artifacts)
 
+    def test_build_training_bundle_materializes_directly_from_gold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_dir = root / "bundle"
+            duckdb_path = root / "praedixa.duckdb"
+            gold_table = "gold_daily_product_forecast_panel_d1"
+            gold_frame = self._gold_frame()
+            self._write_gold_table(duckdb_path, gold_table, gold_frame)
+
+            artifacts = build_training_bundle(
+                train_input_path=None,
+                tuning_input_path=None,
+                valid_input_path=None,
+                output_dir=output_dir,
+                duckdb_path=duckdb_path,
+                gold_table=gold_table,
+            )
+
+            self._assert_artifacts_exist(artifacts)
+            self._assert_gold_backed_bundle(artifacts)
+
     def _frame(
         self,
         start_date: str,
@@ -80,6 +102,37 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         tuning_frame.to_parquet(tuning_path, index=False)
         valid_frame.to_parquet(valid_path, index=False)
 
+    def _gold_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "dt": pd.date_range("2024-01-01", periods=6, freq="D"),
+                "dataset_source": ["bakery"] * 6,
+                "split_bucket": ["train", "train", "train", "val", "val", "test"],
+                "series_id": ["store_1__sku_1"] * 6,
+                "location_id": ["store_1"] * 6,
+                "product_id": ["sku_1"] * 6,
+                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+                "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0],
+                "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+            }
+        )
+
+    def _write_gold_table(
+        self,
+        duckdb_path: Path,
+        gold_table: str,
+        gold_frame: pd.DataFrame,
+    ) -> None:
+        connection = duckdb.connect(str(duckdb_path))
+        try:
+            connection.register("gold_frame", gold_frame)
+            connection.execute(
+                f"create table {gold_table} as select * from gold_frame"
+            )
+        finally:
+            connection.close()
+
     def _assert_artifacts_exist(self, artifacts: dict[str, Path]) -> None:
         for key in ("train", "tuning", "valid", "feature_manifest", "target_contract", "bundle_manifest"):
             self.assertTrue(artifacts[key].exists())
@@ -113,6 +166,19 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
         self.assertEqual(bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"]))
         self.assertEqual(bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"]))
+
+    def _assert_gold_backed_bundle(self, artifacts: dict[str, Path]) -> None:
+        bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
+        self.assertEqual(bundle_manifest["train_rows"], 3)
+        self.assertEqual(bundle_manifest["tuning_rows"], 2)
+        self.assertEqual(bundle_manifest["valid_rows"], 1)
+        self.assertIn("_cache/train.parquet", bundle_manifest["train_input_path"])
+        self.assertIn("_cache/val.parquet", bundle_manifest["tuning_input_path"])
+        self.assertIn("_cache/test.parquet", bundle_manifest["valid_input_path"])
+        bundled_train = pd.read_parquet(artifacts["train"])
+        self.assertNotIn("split_bucket", bundled_train.columns)
+        self.assertNotIn("lag_1", bundled_train.columns)
+        self.assertIn("rolling_mean_7", bundled_train.columns)
 
     def _sha256(self, path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()

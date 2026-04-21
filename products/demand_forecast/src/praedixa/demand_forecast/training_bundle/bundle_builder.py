@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, cast
 
+import duckdb
 import pandas as pd
 
 from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN
@@ -18,14 +19,16 @@ from praedixa.demand_forecast.contracts.targets import (
 )
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_DATE_COL,
+    DEFAULT_DUCKDB_PATH,
     DEFAULT_EXCLUDED_RISKY_FEATURE_COLS,
+    DEFAULT_GOLD_TABLE,
 )
-from praedixa.platform.runtime.paths import FEATURE_SELECTION_DIR, TRAINING_BUNDLE_DIR
+from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR
 from praedixa.demand_forecast.training_bundle.manifest import sha256_file
 
 
-DEFAULT_TRAIN_INPUT_PATH = FEATURE_SELECTION_DIR / "train_selection_70_selected.parquet"
-DEFAULT_TUNING_INPUT_PATH = FEATURE_SELECTION_DIR / "train_tuning_30_selected.parquet"
+DEFAULT_TRAIN_INPUT_PATH: Path | None = None
+DEFAULT_TUNING_INPUT_PATH: Path | None = None
 DEFAULT_VALID_INPUT_PATH: Path | None = None
 DEFAULT_OUTPUT_DIR = TRAINING_BUNDLE_DIR
 
@@ -38,6 +41,109 @@ def _read_frame(path: Path) -> pd.DataFrame:
     frame = pd.read_parquet(path)
     frame[DEFAULT_DATE_COL] = pd.to_datetime(frame[DEFAULT_DATE_COL])
     return frame.sort_values(DEFAULT_DATE_COL).reset_index(drop=True)
+
+
+def _materialized_gold_split_path(cache_dir: Path, split_bucket: str) -> Path:
+    return cache_dir / f"{split_bucket}.parquet"
+
+
+def _gold_split_row_count(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    split_bucket: str,
+) -> int:
+    query = f"select count(*) from {gold_table} where split_bucket = ?"
+    row = connection.execute(query, [split_bucket]).fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"Unable to count rows for split bucket `{split_bucket}` in `{gold_table}`."
+        )
+    return int(cast(int, row[0]))
+
+
+def _materialize_gold_split(
+    *,
+    cache_dir: Path,
+    duckdb_path: str | Path,
+    gold_table: str,
+    split_bucket: str,
+) -> Path | None:
+    output_path = _materialized_gold_split_path(cache_dir, split_bucket)
+    connection = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        if _gold_split_row_count(connection, gold_table=gold_table, split_bucket=split_bucket) == 0:
+            return None
+        connection.execute(
+            f"""
+            copy (
+                select *
+                from {gold_table}
+                where split_bucket = '{split_bucket}'
+                order by {DEFAULT_DATE_COL}, series_id
+            ) to '{output_path.as_posix()}' (format parquet)
+            """
+        )
+    finally:
+        connection.close()
+    return output_path
+
+
+def _load_materialized_gold_frame(path: Path | None) -> pd.DataFrame | None:
+    if path is None:
+        return None
+    return _read_frame(path)
+
+
+def _load_frames_from_gold(
+    *,
+    output_dir: Path,
+    duckdb_path: str | Path,
+    gold_table: str,
+) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    cache_dir = output_dir / "_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    train_path = _materialize_gold_split(
+        cache_dir=cache_dir,
+        duckdb_path=duckdb_path,
+        gold_table=gold_table,
+        split_bucket="train",
+    )
+    tuning_path = _materialize_gold_split(
+        cache_dir=cache_dir,
+        duckdb_path=duckdb_path,
+        gold_table=gold_table,
+        split_bucket="val",
+    )
+    valid_path = _materialize_gold_split(
+        cache_dir=cache_dir,
+        duckdb_path=duckdb_path,
+        gold_table=gold_table,
+        split_bucket="test",
+    )
+    if train_path is None or tuning_path is None:
+        raise FileNotFoundError(
+            f"Gold table `{gold_table}` must expose non-empty `train` and `val` split buckets."
+        )
+    train_frame = _read_frame(train_path)
+    tuning_frame = _read_frame(tuning_path)
+    valid_frame = _load_materialized_gold_frame(valid_path)
+    return train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame
+
+
+def _load_explicit_frames(
+    *,
+    train_input_path: str | Path,
+    tuning_input_path: str | Path,
+    valid_input_path: str | Path | None,
+) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    train_path = Path(train_input_path)
+    tuning_path = Path(tuning_input_path)
+    valid_path = None if valid_input_path is None else Path(valid_input_path)
+    train_frame = _read_frame(train_path)
+    tuning_frame = _read_frame(tuning_path)
+    valid_frame = None if valid_path is None else _read_frame(valid_path)
+    return train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame
 
 
 def _bundle_output_paths(output_dir: Path, *, include_valid: bool) -> dict[str, Path]:
@@ -159,17 +265,28 @@ def _feature_manifest_payload(
 
 def _load_bundle_frames(
     *,
-    train_input_path: str | Path,
-    tuning_input_path: str | Path,
+    output_dir: Path,
+    train_input_path: str | Path | None,
+    tuning_input_path: str | Path | None,
     valid_input_path: str | Path | None,
+    duckdb_path: str | Path,
+    gold_table: str,
 ) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
-    train_path = Path(train_input_path)
-    tuning_path = Path(tuning_input_path)
-    valid_path = None if valid_input_path is None else Path(valid_input_path)
-    train_frame = _read_frame(train_path)
-    tuning_frame = _read_frame(tuning_path)
-    valid_frame = None if valid_path is None else _read_frame(valid_path)
-    return train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame
+    if train_input_path is None and tuning_input_path is None:
+        return _load_frames_from_gold(
+            output_dir=output_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+        )
+    if train_input_path is None or tuning_input_path is None:
+        raise ValueError(
+            "train_input_path and tuning_input_path must either both be provided or both be omitted."
+        )
+    return _load_explicit_frames(
+        train_input_path=train_input_path,
+        tuning_input_path=tuning_input_path,
+        valid_input_path=valid_input_path,
+    )
 
 
 def _resolve_bundle_contract(
@@ -334,15 +451,24 @@ def _persist_bundle_metadata(
 
 def build_training_bundle(
     *,
-    train_input_path: str | Path = DEFAULT_TRAIN_INPUT_PATH,
-    tuning_input_path: str | Path = DEFAULT_TUNING_INPUT_PATH,
+    train_input_path: str | Path | None = DEFAULT_TRAIN_INPUT_PATH,
+    tuning_input_path: str | Path | None = DEFAULT_TUNING_INPUT_PATH,
     valid_input_path: str | Path | None = DEFAULT_VALID_INPUT_PATH,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    duckdb_path: str | Path = DEFAULT_DUCKDB_PATH,
+    gold_table: str = DEFAULT_GOLD_TABLE,
     target_col: str = DEFAULT_VARIATION_TARGET_COL,
 ) -> dict[str, Path]:
     resolved_output_dir = Path(output_dir)
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
-    train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame = _load_bundle_frames(train_input_path=train_input_path, tuning_input_path=tuning_input_path, valid_input_path=valid_input_path)
+    train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame = _load_bundle_frames(
+        output_dir=resolved_output_dir,
+        train_input_path=train_input_path,
+        tuning_input_path=tuning_input_path,
+        valid_input_path=valid_input_path,
+        duckdb_path=duckdb_path,
+        gold_table=gold_table,
+    )
     train_frame, tuning_frame, valid_frame, target_contract = _resolve_bundle_contract(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
