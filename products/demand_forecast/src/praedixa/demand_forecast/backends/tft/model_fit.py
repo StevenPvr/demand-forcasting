@@ -22,6 +22,7 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (
     WEIGHT_COL,
     attach_group_and_time_columns,
     build_combined_frame,
+    defragment_frame,
     resolve_layout,
 )
 from praedixa.demand_forecast.backends.tft.model_common import (
@@ -45,7 +46,7 @@ def _build_timeseries_dataset(
     real_feature_scalers: dict[str, StandardScaler] | None,
 ) -> Any:
     return imports["TimeSeriesDataSet"](
-        frame,
+        defragment_frame(frame),
         time_idx=TIME_IDX_COL,
         target=target_col,
         group_ids=[GROUP_COL],
@@ -72,12 +73,12 @@ def _build_validation_dataset(
     training_dataset: Any,
     prepared_frame: pd.DataFrame,
 ) -> Any:
-    valid_frame = prepared_frame.loc[prepared_frame[SPLIT_COL] == "valid"].copy()
+    valid_frame = defragment_frame(prepared_frame.loc[prepared_frame[SPLIT_COL] == "valid"].copy())
     if valid_frame.empty:
         return None
     return imports["TimeSeriesDataSet"].from_dataset(
         training_dataset,
-        prepared_frame,
+        defragment_frame(prepared_frame),
         min_prediction_idx=int(valid_frame[TIME_IDX_COL].min()),
         stop_randomization=True,
     )
@@ -260,7 +261,8 @@ def _training_dataset_components(
     unscaled_training_slice = prepared_frame.loc[prepared_frame[SPLIT_COL] == "train"].copy()
     target_scaler = _fit_target_scaler(unscaled_training_slice, target_col=target_col)
     scaled_frame = _apply_target_scaler(prepared_frame, target_col=target_col, target_scaler=target_scaler)
-    training_slice = scaled_frame.loc[scaled_frame[SPLIT_COL] == "train"].copy()
+    scaled_frame = defragment_frame(scaled_frame)
+    training_slice = defragment_frame(scaled_frame.loc[scaled_frame[SPLIT_COL] == "train"].copy())
     categorical_encoders = _build_categorical_encoders(imports, layout=layout)
     feature_scalers = _fit_real_feature_scalers(training_slice, layout=layout)
     training_dataset = _build_timeseries_dataset(

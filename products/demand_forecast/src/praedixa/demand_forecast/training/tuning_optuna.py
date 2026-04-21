@@ -50,6 +50,79 @@ class ObjectiveContext:
     stage_policy: dict[str, dict[str, object]]
 
 
+def _serializable_trial_params(trial_params: dict[str, object]) -> dict[str, object]:
+    serialized: dict[str, object] = {}
+    for key, value in trial_params.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            serialized[key] = value
+    return serialized
+
+
+def _log_trial_start(
+    *,
+    logger: logging.Logger,
+    trial_number: int,
+    tuning_trials: int,
+    stage_name: str,
+    trial_params: dict[str, object],
+) -> None:
+    logger.info(
+        "Optuna trial started: trial=%s/%s stage=%s params=%s",
+        trial_number + 1,
+        tuning_trials,
+        stage_name,
+        _serializable_trial_params(trial_params),
+    )
+
+
+def _log_trial_completion(
+    *,
+    logger: logging.Logger,
+    trial_number: int,
+    tuning_trials: int,
+    stage_name: str,
+    mean_wape: float,
+    improvement_pct: float,
+    folds_completed: int,
+    dataset_mean_wape: dict[str, float],
+) -> None:
+    logger.info(
+        "Optuna trial completed: trial=%s/%s stage=%s mean_wape=%.6f improvement_pct=%.6f folds_completed=%s dataset_mean_wape=%s",
+        trial_number + 1,
+        tuning_trials,
+        stage_name,
+        mean_wape,
+        improvement_pct,
+        folds_completed,
+        dataset_mean_wape,
+    )
+
+
+def _log_trial_failure(
+    *,
+    logger: logging.Logger,
+    trial_number: int,
+    tuning_trials: int,
+    stage_name: str,
+    error: Exception,
+) -> None:
+    logger.warning(
+        "Optuna trial failed: trial=%s/%s stage=%s error=%s",
+        trial_number + 1,
+        tuning_trials,
+        stage_name,
+        error,
+    )
+
+
+def _tuning_result_summary(tuning_result: dict[str, object]) -> tuple[float, dict[str, float], int]:
+    return (
+        float(cast(Any, tuning_result["macro_mean_wape"])),
+        cast(dict[str, float], tuning_result["dataset_mean_wape"]),
+        int(cast(Any, tuning_result["folds_completed"])),
+    )
+
+
 def _build_trial_params(
     *,
     trial: optuna.trial.Trial,
@@ -111,34 +184,70 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             stage_policy=context.stage_policy,
         )
         trial.set_user_attr("epochs_completed", int(cast(Any, trial_params["max_epochs"])))
-        tuning_result = context.score_fn(
-            train_frame=context.train_frame,
-            tuning_frame=context.tuning_frame,
-            folds=context.folds,
-            feature_cols=context.feature_cols,
-            target_contract=context.target_contract,
+        _log_trial_start(
             logger=context.logger,
-            model_params=trial_params,
-            total_threads=context.total_threads,
-            target_transform=context.target_transform,
-            trial=trial,
-        )
-        mean_wape = float(cast(Any, tuning_result["macro_mean_wape"]))
-        improvement_pct = compute_wape_improvement_pct(context.baseline_wape, mean_wape)
-        trial.set_user_attr("mean_wape", mean_wape)
-        trial.set_user_attr("dataset_mean_wape", cast(Any, tuning_result["dataset_mean_wape"]))
-        trial.set_user_attr("fold_wape_scores", cast(Any, tuning_result["fold_results"]))
-        trial.set_user_attr("folds_completed", int(cast(Any, tuning_result["folds_completed"])))
-        trial_counter["completed"] += 1
-        _log_optuna_progress(
-            study=context.study,
-            logger=context.logger,
-            completed=trial_counter["completed"],
+            trial_number=trial.number,
             tuning_trials=context.tuning_trials,
             stage_name=stage_name,
-            improvement_pct=improvement_pct,
+            trial_params=trial_params,
         )
-        return improvement_pct
+        try:
+            tuning_result = context.score_fn(
+                train_frame=context.train_frame,
+                tuning_frame=context.tuning_frame,
+                folds=context.folds,
+                feature_cols=context.feature_cols,
+                target_contract=context.target_contract,
+                logger=context.logger,
+                model_params=trial_params,
+                total_threads=context.total_threads,
+                target_transform=context.target_transform,
+                trial=trial,
+            )
+            mean_wape, dataset_mean_wape, folds_completed = _tuning_result_summary(tuning_result)
+            improvement_pct = compute_wape_improvement_pct(context.baseline_wape, mean_wape)
+            trial.set_user_attr("mean_wape", mean_wape)
+            trial.set_user_attr("dataset_mean_wape", dataset_mean_wape)
+            trial.set_user_attr("fold_wape_scores", cast(Any, tuning_result["fold_results"]))
+            trial.set_user_attr("folds_completed", folds_completed)
+            trial_counter["completed"] += 1
+            _log_trial_completion(
+                logger=context.logger,
+                trial_number=trial.number,
+                tuning_trials=context.tuning_trials,
+                stage_name=stage_name,
+                mean_wape=mean_wape,
+                improvement_pct=improvement_pct,
+                folds_completed=folds_completed,
+                dataset_mean_wape=dataset_mean_wape,
+            )
+            _log_optuna_progress(
+                study=context.study,
+                logger=context.logger,
+                completed=trial_counter["completed"],
+                tuning_trials=context.tuning_trials,
+                stage_name=stage_name,
+                improvement_pct=improvement_pct,
+            )
+            return improvement_pct
+        except optuna.TrialPruned as exc:
+            _log_trial_failure(
+                logger=context.logger,
+                trial_number=trial.number,
+                tuning_trials=context.tuning_trials,
+                stage_name=stage_name,
+                error=exc,
+            )
+            raise
+        except Exception as exc:
+            _log_trial_failure(
+                logger=context.logger,
+                trial_number=trial.number,
+                tuning_trials=context.tuning_trials,
+                stage_name=stage_name,
+                error=exc,
+            )
+            raise
 
     return objective
 

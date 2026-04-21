@@ -12,6 +12,7 @@ from praedixa.demand_forecast.backends.tft.dataloader_profile import build_tft_d
 from praedixa.demand_forecast.backends.tft.frame_utils import (
     attach_group_and_time_columns,
     attach_prediction_row_ids,
+    defragment_frame,
     prepare_split_frame,
     WEIGHT_COL,
 )
@@ -83,7 +84,7 @@ def _prediction_dataset(
     fitted_model: FittedTFTModel,
     prepared_future: pd.DataFrame,
 ) -> Any:
-    combined_frame = pd.concat([fitted_model.history_frame, prepared_future], ignore_index=True)
+    combined_frame = defragment_frame(pd.concat([fitted_model.history_frame, prepared_future], ignore_index=True))
     return imports["TimeSeriesDataSet"].from_parameters(
         fitted_model.dataset_parameters,
         combined_frame,

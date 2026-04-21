@@ -271,8 +271,26 @@ def _dataset_macro_scores_from_fold_results(fold_results: list[dict[str, object]
     return dataset_mean_wape
 
 
+def _log_fold_completion(
+    *,
+    logger: logging.Logger,
+    fold_number: int,
+    total_folds: int,
+    dataset_mean_wape: dict[str, float],
+) -> None:
+    macro_mean_wape = float(np.mean(list(dataset_mean_wape.values())))
+    logger.info(
+        "TFT tuning fold completed: fold=%s/%s macro_mean_wape=%.6f dataset_mean_wape=%s",
+        fold_number,
+        total_folds,
+        macro_mean_wape,
+        dataset_mean_wape,
+    )
+
+
 def _iterative_trial_scoring(
     *,
+    logger: logging.Logger,
     trial: optuna.trial.Trial,
     folds: list[dict[str, object]],
     shared_frame: pd.DataFrame,
@@ -301,6 +319,12 @@ def _iterative_trial_scoring(
         fold_results.extend(cast(list[dict[str, object]], grouped_fold_result["dataset_results"]))
         dataset_mean_wape = _dataset_macro_scores_from_fold_results(fold_results)
         interim_macro_mean_wape = float(np.mean(list(dataset_mean_wape.values())))
+        _log_fold_completion(
+            logger=logger,
+            fold_number=folds_completed,
+            total_folds=len(folds),
+            dataset_mean_wape=dataset_mean_wape,
+        )
         trial.report(-interim_macro_mean_wape, step=folds_completed)
         if trial.should_prune():
             trial.set_user_attr("fold_results", fold_results)
@@ -314,6 +338,7 @@ def _score_all_folds(
     *,
     folds: list[dict[str, object]],
     execution_plan: dict[str, object],
+    logger: logging.Logger,
     shared_frame: pd.DataFrame,
     base_train_indices: np.ndarray,
     shared_dataset_sources: np.ndarray,
@@ -326,6 +351,7 @@ def _score_all_folds(
 ) -> tuple[list[dict[str, object]], int]:
     if trial is not None and int(cast(Any, execution_plan["fold_workers"])) == 1:
         return _iterative_trial_scoring(
+            logger=logger,
             trial=trial,
             folds=folds,
             shared_frame=shared_frame,
@@ -372,6 +398,7 @@ def fit_and_score_tft_model_on_tuning(
     fold_results, folds_completed = _score_all_folds(
         folds=folds,
         execution_plan=execution_plan,
+        logger=logger,
         shared_frame=shared_frame,
         base_train_indices=base_train_indices,
         shared_dataset_sources=shared_dataset_sources,

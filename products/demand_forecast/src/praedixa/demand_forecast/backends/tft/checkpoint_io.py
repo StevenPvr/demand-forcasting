@@ -10,7 +10,7 @@ import pandas as pd
 
 from praedixa.demand_forecast.backends.tft.artifacts import FittedTFTModel
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
-from praedixa.demand_forecast.backends.tft.frame_utils import WEIGHT_COL
+from praedixa.demand_forecast.backends.tft.frame_utils import WEIGHT_COL, defragment_frame
 
 _SUPPRESSED_TFT_WARNING_PATTERNS: tuple[str, ...] = (
     r"Attribute 'loss' is an instance of `nn\.Module` and is already saved during checkpointing\.",
@@ -133,7 +133,7 @@ def _rebuild_model_from_payload(payload: dict[str, Any]) -> Any:
     future_rows[str(payload["target_col"])] = 0.0
     if dataset_parameters.get("weight") is not None and WEIGHT_COL not in future_rows.columns:
         future_rows[WEIGHT_COL] = 1.0
-    reconstruction_frame = pd.concat([reconstruction_frame, future_rows], ignore_index=True)
+    reconstruction_frame = defragment_frame(pd.concat([reconstruction_frame, future_rows], ignore_index=True))
     with _suppress_tft_runtime_noise():
         _seed_tft_runtime(imports, resolved_params)
         training_dataset = imports["TimeSeriesDataSet"].from_parameters(

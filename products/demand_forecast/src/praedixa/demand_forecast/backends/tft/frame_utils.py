@@ -20,6 +20,10 @@ WEIGHT_COL = "__tft_sample_weight"
 PREDICTION_ROW_ID_COL = "__tft_prediction_row_id"
 
 
+def defragment_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame.copy()
+
+
 def build_group_identifier(frame: pd.DataFrame, group_source_cols: list[str]) -> pd.Series:
     if not group_source_cols:
         return pd.Series(["global_series"] * len(frame), index=frame.index, dtype="string")
@@ -66,16 +70,16 @@ def build_combined_frame(
 ) -> pd.DataFrame:
     train_part = prepare_split_frame(train_frame, split_name="train", weights=train_weights)
     if valid_frame is None:
-        return train_part
+        return defragment_frame(train_part)
     valid_part = prepare_split_frame(valid_frame, split_name="valid", weights=valid_weights)
-    return pd.concat([train_part, valid_part], ignore_index=True)
+    return defragment_frame(pd.concat([train_part, valid_part], ignore_index=True))
 
 
 def cast_categorical_columns(frame: pd.DataFrame, categorical_cols: Iterable[str]) -> pd.DataFrame:
     casted = frame.copy()
     for column in categorical_cols:
         casted[column] = casted[column].astype("string").fillna("<NA>")
-    return casted
+    return defragment_frame(casted)
 
 
 def attach_group_and_time_columns(frame: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
@@ -86,7 +90,7 @@ def attach_group_and_time_columns(frame: pd.DataFrame, feature_cols: list[str]) 
     prepared = prepared.sort_values([GROUP_COL, "dt"]).reset_index(drop=True)
     prepared[TIME_IDX_COL] = prepared.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
     feature_categoricals = select_explicit_tft_categorical_columns(feature_cols)
-    return cast_categorical_columns(prepared, [*feature_categoricals, GROUP_COL])
+    return defragment_frame(cast_categorical_columns(prepared, [*feature_categoricals, GROUP_COL]))
 
 
 def resolve_layout(frame: pd.DataFrame, feature_cols: list[str]) -> TFTLayout:
