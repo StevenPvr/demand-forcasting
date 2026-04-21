@@ -116,6 +116,31 @@ def build_probabilistic_summary(
     }
 
 
+def _quantile_calibration(predictions_df: pd.DataFrame) -> dict[str, float]:
+    actual = predictions_df["actual"].astype(float).to_numpy()
+    calibration: dict[str, float] = {}
+    for column in _prediction_quantile_columns(predictions_df):
+        match = re.fullmatch(r"prediction_p([0-9_]+)", column)
+        if match is None:
+            continue
+        quantile = float(match.group(1).replace("_", ".")) / 100.0
+        predicted = predictions_df[column].astype(float).to_numpy()
+        calibration[column] = float(np.mean(actual <= predicted) - quantile)
+    return calibration
+
+
+def _per_product_residuals(predictions_df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    residuals: dict[str, dict[str, float]] = {}
+    for product_name, product_predictions in predictions_df.groupby("product", sort=True):
+        product_residuals = product_predictions["actual"].astype(float) - product_predictions["prediction_raw"].astype(float)
+        residuals[str(product_name)] = {
+            "mean": float(product_residuals.mean()),
+            "std": float(product_residuals.std(ddof=0)),
+            "rows": int(len(product_predictions)),
+        }
+    return residuals
+
+
 def build_canonical_predictions_frame(predictions_df: pd.DataFrame) -> pd.DataFrame:
     canonical = predictions_df.copy()
     for column in canonical.columns:
@@ -150,6 +175,8 @@ def build_diagnostics_payload(
         "residual_std": float(residuals.std(ddof=0)),
         "residual_min": float(residuals.min()),
         "residual_max": float(residuals.max()),
+        "per_product_residuals": _per_product_residuals(predictions_df),
+        "quantile_calibration_error": _quantile_calibration(predictions_df),
         "probabilistic_summary": build_probabilistic_summary(
             predictions_df,
             overall_metrics=overall_metrics,

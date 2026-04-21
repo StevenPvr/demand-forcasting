@@ -191,9 +191,11 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertIn("avg_selling_price", scalers)
         self.assertIn("current_day_demand_qty", scalers)
         self.assertNotIn("location_id", scalers)
-        self.assertIsNotNone(model.target_scaler)
-        self.assertEqual(getattr(model.dataset_parameters.get("target_normalizer"), "method", None), "identity")
+        self.assertIsNone(model.target_scaler)
+        self.assertEqual(getattr(model.dataset_parameters.get("target_normalizer"), "method", None), "standard")
         self.assertIn("peak_ram_mb", model.runtime_metrics)
+        self.assertEqual(model.normalization_strategy["kind"], "group_normalizer")
+        self.assertIn("variable_selection", model.interpretability_payload or {})
 
     def test_fit_tft_model_handles_unknown_validation_categories(self) -> None:
         train_frame, valid_frame = self._build_training_frame()

@@ -17,6 +17,10 @@ from praedixa.demand_forecast.training.constants import DEFAULT_MAX_PARALLEL_FOL
 _HIDDEN_SIZE_CHOICES = [8, 16, 24, 32, 48, 64]
 _HIDDEN_CONTINUOUS_SIZE_CHOICES = [4, 8, 12, 16, 24, 32]
 _ATTENTION_HEAD_SIZE_CHOICES = [1, 2, 4]
+_BATCH_SIZE_CHOICES = [32, 64, 128]
+_ENCODER_LENGTH_CHOICES = [14, 28, 56]
+_GRADIENT_CLIP_CHOICES = [0.05, 0.1, 0.5, 1.0]
+_LSTM_LAYER_CHOICES = [1, 2, 3]
 _HPO_STAGE_A_EPOCH_RANGE = (8, 12)
 _HPO_STAGE_B_EPOCH_RANGE = (20, 30)
 _HPO_PRUNER_CONFIG: dict[str, int | str] = {
@@ -95,10 +99,14 @@ def sample_optuna_params(
         weight_decay_low, weight_decay_high = _log_float_bounds(anchor_params.get("weight_decay") if anchor_params else None, low=1e-6, high=1e-2)
         return {
             "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
+            "batch_size": trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES),
+            "max_encoder_length": trial.suggest_categorical("max_encoder_length", _ENCODER_LENGTH_CHOICES),
+            "gradient_clip_val": trial.suggest_categorical("gradient_clip_val", _GRADIENT_CLIP_CHOICES),
             "learning_rate": trial.suggest_float("learning_rate", learning_rate_low, learning_rate_high, log=True),
             "hidden_size": trial.suggest_categorical("hidden_size", _HIDDEN_SIZE_CHOICES),
             "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", _HIDDEN_CONTINUOUS_SIZE_CHOICES),
             "attention_head_size": trial.suggest_categorical("attention_head_size", _ATTENTION_HEAD_SIZE_CHOICES),
+            "lstm_layers": trial.suggest_categorical("lstm_layers", _LSTM_LAYER_CHOICES),
             "dropout": trial.suggest_float("dropout", dropout_low, dropout_high),
             "weight_decay": trial.suggest_float("weight_decay", weight_decay_low, weight_decay_high, log=True),
             "random_state": int(random_seed + trial.number + 1),
@@ -106,10 +114,14 @@ def sample_optuna_params(
     resolved_epoch_range = epoch_range or _HPO_STAGE_A_EPOCH_RANGE
     return {
         "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
+        "batch_size": trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES),
+        "max_encoder_length": trial.suggest_categorical("max_encoder_length", _ENCODER_LENGTH_CHOICES),
+        "gradient_clip_val": trial.suggest_categorical("gradient_clip_val", _GRADIENT_CLIP_CHOICES),
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 5e-2, log=True),
         "hidden_size": trial.suggest_categorical("hidden_size", _HIDDEN_SIZE_CHOICES),
         "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", _HIDDEN_CONTINUOUS_SIZE_CHOICES),
         "attention_head_size": trial.suggest_categorical("attention_head_size", _ATTENTION_HEAD_SIZE_CHOICES),
+        "lstm_layers": trial.suggest_categorical("lstm_layers", _LSTM_LAYER_CHOICES),
         "dropout": trial.suggest_float("dropout", 0.05, 0.30),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True),
         "random_state": int(random_seed + trial.number + 1),
@@ -208,6 +220,9 @@ def build_hpo_runtime_metadata(
         "best_trial_number": int(best_trial.number),
         "best_improvement_pct": required_trial_value(best_trial),
         "best_mean_wape": float(best_trial.user_attrs["mean_wape"]),
+        "best_mean_abs_bias": best_trial.user_attrs.get("mean_abs_bias"),
+        "best_coverage_80": best_trial.user_attrs.get("mean_coverage_80"),
+        "best_coverage_95": best_trial.user_attrs.get("mean_coverage_95"),
     }
 
 

@@ -30,3 +30,6 @@ class FittedTFTModel:
     git_sha: str | None
     bundle_manifest: dict[str, Any] | None
     data_hashes: dict[str, str]
+    normalization_strategy: dict[str, Any]
+    interpretability_payload: dict[str, Any] | None
+    artifact_bundle_version: int

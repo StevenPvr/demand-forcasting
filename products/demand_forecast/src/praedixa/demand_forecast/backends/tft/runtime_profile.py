@@ -4,6 +4,8 @@ from typing import Any
 
 
 DEFAULT_RUNTIME_PROFILE_NAME = "local_cpu"
+DEFAULT_COMPILE_MODE = "off"
+DEFAULT_DETERMINISM_MODE = "strict"
 
 
 def _detect_bf16_support() -> bool:
@@ -45,7 +47,8 @@ def resolve_runtime_profile(
             "num_workers": 0,
             "pin_memory": False,
             "persistent_workers": False,
-            "torch_compile": False,
+            "compile_mode": DEFAULT_COMPILE_MODE,
+            "determinism_mode": "strict",
             "matmul_precision": "highest",
         },
         "mac_metal": {
@@ -55,7 +58,8 @@ def resolve_runtime_profile(
             "num_workers": 0,
             "pin_memory": False,
             "persistent_workers": False,
-            "torch_compile": False,
+            "compile_mode": DEFAULT_COMPILE_MODE,
+            "determinism_mode": "warn_only",
             "matmul_precision": "high",
         },
         "scaleway_l40s": {
@@ -65,10 +69,13 @@ def resolve_runtime_profile(
             "num_workers": 4,
             "pin_memory": True,
             "persistent_workers": True,
-            "torch_compile": False,
+            "compile_mode": DEFAULT_COMPILE_MODE,
+            "determinism_mode": "warn_only",
             "matmul_precision": "high",
         },
     }
     if profile_name not in profiles:
         raise ValueError(f"Unknown TFT runtime profile `{profile_name}`.")
-    return dict(profiles[profile_name])
+    resolved_profile = dict(profiles[profile_name])
+    resolved_profile["torch_compile"] = resolved_profile["compile_mode"] != DEFAULT_COMPILE_MODE
+    return resolved_profile

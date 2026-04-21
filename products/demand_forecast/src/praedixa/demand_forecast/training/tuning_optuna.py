@@ -123,6 +123,31 @@ def _tuning_result_summary(tuning_result: dict[str, object]) -> tuple[float, dic
     )
 
 
+def _guardrail_failure_reason(
+    *,
+    tuning_result: dict[str, object],
+    baseline_wape: float,
+) -> str | None:
+    dataset_mean_wape = cast(dict[str, float], tuning_result["dataset_mean_wape"])
+    collapsed = [
+        dataset_source
+        for dataset_source, score in dataset_mean_wape.items()
+        if float(score) > (baseline_wape * 1.50)
+    ]
+    if collapsed:
+        return f"dataset_wape_collapse:{','.join(collapsed)}"
+    mean_abs_bias = tuning_result.get("mean_abs_bias")
+    if isinstance(mean_abs_bias, (int, float)) and float(mean_abs_bias) > max(0.5, baseline_wape):
+        return "absolute_bias_too_high"
+    coverage_80 = tuning_result.get("mean_coverage_80")
+    if isinstance(coverage_80, (int, float)) and not 0.60 <= float(coverage_80) <= 0.98:
+        return "coverage_80_out_of_bounds"
+    coverage_95 = tuning_result.get("mean_coverage_95")
+    if isinstance(coverage_95, (int, float)) and not 0.80 <= float(coverage_95) <= 0.995:
+        return "coverage_95_out_of_bounds"
+    return None
+
+
 def _build_trial_params(
     *,
     trial: optuna.trial.Trial,
@@ -208,8 +233,18 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             improvement_pct = compute_wape_improvement_pct(context.baseline_wape, mean_wape)
             trial.set_user_attr("mean_wape", mean_wape)
             trial.set_user_attr("dataset_mean_wape", dataset_mean_wape)
+            trial.set_user_attr("mean_abs_bias", tuning_result.get("mean_abs_bias"))
+            trial.set_user_attr("mean_coverage_80", tuning_result.get("mean_coverage_80"))
+            trial.set_user_attr("mean_coverage_95", tuning_result.get("mean_coverage_95"))
             trial.set_user_attr("fold_wape_scores", cast(Any, tuning_result["fold_results"]))
             trial.set_user_attr("folds_completed", folds_completed)
+            failure_reason = _guardrail_failure_reason(
+                tuning_result=tuning_result,
+                baseline_wape=context.baseline_wape,
+            )
+            if failure_reason is not None:
+                trial.set_user_attr("failure_reason", failure_reason)
+                raise optuna.TrialPruned(f"Guardrail rejected trial: {failure_reason}")
             trial_counter["completed"] += 1
             _log_trial_completion(
                 logger=context.logger,
@@ -231,6 +266,7 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             )
             return improvement_pct
         except optuna.TrialPruned as exc:
+            trial.set_user_attr("failure_reason", str(exc))
             _log_trial_failure(
                 logger=context.logger,
                 trial_number=trial.number,
@@ -240,6 +276,7 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             )
             raise
         except Exception as exc:
+            trial.set_user_attr("failure_reason", str(exc))
             _log_trial_failure(
                 logger=context.logger,
                 trial_number=trial.number,
@@ -264,6 +301,10 @@ def _build_tuning_report(study: optuna.study.Study) -> pd.DataFrame:
                 "epochs_completed": int(trial.user_attrs.get("epochs_completed", trial.params.get("max_epochs", 0))),
                 "folds_completed": int(trial.user_attrs.get("folds_completed", 0)),
                 "mean_wape": float(trial.user_attrs["mean_wape"]) if "mean_wape" in trial.user_attrs else float("nan"),
+                "mean_abs_bias": float(trial.user_attrs["mean_abs_bias"]) if "mean_abs_bias" in trial.user_attrs else float("nan"),
+                "coverage_80": float(trial.user_attrs["mean_coverage_80"]) if "mean_coverage_80" in trial.user_attrs else float("nan"),
+                "coverage_95": float(trial.user_attrs["mean_coverage_95"]) if "mean_coverage_95" in trial.user_attrs else float("nan"),
+                "failure_reason": str(trial.user_attrs.get("failure_reason", "")),
                 "baseline_wape_improvement_pct": float(trial.value) if trial.value is not None else float("nan"),
                 "fold_wape_scores": trial.user_attrs.get("fold_wape_scores", []),
                 "dataset_mean_wape": trial.user_attrs.get("dataset_mean_wape", {}),

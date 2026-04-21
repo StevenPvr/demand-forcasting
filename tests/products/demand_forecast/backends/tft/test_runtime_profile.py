@@ -25,6 +25,8 @@ class TFTRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(profile["num_workers"], 0)
         self.assertFalse(profile["pin_memory"])
         self.assertFalse(profile["persistent_workers"])
+        self.assertEqual(profile["compile_mode"], "off")
+        self.assertEqual(profile["determinism_mode"], "strict")
         self.assertFalse(profile["torch_compile"])
 
     def test_resolve_runtime_profile_returns_scaleway_l40s_defaults(self) -> None:
@@ -36,6 +38,8 @@ class TFTRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(profile["num_workers"], 4)
         self.assertTrue(profile["pin_memory"])
         self.assertTrue(profile["persistent_workers"])
+        self.assertEqual(profile["compile_mode"], "off")
+        self.assertEqual(profile["determinism_mode"], "warn_only")
         self.assertEqual(profile["matmul_precision"], "high")
 
     def test_resolve_runtime_profile_returns_mac_metal_defaults(self) -> None:
@@ -47,6 +51,8 @@ class TFTRuntimeProfileTests(unittest.TestCase):
         self.assertEqual(profile["num_workers"], 0)
         self.assertFalse(profile["pin_memory"])
         self.assertFalse(profile["persistent_workers"])
+        self.assertEqual(profile["compile_mode"], "off")
+        self.assertEqual(profile["determinism_mode"], "warn_only")
         self.assertEqual(profile["matmul_precision"], "high")
 
     def test_resolve_runtime_profile_rejects_unknown_profile(self) -> None:

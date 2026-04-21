@@ -231,7 +231,16 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             connection.close()
 
     def _assert_artifacts_exist(self, artifacts: dict[str, Path]) -> None:
-        for key in ("train", "tuning", "valid", "feature_manifest", "target_contract", "bundle_manifest"):
+        for key in (
+            "train",
+            "tuning",
+            "valid",
+            "feature_manifest",
+            "feature_roles",
+            "split_manifest",
+            "target_contract",
+            "bundle_manifest",
+        ):
             self.assertTrue(artifacts[key].exists())
 
     def _assert_feature_manifest(self, artifacts: dict[str, Path]) -> None:
@@ -240,8 +249,13 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertEqual(feature_manifest["group_id_columns"], ["series_id"])
         self.assertEqual(feature_manifest["projection_dtypes"]["rolling_mean_7"], "float32")
         self.assertEqual(feature_manifest["projection_dtypes"]["target_demand_qty_d_plus_1"], "float32")
+        self.assertTrue(feature_manifest["feature_contract"]["rolling_mean_7"]["available_at_prediction"])
         self.assertNotIn("lag_1", feature_manifest["feature_columns"])
         self.assertNotIn("current_day_demand_qty", feature_manifest["feature_columns"])
+
+        feature_roles = json.loads(artifacts["feature_roles"].read_text(encoding="utf-8"))
+        self.assertEqual(feature_roles["rolling_mean_7"]["role"], "time_varying_known_real")
+        self.assertEqual(feature_roles["location_id"]["source_system"], "operations")
 
     def _assert_bundled_train(self, artifacts: dict[str, Path]) -> None:
         bundled_train = pd.read_parquet(artifacts["train"])
@@ -256,13 +270,20 @@ class TrainingBundleBuilderTests(unittest.TestCase):
 
     def _assert_bundle_manifest(self, artifacts: dict[str, Path]) -> None:
         bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
+        self.assertEqual(bundle_manifest["bundle_version"], 2)
         self.assertEqual(bundle_manifest["train_rows"], 4)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
         self.assertEqual(bundle_manifest["valid_rows"], 2)
         self.assertEqual(bundle_manifest["feature_count"], 4)
+        self.assertTrue(bundle_manifest["feature_roles_path"].endswith("feature_roles.json"))
+        self.assertTrue(bundle_manifest["split_manifest_path"].endswith("split_manifest.json"))
         self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
         self.assertEqual(bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"]))
         self.assertEqual(bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"]))
+        split_manifest = json.loads(artifacts["split_manifest"].read_text(encoding="utf-8"))
+        self.assertEqual(split_manifest["train"]["rows"], 4)
+        self.assertEqual(split_manifest["tuning"]["rows"], 2)
+        self.assertEqual(split_manifest["valid"]["rows"], 2)
 
     def _assert_gold_backed_bundle(self, artifacts: dict[str, Path]) -> None:
         bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))

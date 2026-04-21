@@ -58,7 +58,8 @@ def _suppress_tft_runtime_noise() -> Any:
 def _seed_tft_runtime(imports: dict[str, Any], model_hyperparameters: dict[str, Any]) -> None:
     random_state = int(model_hyperparameters.get("random_state", 7))
     imports["seed_everything"](random_state, workers=True)
-    imports["torch"].use_deterministic_algorithms(True)
+    warn_only = str(model_hyperparameters.get("determinism_mode", "strict")) == "warn_only"
+    imports["torch"].use_deterministic_algorithms(True, warn_only=warn_only)
     set_matmul_precision = getattr(imports["torch"], "set_float32_matmul_precision", None)
     if callable(set_matmul_precision):
         set_matmul_precision(str(model_hyperparameters.get("matmul_precision", "highest")))
@@ -77,11 +78,13 @@ def _build_model(
         attention_head_size=int(model_hyperparameters["attention_head_size"]),
         dropout=float(model_hyperparameters["dropout"]),
         hidden_continuous_size=int(model_hyperparameters["hidden_continuous_size"]),
+        lstm_layers=int(model_hyperparameters.get("lstm_layers", 1)),
         loss=quantile_loss,
         output_size=len(cast(list[float], model_hyperparameters["quantiles"])),
         log_interval=-1,
         reduce_on_plateau_patience=int(model_hyperparameters["patience"]),
         optimizer="adam",
+        weight_decay=float(model_hyperparameters.get("weight_decay", 0.0)),
     )
 
 
@@ -95,7 +98,7 @@ def save_tft_checkpoint_bundle(
     resolved_output_path = Path(output_path)
     resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "payload_version": 1,
+        "payload_version": int(fitted_model.artifact_bundle_version),
         "state_dict": fitted_model.model.state_dict(),
         "dataset_parameters": fitted_model.dataset_parameters,
         "history_frame": fitted_model.history_frame,
@@ -115,9 +118,24 @@ def save_tft_checkpoint_bundle(
         "git_sha": fitted_model.git_sha,
         "bundle_manifest": fitted_model.bundle_manifest,
         "data_hashes": fitted_model.data_hashes,
+        "normalization_strategy": fitted_model.normalization_strategy,
+        "interpretability_payload": fitted_model.interpretability_payload,
+        "artifact_bundle_version": fitted_model.artifact_bundle_version,
     }
     imports["torch"].save(payload, resolved_output_path)
     return resolved_output_path
+
+
+def _normalization_strategy_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    strategy = payload.get("normalization_strategy")
+    if isinstance(strategy, dict):
+        return dict(cast(dict[str, Any], strategy))
+    return {
+        "kind": "legacy_external_standard_scaler"
+        if payload.get("target_scaler") is not None
+        else "dataset_native",
+        "legacy_external_scaler": payload.get("target_scaler") is not None,
+    }
 
 
 def _rebuild_model_from_payload(payload: dict[str, Any]) -> Any:
@@ -177,4 +195,7 @@ def load_tft_checkpoint_bundle(input_path: str | Path) -> FittedTFTModel:
         git_sha=cast(str | None, payload.get("git_sha")),
         bundle_manifest=cast(dict[str, Any] | None, payload.get("bundle_manifest")),
         data_hashes=cast(dict[str, str], payload.get("data_hashes", {})),
+        normalization_strategy=_normalization_strategy_from_payload(payload),
+        interpretability_payload=cast(dict[str, Any] | None, payload.get("interpretability_payload")),
+        artifact_bundle_version=int(payload.get("artifact_bundle_version", payload.get("payload_version", 1))),
     )

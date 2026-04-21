@@ -83,6 +83,9 @@ class TuningPolicyTests(unittest.TestCase):
             return {
                 "macro_mean_wape": max(0.05, 1.0 / float(max_epochs)),
                 "dataset_mean_wape": {"source_a": max(0.05, 1.0 / float(max_epochs))},
+                "mean_abs_bias": 0.05,
+                "mean_coverage_80": 0.85,
+                "mean_coverage_95": 0.95,
                 "fold_results": [],
                 "folds_completed": len(cast(list[dict[str, object]], kwargs["folds"])),
             }
@@ -111,6 +114,9 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("stage_name", tuning_report.columns)
         self.assertIn("trial_status", tuning_report.columns)
         self.assertIn("trial_duration_seconds", tuning_report.columns)
+        self.assertIn("mean_abs_bias", tuning_report.columns)
+        self.assertIn("coverage_80", tuning_report.columns)
+        self.assertIn("coverage_95", tuning_report.columns)
         self.assertEqual(execution_policy["accelerator"], "gpu")
         self.assertEqual(execution_policy["fold_workers"], 1)
         self.assertEqual(pruner["type"], "MedianPruner")
@@ -167,6 +173,18 @@ class TuningPolicyTests(unittest.TestCase):
                 "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
                 return_value=np.array([15.0, 16.0], dtype=float),
             ),
+            patch(
+                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                return_value=pd.DataFrame(
+                    {
+                        "prediction_p2_5": [14.0, 15.0],
+                        "prediction_p10": [14.5, 15.5],
+                        "prediction_p50": [15.0, 16.0],
+                        "prediction_p90": [15.5, 16.5],
+                        "prediction_p97_5": [16.0, 17.0],
+                    }
+                ),
+            ),
         ):
             result = fit_and_score_tft_model_on_tuning(
                 train_frame=train_frame,
@@ -180,6 +198,9 @@ class TuningPolicyTests(unittest.TestCase):
 
         self.assertEqual(result["folds_completed"], 1)
         self.assertIn("macro_mean_wape", result)
+        self.assertIn("mean_abs_bias", result)
+        self.assertIn("mean_coverage_80", result)
+        self.assertIn("mean_coverage_95", result)
 
     def test_filter_predictable_validation_rows_drops_insufficient_history(self) -> None:
         fold_train_frame = pd.DataFrame(

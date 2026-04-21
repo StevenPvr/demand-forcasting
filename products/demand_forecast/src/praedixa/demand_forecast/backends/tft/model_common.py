@@ -11,6 +11,8 @@ from praedixa.demand_forecast.backends.tft.feature_mapping import (
     select_explicit_tft_feature_columns,
 )
 from praedixa.demand_forecast.backends.tft.runtime_profile import (
+    DEFAULT_COMPILE_MODE,
+    DEFAULT_DETERMINISM_MODE,
     DEFAULT_RUNTIME_PROFILE_NAME,
     resolve_runtime_profile,
 )
@@ -19,16 +21,20 @@ from praedixa.demand_forecast.backends.tft.runtime_profile import (
 DEFAULT_TFT_MODEL_PARAMS: dict[str, object] = {
     "runtime_profile": DEFAULT_RUNTIME_PROFILE_NAME,
     "batch_size": 64,
+    "compile_mode": DEFAULT_COMPILE_MODE,
+    "determinism_mode": DEFAULT_DETERMINISM_MODE,
     "dropout": 0.1,
     "gradient_clip_val": 0.1,
     "hidden_continuous_size": 8,
     "hidden_size": 16,
     "attention_head_size": 1,
     "learning_rate": 1e-2,
+    "lstm_layers": 1,
     "max_encoder_length": 28,
     "max_epochs": 30,
     "patience": 3,
     "quantiles": [0.025, 0.1, 0.5, 0.9, 0.975],
+    "tensorboard_logdir": None,
     "weight_decay": 1e-4,
 }
 
@@ -50,17 +56,29 @@ _SUPPRESSED_TFT_LOGGERS: tuple[str, ...] = (
 def lazy_import_tft_dependencies() -> dict[str, Any]:
     import torch
     from lightning.pytorch import Trainer, seed_everything
-    from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+    from lightning.pytorch.callbacks import (
+        DeviceStatsMonitor,
+        EarlyStopping,
+        LearningRateMonitor,
+        ModelCheckpoint,
+    )
+    from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
     from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
+    from pytorch_forecasting.data.encoders import GroupNormalizer
     from pytorch_forecasting.data.encoders import NaNLabelEncoder
     from pytorch_forecasting.metrics import QuantileLoss
 
     return {
+        "CSVLogger": CSVLogger,
+        "DeviceStatsMonitor": DeviceStatsMonitor,
         "torch": torch,
         "Trainer": Trainer,
         "seed_everything": seed_everything,
         "EarlyStopping": EarlyStopping,
+        "GroupNormalizer": GroupNormalizer,
+        "LearningRateMonitor": LearningRateMonitor,
         "ModelCheckpoint": ModelCheckpoint,
+        "TensorBoardLogger": TensorBoardLogger,
         "TimeSeriesDataSet": TimeSeriesDataSet,
         "TemporalFusionTransformer": TemporalFusionTransformer,
         "NaNLabelEncoder": NaNLabelEncoder,
@@ -127,14 +145,22 @@ def _apply_derived_model_params(
         resolved["hidden_size"] = max(8, int(cast(Any, resolved["max_depth"])) * 4)
     if "hidden_continuous_size" not in resolved and "min_samples_leaf" in resolved:
         resolved["hidden_continuous_size"] = max(4, int(cast(Any, resolved["min_samples_leaf"])) // 2)
+    if resolved.get("compile_mode") in {None, ""} and bool(cast(Any, resolved.get("torch_compile", False))):
+        resolved["compile_mode"] = "reduce-overhead"
 
 
 def _normalize_runtime_model_params(resolved: dict[str, object]) -> None:
     resolved["max_epochs"] = int(cast(Any, resolved["max_epochs"]))
     resolved["batch_size"] = int(cast(Any, resolved.get("batch_size", DEFAULT_TFT_MODEL_PARAMS["batch_size"])))
+    resolved["compile_mode"] = str(cast(Any, resolved.get("compile_mode", DEFAULT_TFT_MODEL_PARAMS["compile_mode"])))
+    resolved["determinism_mode"] = str(
+        cast(Any, resolved.get("determinism_mode", DEFAULT_TFT_MODEL_PARAMS["determinism_mode"]))
+    )
+    resolved["torch_compile"] = resolved["compile_mode"] != "off"
     resolved["max_encoder_length"] = int(
         cast(Any, resolved.get("max_encoder_length", DEFAULT_TFT_MODEL_PARAMS["max_encoder_length"]))
     )
+    resolved["lstm_layers"] = int(cast(Any, resolved.get("lstm_layers", DEFAULT_TFT_MODEL_PARAMS["lstm_layers"])))
     resolved["patience"] = int(cast(Any, resolved.get("patience", DEFAULT_TFT_MODEL_PARAMS["patience"])))
     resolved["quantiles"] = list(cast(Any, resolved.get("quantiles", DEFAULT_TFT_MODEL_PARAMS["quantiles"])))
     resolved["devices"] = int(cast(Any, resolved["devices"]))
@@ -143,6 +169,11 @@ def _normalize_runtime_model_params(resolved: dict[str, object]) -> None:
     resolved["persistent_workers"] = bool(cast(Any, resolved["persistent_workers"]))
     resolved["precision"] = str(cast(Any, resolved["precision"]))
     resolved["matmul_precision"] = str(cast(Any, resolved["matmul_precision"]))
+    resolved["tensorboard_logdir"] = (
+        None
+        if resolved.get("tensorboard_logdir") in {None, ""}
+        else str(cast(Any, resolved["tensorboard_logdir"]))
+    )
 
 
 def resolve_model_params(

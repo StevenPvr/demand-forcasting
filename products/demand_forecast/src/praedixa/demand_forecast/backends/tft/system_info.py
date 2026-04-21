@@ -23,17 +23,25 @@ def resolve_git_sha(*, cwd: str | Path | None = None) -> str | None:
     return resolved or None
 
 
-def collect_tft_system_info(*, runtime_profile: str) -> dict[str, Any]:
+def collect_tft_system_info(
+    *,
+    runtime_profile: str,
+    determinism_mode: str | None = None,
+    compile_mode: str | None = None,
+) -> dict[str, Any]:
     info: dict[str, Any] = {
         "host_name": socket.gethostname(),
         "instance_type": os.getenv("PRAEDIXA_INSTANCE_TYPE"),
         "runtime_profile": runtime_profile,
+        "determinism_mode": determinism_mode,
+        "compile_mode": compile_mode,
         "python_version": sys.version.split()[0],
         "gpu_name": None,
         "device_count": 0,
         "cuda_version": None,
         "torch_version": None,
         "lightning_version": None,
+        "cudnn_version": None,
     }
     try:
         import lightning
@@ -42,6 +50,11 @@ def collect_tft_system_info(*, runtime_profile: str) -> dict[str, Any]:
         return info
     info["torch_version"] = getattr(torch, "__version__", None)
     info["lightning_version"] = getattr(lightning, "__version__", None)
+    backends = getattr(torch, "backends", None)
+    cudnn_backend = None if backends is None else getattr(backends, "cudnn", None)
+    if cudnn_backend is not None:
+        version = getattr(cudnn_backend, "version", None)
+        info["cudnn_version"] = version() if callable(version) else None
     if not torch.cuda.is_available():
         return info
     info["device_count"] = int(torch.cuda.device_count())

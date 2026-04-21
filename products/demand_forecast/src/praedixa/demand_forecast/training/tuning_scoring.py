@@ -11,12 +11,14 @@ import pandas as pd
 from praedixa.demand_forecast.backends.tft.model_utils import (
     DEFAULT_TFT_MODEL_PARAMS,
     fit_tft_model,
+    predict_quantiles_with_tft_model,
     predict_with_tft_model,
 )
 from praedixa.demand_forecast.backends.tft.feature_mapping import (
     select_explicit_tft_group_id_columns,
 )
 from praedixa.demand_forecast.contracts.targets import TargetContract
+from praedixa.demand_forecast.contracts.targets import reconstruct_absolute_predictions
 from praedixa.demand_forecast.feature_screening.pipeline import compute_wape
 from praedixa.demand_forecast.training.baselines import compute_equal_dataset_row_weights_from_values
 from praedixa.demand_forecast.training.constants import (
@@ -101,6 +103,7 @@ def _dataset_fold_results(
     shared_dataset_sources: np.ndarray,
     shared_absolute_target: np.ndarray,
     predictions: np.ndarray,
+    quantile_predictions: pd.DataFrame | None,
     absolute_target_col: str,
     feature_cols: list[str],
 ) -> list[dict[str, object]]:
@@ -112,17 +115,70 @@ def _dataset_fold_results(
         }
     )
     fold_results: list[dict[str, object]] = []
+    if quantile_predictions is not None:
+        scored = pd.concat([scored.reset_index(drop=True), quantile_predictions.reset_index(drop=True)], axis=1)
     for dataset_source, dataset_frame in scored.groupby(DEFAULT_DATASET_SOURCE_COL, sort=False):
         fold_results.append(
             {
                 "dataset_source": str(dataset_source),
                 "fold": int(cast(Any, fold["fold"])),
                 "wape": float(compute_wape(dataset_frame[absolute_target_col], dataset_frame["prediction"])),
+                "bias": float((dataset_frame["prediction"] - dataset_frame[absolute_target_col]).mean()),
+                "abs_bias": float(abs((dataset_frame["prediction"] - dataset_frame[absolute_target_col]).mean())),
+                "coverage_80": _interval_coverage(
+                    dataset_frame,
+                    actual_col=absolute_target_col,
+                    lower_col="prediction_p10",
+                    upper_col="prediction_p90",
+                ),
+                "coverage_95": _interval_coverage(
+                    dataset_frame,
+                    actual_col=absolute_target_col,
+                    lower_col="prediction_p2_5",
+                    upper_col="prediction_p97_5",
+                ),
                 "feature_count": int(len(feature_cols)),
                 "rows_scored": int(len(dataset_frame)),
             }
         )
     return fold_results
+
+
+def _interval_coverage(
+    frame: pd.DataFrame,
+    *,
+    actual_col: str,
+    lower_col: str,
+    upper_col: str,
+) -> float | None:
+    if lower_col not in frame.columns or upper_col not in frame.columns:
+        return None
+    lower = frame[lower_col].astype(float)
+    upper = frame[upper_col].astype(float)
+    actual = frame[actual_col].astype(float)
+    valid_mask = lower.notna() & upper.notna()
+    if not valid_mask.any():
+        return None
+    covered = ((actual[valid_mask] >= lower[valid_mask]) & (actual[valid_mask] <= upper[valid_mask])).mean()
+    return float(covered)
+
+
+def _reconstruct_absolute_quantiles(
+    *,
+    quantile_predictions: pd.DataFrame,
+    frame: pd.DataFrame,
+    target_contract: TargetContract,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            column: reconstruct_absolute_predictions(
+                quantile_predictions[column].to_numpy(dtype=float),
+                frame,
+                target_contract,
+            )
+            for column in quantile_predictions.columns
+        }
+    )
 
 
 def filter_predictable_validation_rows(
@@ -201,6 +257,11 @@ def _fit_single_tuning_fold(
         target_contract=target_contract,
         shared_reconstruction_anchor=shared_reconstruction_anchor,
     )
+    quantile_predictions = _reconstruct_absolute_quantiles(
+        quantile_predictions=predict_quantiles_with_tft_model(model, fold_valid_frame, feature_cols),
+        frame=fold_valid_frame,
+        target_contract=target_contract,
+    )
     return {
         "fold": int(cast(Any, fold["fold"])),
         "dataset_results": _dataset_fold_results(
@@ -209,6 +270,7 @@ def _fit_single_tuning_fold(
             shared_dataset_sources=shared_dataset_sources,
             shared_absolute_target=shared_absolute_target,
             predictions=predictions,
+            quantile_predictions=quantile_predictions,
             absolute_target_col=target_contract.absolute_target_col,
             feature_cols=feature_cols,
         ),
@@ -269,6 +331,21 @@ def _dataset_macro_scores_from_fold_results(fold_results: list[dict[str, object]
         dataset_scores = [float(cast(Any, result["wape"])) for result in fold_results if str(result["dataset_source"]) == dataset_source]
         dataset_mean_wape[dataset_source] = float(np.mean(dataset_scores))
     return dataset_mean_wape
+
+
+def _mean_optional_metric(
+    fold_results: list[dict[str, object]],
+    *,
+    metric_key: str,
+) -> float | None:
+    metric_values = [
+        float(cast(Any, result[metric_key]))
+        for result in fold_results
+        if result.get(metric_key) is not None
+    ]
+    if not metric_values:
+        return None
+    return float(np.mean(metric_values))
 
 
 def _log_fold_completion(
@@ -411,11 +488,17 @@ def fit_and_score_tft_model_on_tuning(
     )
     dataset_mean_wape = _dataset_macro_scores_from_fold_results(fold_results)
     macro_mean_wape = float(np.mean(list(dataset_mean_wape.values())))
+    mean_abs_bias = _mean_optional_metric(fold_results, metric_key="abs_bias")
+    mean_coverage_80 = _mean_optional_metric(fold_results, metric_key="coverage_80")
+    mean_coverage_95 = _mean_optional_metric(fold_results, metric_key="coverage_95")
     if trial is not None:
         trial.report(-macro_mean_wape, step=max(1, folds_completed))
     return {
         "macro_mean_wape": macro_mean_wape,
         "dataset_mean_wape": dataset_mean_wape,
+        "mean_abs_bias": mean_abs_bias,
+        "mean_coverage_80": mean_coverage_80,
+        "mean_coverage_95": mean_coverage_95,
         "fold_results": fold_results,
         "folds_completed": folds_completed,
         "execution_policy": execution_plan,

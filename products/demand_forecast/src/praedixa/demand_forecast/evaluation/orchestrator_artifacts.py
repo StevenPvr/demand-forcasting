@@ -7,6 +7,7 @@ from typing import Any, Callable, cast
 
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
 from praedixa.demand_forecast.contracts.targets import build_target_contract_metadata
 from praedixa.demand_forecast.evaluation.bakery_metrics import compute_metrics_payload
 from praedixa.demand_forecast.evaluation.bakery_metrics import (
@@ -29,6 +30,7 @@ from praedixa.demand_forecast.evaluation.reporting import (
     build_diagnostics_payload,
     json_dump,
 )
+from praedixa.demand_forecast.training_bundle.manifest import sha256_file
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_EXCLUDED_RISKY_FEATURE_COLS,
 )
@@ -37,6 +39,10 @@ from praedixa.demand_forecast.training.constants import (
 @dataclass(frozen=True)
 class EvaluationRunArtifacts:
     output_paths: dict[str, Path]
+    feature_manifest_payload: dict[str, Any]
+    feature_roles_payload: dict[str, Any]
+    split_manifest_payload: dict[str, Any]
+    target_contract_payload: dict[str, Any]
     metrics_payload: dict[str, Any]
     probabilistic_metrics_payload: dict[str, Any]
     baselines_payload: dict[str, Any] | None
@@ -46,8 +52,10 @@ class EvaluationRunArtifacts:
     economic_gain_payload: dict[str, Any]
     daily_report_df: pd.DataFrame
     final_model: Any
+    interpretability_payload: dict[str, Any] | None
     model_card_payload: dict[str, Any]
     evaluation_metadata_payload: dict[str, Any]
+    promotable_bundle_manifest_payload: dict[str, Any]
 
 
 def evaluation_output_paths(target_dir: Path) -> dict[str, Path]:
@@ -60,11 +68,47 @@ def evaluation_output_paths(target_dir: Path) -> dict[str, Path]:
         "diagnostics_json": target_dir / "foundation_tft_test_diagnostics.json",
         "model_card_json": target_dir / "foundation_tft_model_card.json",
         "final_model": target_dir / "foundation_tft_final_model.pt",
+        "feature_manifest_json": target_dir / "foundation_tft_feature_manifest.json",
+        "feature_roles_json": target_dir / "foundation_tft_feature_roles.json",
+        "split_manifest_json": target_dir / "foundation_tft_split_manifest.json",
+        "target_contract_json": target_dir / "foundation_tft_target_contract.json",
+        "interpretability_json": target_dir / "foundation_tft_interpretability.json",
+        "promotable_bundle_manifest_json": target_dir / "foundation_tft_promotable_bundle_manifest.json",
         "evaluation_metadata": target_dir / "foundation_tft_evaluation_metadata.json",
         "economic_gain_json": target_dir / "foundation_tft_economic_gain_vs_best_baseline.json",
         "daily_refit_metrics_csv": target_dir / "foundation_tft_daily_refit_metrics.csv",
         "actual_vs_predicted_plot": target_dir / "foundation_tft_actual_vs_predicted.png",
         "residuals_plot": target_dir / "foundation_tft_residuals.png",
+    }
+
+
+def build_evaluation_feature_manifest_payload(
+    *,
+    context: EvaluationPreparedContext,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    feature_roles = build_feature_contract(context.feature_cols)
+    return (
+        {
+            "feature_columns": context.feature_cols,
+            "feature_count": int(len(context.feature_cols)),
+            "constant_feature_cols": context.constant_feature_cols,
+            "identifier_feature_cols": context.identifier_feature_cols,
+            "missing_in_test_feature_cols": context.missing_in_test_feature_cols,
+        },
+        feature_roles,
+    )
+
+
+def build_evaluation_split_manifest_payload(
+    *,
+    context: EvaluationPreparedContext,
+) -> dict[str, Any]:
+    return {
+        "train": {"rows": int(len(context.train_frame))},
+        "valid": {"rows": int(len(context.valid_frame))},
+        "test": {"rows": int(len(context.test_frame))},
+        "evaluation_mode": context.evaluation_mode,
+        "reference_overlap": context.overlap_metadata,
     }
 
 
@@ -206,6 +250,8 @@ def build_evaluation_metadata_payload(
         "final_model_runtime_profile": getattr(final_model, "runtime_profile", None),
         "final_model_system_info": getattr(final_model, "system_info", {}),
         "final_model_git_sha": getattr(final_model, "git_sha", None),
+        "final_model_normalization_strategy": getattr(final_model, "normalization_strategy", {}),
+        "final_model_artifact_bundle_version": getattr(final_model, "artifact_bundle_version", None),
         **build_target_contract_metadata(context.target_contract),
         "reference_overlap": context.overlap_metadata,
     }
@@ -220,6 +266,7 @@ def build_evaluation_model_card_payload(
     baseline_savings_payload: dict[str, Any] | None,
     economic_gain_payload: dict[str, Any],
     output_paths: dict[str, Path],
+    interpretability_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return {
         "model_family": "foundation_tft",
@@ -239,12 +286,19 @@ def build_evaluation_model_card_payload(
         "probabilistic_metrics": probabilistic_metrics_payload,
         "business_impact": baseline_savings_payload,
         "economic_gain": economic_gain_payload,
+        "interpretability_path": str(output_paths["interpretability_json"]),
+        "interpretability": interpretability_payload,
+        "feature_manifest_path": str(output_paths["feature_manifest_json"]),
+        "feature_roles_path": str(output_paths["feature_roles_json"]),
+        "split_manifest_path": str(output_paths["split_manifest_json"]),
+        "target_contract_path": str(output_paths["target_contract_json"]),
         "target_contract": build_target_contract_metadata(context.target_contract),
         "final_model_path": str(output_paths["final_model"]),
         "predictions_path": str(output_paths["predictions_csv"]),
         "statistical_baselines_path": str(output_paths["statistical_baselines_json"]),
         "evaluation_metadata_path": str(output_paths["evaluation_metadata"]),
         "daily_refit_metrics_path": str(output_paths["daily_refit_metrics_csv"]),
+        "promotable_bundle_manifest_path": str(output_paths["promotable_bundle_manifest_json"]),
     }
 
 
@@ -281,6 +335,25 @@ def log_evaluation_completion(
         )
 
 
+def build_promotable_bundle_manifest_payload(
+    *,
+    output_paths: dict[str, Path],
+    context: EvaluationPreparedContext,
+    final_model: Any,
+) -> dict[str, Any]:
+    return {
+        "bundle_version": 2,
+        "model_family": "foundation_tft",
+        "runtime_profile": getattr(final_model, "runtime_profile", None),
+        "normalization_strategy": getattr(final_model, "normalization_strategy", {}),
+        "system_info": getattr(final_model, "system_info", {}),
+        "git_sha": getattr(final_model, "git_sha", None),
+        "target_contract": build_target_contract_metadata(context.target_contract),
+        "artifact_paths": {name: str(path) for name, path in output_paths.items()},
+        "artifact_hashes": {},
+    }
+
+
 def persist_evaluation_outputs(
     *,
     artifacts: EvaluationRunArtifacts,
@@ -289,6 +362,10 @@ def persist_evaluation_outputs(
     plot_residuals_fn: Callable[[pd.DataFrame, Path], None],
 ) -> dict[str, Path]:
     output_paths = artifacts.output_paths
+    json_dump(output_paths["feature_manifest_json"], artifacts.feature_manifest_payload)
+    json_dump(output_paths["feature_roles_json"], artifacts.feature_roles_payload)
+    json_dump(output_paths["split_manifest_json"], artifacts.split_manifest_payload)
+    json_dump(output_paths["target_contract_json"], artifacts.target_contract_payload)
     json_dump(output_paths["metrics_json"], artifacts.metrics_payload)
     json_dump(output_paths["probabilistic_metrics_json"], artifacts.probabilistic_metrics_payload)
     json_dump(output_paths["statistical_baselines_json"], artifacts.baselines_payload or {})
@@ -297,9 +374,27 @@ def persist_evaluation_outputs(
     json_dump(output_paths["diagnostics_json"], artifacts.diagnostics_payload)
     json_dump(output_paths["economic_gain_json"], artifacts.economic_gain_payload)
     artifacts.daily_report_df.to_csv(output_paths["daily_refit_metrics_csv"], index=False)
-    save_model_fn(artifacts.final_model, output_paths["final_model"])
     json_dump(output_paths["evaluation_metadata"], artifacts.evaluation_metadata_payload)
     plot_actual_vs_predicted_fn(artifacts.predictions_df, output_paths["actual_vs_predicted_plot"])
     plot_residuals_fn(artifacts.predictions_df, output_paths["residuals_plot"])
+    json_dump(output_paths["interpretability_json"], artifacts.interpretability_payload or {})
     json_dump(output_paths["model_card_json"], artifacts.model_card_payload)
+    promotable_manifest = {
+        **artifacts.promotable_bundle_manifest_payload,
+        "artifact_hashes": {
+            key: sha256_file(path)
+            for key, path in output_paths.items()
+            if path.exists() and path.is_file() and key != "final_model"
+        },
+    }
+    json_dump(
+        output_paths["promotable_bundle_manifest_json"],
+        cast(dict[str, object], promotable_manifest),
+    )
+    artifacts.final_model.bundle_manifest = promotable_manifest
+    artifacts.final_model.data_hashes = cast(
+        dict[str, str],
+        promotable_manifest.get("artifact_hashes", {}),
+    )
+    save_model_fn(artifacts.final_model, output_paths["final_model"])
     return output_paths

@@ -307,11 +307,16 @@ def _metadata_payload(
 ) -> dict[str, object]:
     fold_payload = [{key: value for key, value in fold.items() if key not in {"train_idx", "valid_idx"}} for fold in artifacts.baseline_folds]
     training_fold_payload = [{key: value for key, value in fold.items() if key not in {"train_idx", "valid_idx"}} for fold in artifacts.training_folds]
+    bundle_dir = None if run_config.bundle_dir is None else Path(run_config.bundle_dir)
     return {
         "train_input_path": str(loaded.train_path) if loaded.train_path else None,
         "tuning_input_path": str(loaded.tuning_path) if loaded.tuning_path else None,
-        "bundle_dir": str(run_config.bundle_dir) if run_config.bundle_dir is not None else None,
-        "bundle_manifest_path": str(Path(run_config.bundle_dir) / "bundle_manifest.json") if run_config.bundle_dir is not None else None,
+        "bundle_dir": str(bundle_dir) if bundle_dir is not None else None,
+        "bundle_manifest_path": str(bundle_dir / "bundle_manifest.json") if bundle_dir is not None else None,
+        "bundle_feature_manifest_path": str(bundle_dir / "feature_manifest.json") if bundle_dir is not None else None,
+        "bundle_feature_roles_path": str(bundle_dir / "feature_roles.json") if bundle_dir is not None else None,
+        "bundle_split_manifest_path": str(bundle_dir / "split_manifest.json") if bundle_dir is not None else None,
+        "bundle_target_contract_path": str(bundle_dir / "target_contract.json") if bundle_dir is not None else None,
         "duckdb_path": str(run_config.duckdb_path) if loaded.train_path is None else None,
         "gold_table": run_config.gold_table if loaded.train_path is None else None,
         "n_folds": run_config.n_folds,

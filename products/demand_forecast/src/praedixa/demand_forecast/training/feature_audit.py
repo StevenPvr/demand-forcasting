@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
 from praedixa.demand_forecast.training.constants import DEFAULT_DATASET_SOURCE_COL, DEFAULT_EXCLUDED_RISKY_FEATURE_COLS
 from praedixa.demand_forecast.contracts.targets import TargetContract, build_target_contract_metadata
 
@@ -41,6 +42,7 @@ def build_feature_audit_payload(
             {key: value for key, value in fold.items() if key not in {"train_idx", "valid_idx"}}
             for fold in folds
         ],
+        "feature_contract": build_feature_contract(feature_cols),
         "top_missingness": _top_missingness_rows(train_frame, tuning_frame, feature_cols),
     }
 

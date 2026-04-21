@@ -9,13 +9,17 @@ import pandas as pd
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
 from praedixa.demand_forecast.evaluation.orchestrator_artifacts import (
     EvaluationRunArtifacts,
+    build_evaluation_feature_manifest_payload,
     build_evaluation_metadata_payload,
     build_evaluation_model_card_payload,
     build_evaluation_payloads,
+    build_evaluation_split_manifest_payload,
+    build_promotable_bundle_manifest_payload,
     evaluation_output_paths,
     log_evaluation_completion,
     persist_evaluation_outputs,
 )
+from praedixa.demand_forecast.contracts.targets import build_target_contract_metadata
 from praedixa.demand_forecast.evaluation.orchestrator_context import (
     load_evaluation_frames,
     prepare_evaluation_context,
@@ -140,6 +144,9 @@ def _evaluation_run_artifacts(
 ) -> EvaluationRunArtifacts:
     baselines_payload, predictions_df, probabilistic_predictions_df, baseline_savings_payload, metrics_payload, probabilistic_metrics_payload, diagnostics_payload, economic_gain_payload = payloads
     output_paths = evaluation_output_paths(target_dir)
+    feature_manifest_payload, feature_roles_payload = build_evaluation_feature_manifest_payload(context=context)
+    split_manifest_payload = build_evaluation_split_manifest_payload(context=context)
+    target_contract_payload = build_target_contract_metadata(context.target_contract)
     model_card_payload, evaluation_metadata_payload = _artifact_side_payloads(
         request=request,
         context=context,
@@ -154,6 +161,10 @@ def _evaluation_run_artifacts(
     )
     return EvaluationRunArtifacts(
         output_paths=output_paths,
+        feature_manifest_payload=feature_manifest_payload,
+        feature_roles_payload=feature_roles_payload,
+        split_manifest_payload=split_manifest_payload,
+        target_contract_payload=target_contract_payload,
         metrics_payload=metrics_payload,
         probabilistic_metrics_payload=probabilistic_metrics_payload,
         baselines_payload=baselines_payload,
@@ -163,8 +174,14 @@ def _evaluation_run_artifacts(
         economic_gain_payload=economic_gain_payload,
         daily_report_df=daily_report_df,
         final_model=final_model,
+        interpretability_payload=getattr(final_model, "interpretability_payload", None),
         model_card_payload=model_card_payload,
         evaluation_metadata_payload=evaluation_metadata_payload,
+        promotable_bundle_manifest_payload=build_promotable_bundle_manifest_payload(
+            output_paths=output_paths,
+            context=context,
+            final_model=final_model,
+        ),
     )
 
 
@@ -190,6 +207,7 @@ def _artifact_side_payloads(
             baseline_savings_payload=baseline_savings_payload,
             economic_gain_payload=economic_gain_payload,
             output_paths=output_paths,
+            interpretability_payload=getattr(final_model, "interpretability_payload", None),
         ),
         build_evaluation_metadata_payload(
             context=context,

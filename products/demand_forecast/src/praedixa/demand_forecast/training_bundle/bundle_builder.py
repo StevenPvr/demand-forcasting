@@ -9,6 +9,7 @@ import pandas as pd
 
 from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN
 from praedixa.demand_forecast.backends.tft.feature_mapping import select_explicit_tft_group_id_columns
+from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
 from praedixa.demand_forecast.backends.tft.model_utils import select_tft_feature_columns
 from praedixa.demand_forecast.contracts.targets import (
     DEFAULT_VARIATION_TARGET_COL,
@@ -285,6 +286,8 @@ def _bundle_output_paths(output_dir: Path, *, include_valid: bool) -> dict[str, 
         "train": output_dir / "train.parquet",
         "tuning": output_dir / "tuning.parquet",
         "feature_manifest": output_dir / "feature_manifest.json",
+        "feature_roles": output_dir / "feature_roles.json",
+        "split_manifest": output_dir / "split_manifest.json",
         "target_contract": output_dir / "target_contract.json",
         "bundle_manifest": output_dir / "bundle_manifest.json",
     }
@@ -384,16 +387,15 @@ def _feature_manifest_payload(
     projection_columns: list[str],
     projection_dtypes: dict[str, str],
 ) -> dict[str, object]:
+    feature_contract = build_feature_contract(feature_cols)
     return {
         "feature_columns": feature_cols,
         "feature_count": len(feature_cols),
         "group_id_columns": group_id_columns,
         "projection_columns": projection_columns,
         "projection_dtypes": projection_dtypes,
-        "feature_roles": {
-            column: TFT_EXPLICIT_ROLE_BY_COLUMN[column]
-            for column in feature_cols
-        },
+        "feature_roles": {column: TFT_EXPLICIT_ROLE_BY_COLUMN[column] for column in feature_cols},
+        "feature_contract": feature_contract,
     }
 
 
@@ -536,6 +538,7 @@ def _bundle_manifest_payload(
     feature_count: int,
 ) -> dict[str, object]:
     bundle_manifest: dict[str, object] = {
+        "bundle_version": 2,
         "train_input_path": str(train_path),
         "tuning_input_path": str(tuning_path),
         "valid_input_path": str(valid_path) if valid_path is not None else None,
@@ -544,6 +547,8 @@ def _bundle_manifest_payload(
         "valid_rows": valid_rows,
         "feature_count": feature_count,
         "feature_manifest_path": str(output_paths["feature_manifest"]),
+        "feature_roles_path": str(output_paths["feature_roles"]),
+        "split_manifest_path": str(output_paths["split_manifest"]),
         "target_contract_path": str(output_paths["target_contract"]),
         "train_sha256": sha256_file(output_paths["train"]),
         "tuning_sha256": sha256_file(output_paths["tuning"]),
@@ -551,6 +556,19 @@ def _bundle_manifest_payload(
     if valid_path is not None:
         bundle_manifest["valid_sha256"] = sha256_file(output_paths["valid"])
     return bundle_manifest
+
+
+def _split_manifest_payload(
+    *,
+    train_rows: int,
+    tuning_rows: int,
+    valid_rows: int,
+) -> dict[str, object]:
+    return {
+        "train": {"rows": train_rows},
+        "tuning": {"rows": tuning_rows},
+        "valid": {"rows": valid_rows},
+    }
 
 
 def _persist_bundle_metadata(
@@ -568,6 +586,7 @@ def _persist_bundle_metadata(
     tuning_rows: int,
     valid_rows: int,
 ) -> None:
+    feature_contract = build_feature_contract(feature_cols)
     _json_dump(
         output_paths["feature_manifest"],
         _feature_manifest_payload(
@@ -575,6 +594,15 @@ def _persist_bundle_metadata(
             group_id_columns=group_id_columns,
             projection_columns=projection_columns,
             projection_dtypes=projection_dtypes,
+        ),
+    )
+    _json_dump(output_paths["feature_roles"], feature_contract)
+    _json_dump(
+        output_paths["split_manifest"],
+        _split_manifest_payload(
+            train_rows=train_rows,
+            tuning_rows=tuning_rows,
+            valid_rows=valid_rows,
         ),
     )
     _json_dump(output_paths["target_contract"], build_target_contract_metadata(target_contract))

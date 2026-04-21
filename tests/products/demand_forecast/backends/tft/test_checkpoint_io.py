@@ -83,6 +83,9 @@ class TFTCheckpointIOTests(unittest.TestCase):
         self.assertEqual(reloaded_model.git_sha, model.git_sha)
         self.assertIn("runtime_profile", reloaded_model.system_info)
         self.assertIn("current_day_demand_qty", reloaded_model.feature_scalers)
+        self.assertEqual(reloaded_model.normalization_strategy["kind"], "group_normalizer")
+        self.assertEqual(reloaded_model.artifact_bundle_version, 2)
+        self.assertIsNotNone(reloaded_model.interpretability_payload)
 
 
 if __name__ == "__main__":

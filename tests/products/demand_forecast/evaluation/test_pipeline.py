@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import sys
 import tempfile
+from types import SimpleNamespace
 from typing import cast
 import unittest
 from unittest.mock import patch
@@ -130,6 +131,19 @@ def _write_dummy_artifact(_model: object, path: Path) -> Path:
     return path
 
 
+def _dummy_final_model() -> SimpleNamespace:
+    return SimpleNamespace(
+        runtime_profile="local_cpu",
+        system_info={"runtime_profile": "local_cpu"},
+        git_sha="test-sha",
+        normalization_strategy={"kind": "group_normalizer"},
+        artifact_bundle_version=2,
+        interpretability_payload={"variable_selection": {"encoder": {"feat": 1.0}}},
+        bundle_manifest=None,
+        data_hashes={},
+    )
+
+
 def _write_dummy_plot(_frame: pd.DataFrame, path: Path) -> None:
     path.write_bytes(b"plot")
 
@@ -141,6 +155,12 @@ def _assert_written_artifacts(output_dir: Path) -> None:
         "foundation_tft_test_predictions.csv",
         "foundation_tft_probabilistic_predictions.csv",
         "foundation_tft_final_model.pt",
+        "foundation_tft_feature_manifest.json",
+        "foundation_tft_feature_roles.json",
+        "foundation_tft_split_manifest.json",
+        "foundation_tft_target_contract.json",
+        "foundation_tft_interpretability.json",
+        "foundation_tft_promotable_bundle_manifest.json",
         "foundation_tft_actual_vs_predicted.png",
         "foundation_tft_residuals.png",
         "foundation_tft_test_diagnostics.json",
@@ -187,9 +207,15 @@ def _assert_diagnostics_exports(output_dir: Path) -> None:
         "prediction_p97_5",
     ]
     assert probabilistic_summary["intervals"]["80"]["lower"] == "lower_80"
+    assert "quantile_calibration_error" in diagnostics_payload
     model_card_payload = json.loads((output_dir / "foundation_tft_model_card.json").read_text("utf-8"))
     assert model_card_payload["forecast_output_contract"]["median_forecast_column"] == "prediction_p50"
     assert model_card_payload["probabilistic_forecast"]["intervals"]["95"]["coverage"] == 1.0
+    assert model_card_payload["interpretability_path"].endswith("foundation_tft_interpretability.json")
+    assert model_card_payload["feature_roles_path"].endswith("foundation_tft_feature_roles.json")
+    promotable_manifest = json.loads((output_dir / "foundation_tft_promotable_bundle_manifest.json").read_text("utf-8"))
+    assert promotable_manifest["bundle_version"] == 2
+    assert promotable_manifest["artifact_paths"]["feature_manifest_json"].endswith("foundation_tft_feature_manifest.json")
 
 
 def _build_refit_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, TargetContract]:
@@ -353,7 +379,7 @@ class EvaluationPipelineTests(unittest.TestCase):
                 ),
                 patch(
                     "praedixa.demand_forecast.evaluation.orchestrator.fit_final_model",
-                    return_value=object(),
+                    return_value=_dummy_final_model(),
                 ),
                 patch(
                     "praedixa.demand_forecast.evaluation.orchestrator.save_tft_model",
