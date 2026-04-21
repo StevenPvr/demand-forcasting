@@ -31,6 +31,11 @@ DEFAULT_TRAIN_INPUT_PATH: Path | None = None
 DEFAULT_TUNING_INPUT_PATH: Path | None = None
 DEFAULT_VALID_INPUT_PATH: Path | None = None
 DEFAULT_OUTPUT_DIR = TRAINING_BUNDLE_DIR
+DEFAULT_SMOKE_SERIES_LIMIT: int | None = None
+DEFAULT_SMOKE_DATASET_SOURCE: str | None = None
+DEFAULT_SMOKE_MIN_TRAIN_ROWS = 56
+DEFAULT_SMOKE_MIN_TUNING_ROWS = 28
+DEFAULT_SMOKE_MIN_VALID_ROWS = 0
 
 
 def _json_dump(path: Path, payload: Mapping[str, object | None]) -> None:
@@ -89,6 +94,95 @@ def _materialize_gold_split(
     return output_path
 
 
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _smoke_series_selection_query(
+    *,
+    gold_table: str,
+    series_limit: int,
+    dataset_source: str | None,
+    min_train_rows: int,
+    min_tuning_rows: int,
+    min_valid_rows: int,
+) -> str:
+    filters: list[str] = []
+    if dataset_source is not None:
+        filters.append(f"dataset_source = {_sql_literal(dataset_source)}")
+    where_clause = "" if not filters else f"where {' and '.join(filters)}"
+    return f"""
+    with eligible as (
+        select
+            dataset_source,
+            series_id,
+            sum(case when split_bucket = 'train' then 1 else 0 end) as train_rows,
+            sum(case when split_bucket = 'val' then 1 else 0 end) as tuning_rows,
+            sum(case when split_bucket = 'test' then 1 else 0 end) as valid_rows
+        from {gold_table}
+        {where_clause}
+        group by 1, 2
+        having train_rows >= {int(min_train_rows)}
+           and tuning_rows >= {int(min_tuning_rows)}
+           and valid_rows >= {int(min_valid_rows)}
+    )
+    select dataset_source, series_id
+    from eligible
+    order by train_rows desc, tuning_rows desc, dataset_source, series_id
+    limit {int(series_limit)}
+    """
+
+
+def _materialize_smoke_gold_split(
+    *,
+    cache_dir: Path,
+    duckdb_path: str | Path,
+    gold_table: str,
+    split_bucket: str,
+    series_limit: int,
+    dataset_source: str | None,
+    min_train_rows: int,
+    min_tuning_rows: int,
+    min_valid_rows: int,
+) -> Path | None:
+    output_path = _materialized_gold_split_path(cache_dir, split_bucket)
+    selected_series_query = _smoke_series_selection_query(
+        gold_table=gold_table,
+        series_limit=series_limit,
+        dataset_source=dataset_source,
+        min_train_rows=min_train_rows,
+        min_tuning_rows=min_tuning_rows,
+        min_valid_rows=min_valid_rows,
+    )
+    connection = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        row = connection.execute(
+            f"select count(*) from ({selected_series_query}) as selected_series"
+        ).fetchone()
+        selected_series_count = 0 if row is None else int(cast(int, row[0]))
+        if selected_series_count == 0:
+            return None
+        connection.execute(
+            f"""
+            copy (
+                with selected_series as (
+                    {selected_series_query}
+                )
+                select gold.*
+                from {gold_table} as gold
+                inner join selected_series
+                    on gold.dataset_source = selected_series.dataset_source
+                   and gold.series_id = selected_series.series_id
+                where gold.split_bucket = '{split_bucket}'
+                order by gold.{DEFAULT_DATE_COL}, gold.series_id
+            ) to '{output_path.as_posix()}' (format parquet)
+            """
+        )
+    finally:
+        connection.close()
+    return output_path if output_path.exists() and output_path.stat().st_size > 0 else None
+
+
 def _load_materialized_gold_frame(path: Path | None) -> pd.DataFrame | None:
     if path is None:
         return None
@@ -100,27 +194,67 @@ def _load_frames_from_gold(
     output_dir: Path,
     duckdb_path: str | Path,
     gold_table: str,
+    smoke_series_limit: int | None,
+    smoke_dataset_source: str | None,
+    smoke_min_train_rows: int,
+    smoke_min_tuning_rows: int,
+    smoke_min_valid_rows: int,
 ) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     cache_dir = output_dir / "_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    train_path = _materialize_gold_split(
-        cache_dir=cache_dir,
-        duckdb_path=duckdb_path,
-        gold_table=gold_table,
-        split_bucket="train",
-    )
-    tuning_path = _materialize_gold_split(
-        cache_dir=cache_dir,
-        duckdb_path=duckdb_path,
-        gold_table=gold_table,
-        split_bucket="val",
-    )
-    valid_path = _materialize_gold_split(
-        cache_dir=cache_dir,
-        duckdb_path=duckdb_path,
-        gold_table=gold_table,
-        split_bucket="test",
-    )
+    if smoke_series_limit is not None:
+        train_path = _materialize_smoke_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="train",
+            series_limit=smoke_series_limit,
+            dataset_source=smoke_dataset_source,
+            min_train_rows=smoke_min_train_rows,
+            min_tuning_rows=smoke_min_tuning_rows,
+            min_valid_rows=smoke_min_valid_rows,
+        )
+        tuning_path = _materialize_smoke_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="val",
+            series_limit=smoke_series_limit,
+            dataset_source=smoke_dataset_source,
+            min_train_rows=smoke_min_train_rows,
+            min_tuning_rows=smoke_min_tuning_rows,
+            min_valid_rows=smoke_min_valid_rows,
+        )
+        valid_path = _materialize_smoke_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="test",
+            series_limit=smoke_series_limit,
+            dataset_source=smoke_dataset_source,
+            min_train_rows=smoke_min_train_rows,
+            min_tuning_rows=smoke_min_tuning_rows,
+            min_valid_rows=smoke_min_valid_rows,
+        )
+    else:
+        train_path = _materialize_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="train",
+        )
+        tuning_path = _materialize_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="val",
+        )
+        valid_path = _materialize_gold_split(
+            cache_dir=cache_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="test",
+        )
     if train_path is None or tuning_path is None:
         raise FileNotFoundError(
             f"Gold table `{gold_table}` must expose non-empty `train` and `val` split buckets."
@@ -271,12 +405,22 @@ def _load_bundle_frames(
     valid_input_path: str | Path | None,
     duckdb_path: str | Path,
     gold_table: str,
+    smoke_series_limit: int | None,
+    smoke_dataset_source: str | None,
+    smoke_min_train_rows: int,
+    smoke_min_tuning_rows: int,
+    smoke_min_valid_rows: int,
 ) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     if train_input_path is None and tuning_input_path is None:
         return _load_frames_from_gold(
             output_dir=output_dir,
             duckdb_path=duckdb_path,
             gold_table=gold_table,
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
         )
     if train_input_path is None or tuning_input_path is None:
         raise ValueError(
@@ -457,6 +601,11 @@ def build_training_bundle(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     duckdb_path: str | Path = DEFAULT_DUCKDB_PATH,
     gold_table: str = DEFAULT_GOLD_TABLE,
+    smoke_series_limit: int | None = DEFAULT_SMOKE_SERIES_LIMIT,
+    smoke_dataset_source: str | None = DEFAULT_SMOKE_DATASET_SOURCE,
+    smoke_min_train_rows: int = DEFAULT_SMOKE_MIN_TRAIN_ROWS,
+    smoke_min_tuning_rows: int = DEFAULT_SMOKE_MIN_TUNING_ROWS,
+    smoke_min_valid_rows: int = DEFAULT_SMOKE_MIN_VALID_ROWS,
     target_col: str = DEFAULT_VARIATION_TARGET_COL,
 ) -> dict[str, Path]:
     resolved_output_dir = Path(output_dir)
@@ -468,6 +617,11 @@ def build_training_bundle(
         valid_input_path=valid_input_path,
         duckdb_path=duckdb_path,
         gold_table=gold_table,
+        smoke_series_limit=smoke_series_limit,
+        smoke_dataset_source=smoke_dataset_source,
+        smoke_min_train_rows=smoke_min_train_rows,
+        smoke_min_tuning_rows=smoke_min_tuning_rows,
+        smoke_min_valid_rows=smoke_min_valid_rows,
     )
     train_frame, tuning_frame, valid_frame, target_contract = _resolve_bundle_contract(
         train_frame=train_frame,

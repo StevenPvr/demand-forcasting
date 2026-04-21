@@ -66,6 +66,39 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             self._assert_artifacts_exist(artifacts)
             self._assert_gold_backed_bundle(artifacts)
 
+    def test_build_training_bundle_smoke_keeps_complete_series_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_dir = root / "bundle"
+            duckdb_path = root / "praedixa.duckdb"
+            gold_table = "gold_daily_product_forecast_panel_d1"
+            self._write_gold_table(duckdb_path, gold_table, self._gold_smoke_frame())
+
+            artifacts = build_training_bundle(
+                train_input_path=None,
+                tuning_input_path=None,
+                valid_input_path=None,
+                output_dir=output_dir,
+                duckdb_path=duckdb_path,
+                gold_table=gold_table,
+                smoke_series_limit=1,
+                smoke_dataset_source="freshretail_lt",
+                smoke_min_train_rows=4,
+                smoke_min_tuning_rows=2,
+                smoke_min_valid_rows=1,
+            )
+
+            bundled_train = pd.read_parquet(artifacts["train"])
+            bundled_tuning = pd.read_parquet(artifacts["tuning"])
+            bundled_valid = pd.read_parquet(artifacts["valid"])
+
+            self.assertEqual(sorted(bundled_train["series_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(sorted(bundled_tuning["series_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(sorted(bundled_valid["series_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(len(bundled_train), 4)
+            self.assertEqual(len(bundled_tuning), 2)
+            self.assertEqual(len(bundled_valid), 1)
+
     def _frame(
         self,
         start_date: str,
@@ -115,6 +148,70 @@ class TrainingBundleBuilderTests(unittest.TestCase):
                 "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0],
                 "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
                 "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+            }
+        )
+
+    def _gold_smoke_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "dt": pd.date_range("2024-01-01", periods=11, freq="D"),
+                "dataset_source": ["freshretail_lt"] * 11,
+                "split_bucket": [
+                    "train",
+                    "train",
+                    "train",
+                    "train",
+                    "val",
+                    "val",
+                    "test",
+                    "train",
+                    "train",
+                    "val",
+                    "test",
+                ],
+                "series_id": [
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_1__sku_1",
+                    "store_2__sku_2",
+                    "store_2__sku_2",
+                    "store_2__sku_2",
+                    "store_2__sku_2",
+                ],
+                "location_id": [
+                    "store_1",
+                    "store_1",
+                    "store_1",
+                    "store_1",
+                    "store_1",
+                    "store_1",
+                    "store_1",
+                    "store_2",
+                    "store_2",
+                    "store_2",
+                    "store_2",
+                ],
+                "product_id": [
+                    "sku_1",
+                    "sku_1",
+                    "sku_1",
+                    "sku_1",
+                    "sku_1",
+                    "sku_1",
+                    "sku_1",
+                    "sku_2",
+                    "sku_2",
+                    "sku_2",
+                    "sku_2",
+                ],
+                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 20.0, 21.0, 22.0, 23.0],
+                "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 18.0, 19.0, 20.0, 21.0],
+                "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 17.0, 18.0, 19.0, 20.0],
+                "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 19.0, 20.0, 21.0, 22.0],
             }
         )
 
