@@ -117,10 +117,18 @@ def _default_output_dir() -> Path:
     return OPTIMISATION_DIR
 
 
+def _default_runtime_profile() -> str:
+    if _cuda_available():
+        return "scaleway_l40s"
+    if _mps_available():
+        return "mac_metal"
+    return DEFAULT_RUNTIME_PROFILE
+
+
 @dataclass(frozen=True)
 class OptimisationMainConfig:
     bundle_dir: Path = Path(DEFAULT_BUNDLE_DIR)
-    runtime_profile: str = DEFAULT_RUNTIME_PROFILE
+    runtime_profile: str = field(default_factory=_default_runtime_profile)
     output_dir: Path = field(default_factory=_default_output_dir)
     n_folds: int = DEFAULT_N_FOLDS
     max_trials: int = DEFAULT_MAX_TRIALS
@@ -130,7 +138,11 @@ class OptimisationMainConfig:
     tensorboard_logdir: Path | None = DEFAULT_TENSORBOARD_LOGDIR
 
 
-OFFICIAL_OPTIMISATION_MAIN_CONFIG = OptimisationMainConfig()
+def build_default_optimisation_main_config() -> OptimisationMainConfig:
+    return OptimisationMainConfig()
+
+
+OFFICIAL_OPTIMISATION_MAIN_CONFIG = build_default_optimisation_main_config()
 
 
 def _validate_bundle_dir(bundle_dir: Path) -> tuple[Path, Path, Path]:
@@ -163,13 +175,18 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
+    logging.getLogger(__name__).info(
+        "Selected official optimisation runtime profile: runtime_profile=%s cuda_available=%s mps_available=%s",
+        config.runtime_profile,
+        _cuda_available(),
+        _mps_available(),
+    )
     train_input_path, tuning_input_path, resolved_bundle_dir = _resolve_official_bundle_inputs(config.bundle_dir)
     _validate_runtime_profile(config.runtime_profile)
     model_params: dict[str, object] = {
         "n_jobs": os.cpu_count() or 1,
         "runtime_profile": config.runtime_profile,
         "stage_budget": config.stage_budget,
-        "precision": "32-true",
     }
     if config.tensorboard_logdir is not None:
         model_params["tensorboard_logdir"] = str(config.tensorboard_logdir)
@@ -187,9 +204,10 @@ def main() -> None:
                 bundle_dir=resolved_bundle_dir,
             ),
         )
-    except TFTBackendNotReadyError:
+    except TFTBackendNotReadyError as exc:
         logging.getLogger(__name__).error(
-            "Le backend TFT unique n'est pas encore branche : l'etape optimisation reste un placeholder structurel."
+            "Optimisation aborted because the TFT backend is unavailable: %s",
+            exc,
         )
         raise
     logging.getLogger(__name__).info(

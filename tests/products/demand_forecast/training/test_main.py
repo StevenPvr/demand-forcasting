@@ -22,6 +22,7 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
 from praedixa.demand_forecast.training.pipeline import OptimisationBuildRequest  # noqa: E402
 from praedixa.demand_forecast.training.main import (  # noqa: E402
     OFFICIAL_OPTIMISATION_MAIN_CONFIG,
+    build_default_optimisation_main_config,
     main as optimisation_main,
 )
 from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR  # noqa: E402
@@ -62,13 +63,46 @@ class OptimisationMainTests(unittest.TestCase):
     def test_official_main_config_uses_official_defaults(self) -> None:
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
 
-        self.assertEqual(config.runtime_profile, "local_cpu")
+        self.assertEqual(
+            config.runtime_profile,
+            build_default_optimisation_main_config().runtime_profile,
+        )
         self.assertEqual(config.n_folds, 2)
         self.assertEqual(config.max_trials, 2)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.001)
-        self.assertEqual(config.tuning_sample_fraction, 0.001)
+        self.assertEqual(config.train_sample_fraction, 0.10)
+        self.assertEqual(config.tuning_sample_fraction, 0.10)
         self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
+
+    def test_default_config_selects_scaleway_profile_when_cuda_is_available(self) -> None:
+        with (
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_available",
+                return_value=True,
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._mps_available",
+                return_value=False,
+            ),
+        ):
+            config = build_default_optimisation_main_config()
+
+        self.assertEqual(config.runtime_profile, "scaleway_l40s")
+
+    def test_default_config_selects_mac_metal_when_only_mps_is_available(self) -> None:
+        with (
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_available",
+                return_value=False,
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._mps_available",
+                return_value=True,
+            ),
+        ):
+            config = build_default_optimisation_main_config()
+
+        self.assertEqual(config.runtime_profile, "mac_metal")
 
     def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
         from praedixa.demand_forecast.backends.tft.backend import (

@@ -8,6 +8,10 @@ from praedixa.demand_forecast.training.sampling_models import (
 )
 
 
+def _per_stratum_sample_target_sql(sample_fraction: float) -> str:
+    return f"cast(floor(stratum_row_count * {sample_fraction:.12f}) as bigint)"
+
+
 def build_gold_split_sampling_query(
     *,
     gold_table: str,
@@ -42,7 +46,7 @@ ranked as (
 )
 select *
 from ranked
-where rn_sample <= greatest(1, cast(ceil(stratum_row_count * {sample_fraction:.12f}) as bigint))
+where rn_sample <= {_per_stratum_sample_target_sql(sample_fraction)}
 """
 
 
@@ -108,7 +112,7 @@ ranked as (
 )
 select {select_list}
 from ranked
-where rn_sample <= greatest(1, cast(ceil(stratum_row_count * {query.spec.sample_fraction:.12f}) as bigint))
+where rn_sample <= {_per_stratum_sample_target_sql(query.spec.sample_fraction)}
 """
 
 
@@ -168,7 +172,7 @@ ranked as (
 primary_sample as (
     select __row_id, {select_list}
     from ranked
-    where rn_sample <= greatest(1, cast(ceil(stratum_row_count * {query.spec.sample_fraction:.12f}) as bigint))
+    where rn_sample <= {_per_stratum_sample_target_sql(query.spec.sample_fraction)}
 ),
 """
 

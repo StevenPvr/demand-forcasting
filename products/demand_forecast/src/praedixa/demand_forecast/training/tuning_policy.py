@@ -26,12 +26,15 @@ from praedixa.demand_forecast.training.constants import (
     DEFAULT_TUNING_DROPOUT_LOW,
     DEFAULT_TUNING_DROPOUT_STAGE_B_MARGIN,
     DEFAULT_TUNING_ENCODER_LENGTH_CHOICES,
+    DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES,
     DEFAULT_TUNING_GRADIENT_CLIP_CHOICES,
     DEFAULT_TUNING_HIDDEN_CONTINUOUS_SIZE_CHOICES,
     DEFAULT_TUNING_HIDDEN_SIZE_CHOICES,
     DEFAULT_TUNING_LEARNING_RATE_HIGH,
     DEFAULT_TUNING_LEARNING_RATE_LOW,
+    DEFAULT_TUNING_LEARNING_RATE_REFERENCE_BATCH_SIZE,
     DEFAULT_TUNING_LSTM_LAYER_CHOICES,
+    DEFAULT_TUNING_MAX_BATCH_SCALED_LEARNING_RATE_SCALE,
     DEFAULT_TUNING_PRUNER_CONFIG,
     DEFAULT_TUNING_STAGE_POLICIES,
     DEFAULT_TUNING_WEIGHT_DECAY_HIGH,
@@ -53,6 +56,60 @@ def _linear_float_bounds(anchor: object, *, low: float, high: float, margin: flo
     lower = max(low, float(anchor) - margin)
     upper = min(high, float(anchor) + margin)
     return (low, high) if lower >= upper else (lower, upper)
+
+
+def _runtime_profile_batch_size_choices(runtime_profile_name: str) -> tuple[int, ...]:
+    if runtime_profile_name == "scaleway_l40s":
+        return DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES
+    return DEFAULT_TUNING_BATCH_SIZE_CHOICES
+
+
+def _batch_learning_rate_scale(*, batch_size: int, runtime_profile_name: str) -> float:
+    if runtime_profile_name != "scaleway_l40s":
+        return 1.0
+    return min(
+        DEFAULT_TUNING_MAX_BATCH_SCALED_LEARNING_RATE_SCALE,
+        math.sqrt(float(batch_size) / float(DEFAULT_TUNING_LEARNING_RATE_REFERENCE_BATCH_SIZE)),
+    )
+
+
+def _batch_scaled_learning_rate_bounds(
+    *,
+    batch_size: int,
+    runtime_profile_name: str,
+    low: float,
+    high: float,
+) -> tuple[float, float]:
+    scale = _batch_learning_rate_scale(
+        batch_size=batch_size,
+        runtime_profile_name=runtime_profile_name,
+    )
+    return low * scale, high * scale
+
+
+def _anchor_learning_rate_for_batch(
+    *,
+    anchor_params: dict[str, object] | None,
+    batch_size: int,
+    runtime_profile_name: str,
+) -> object:
+    if not anchor_params:
+        return None
+    anchor_learning_rate = anchor_params.get("learning_rate")
+    if not isinstance(anchor_learning_rate, (int, float)):
+        return anchor_learning_rate
+    anchor_batch_size = int(cast(Any, anchor_params.get("batch_size", DEFAULT_TUNING_LEARNING_RATE_REFERENCE_BATCH_SIZE)))
+    anchor_scale = _batch_learning_rate_scale(
+        batch_size=anchor_batch_size,
+        runtime_profile_name=runtime_profile_name,
+    )
+    target_scale = _batch_learning_rate_scale(
+        batch_size=batch_size,
+        runtime_profile_name=runtime_profile_name,
+    )
+    if anchor_scale <= 0.0:
+        return anchor_learning_rate
+    return float(anchor_learning_rate) * (target_scale / anchor_scale)
 
 
 def resolve_stage_policy(
@@ -96,20 +153,33 @@ def sample_optuna_params(
     trial: optuna.trial.Trial,
     random_seed: int,
     *,
+    runtime_profile_name: str = DEFAULT_RUNTIME_PROFILE_NAME,
     stage_name: str = "stage_a",
     anchor_params: dict[str, object] | None = None,
     epoch_range: tuple[int, int] | None = None,
 ) -> dict[str, object]:
+    batch_size_choices = _runtime_profile_batch_size_choices(runtime_profile_name)
     if stage_name == "stage_b":
         standard_policy = DEFAULT_TUNING_STAGE_POLICIES[DEFAULT_STAGE_BUDGET]
         resolved_epoch_range = epoch_range or cast(
             tuple[int, int],
             cast(Any, standard_policy["stage_b_epoch_range"]),
         )
-        learning_rate_low, learning_rate_high = _log_float_bounds(
-            anchor_params.get("learning_rate") if anchor_params else None,
+        batch_size = int(trial.suggest_categorical("batch_size", batch_size_choices))
+        scaled_learning_rate_low, scaled_learning_rate_high = _batch_scaled_learning_rate_bounds(
+            batch_size=batch_size,
+            runtime_profile_name=runtime_profile_name,
             low=DEFAULT_TUNING_LEARNING_RATE_LOW,
             high=DEFAULT_TUNING_LEARNING_RATE_HIGH,
+        )
+        learning_rate_low, learning_rate_high = _log_float_bounds(
+            _anchor_learning_rate_for_batch(
+                anchor_params=anchor_params,
+                batch_size=batch_size,
+                runtime_profile_name=runtime_profile_name,
+            ),
+            low=scaled_learning_rate_low,
+            high=scaled_learning_rate_high,
         )
         dropout_low, dropout_high = _linear_float_bounds(
             anchor_params.get("dropout") if anchor_params else None,
@@ -124,7 +194,7 @@ def sample_optuna_params(
         )
         return {
             "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
-            "batch_size": trial.suggest_categorical("batch_size", DEFAULT_TUNING_BATCH_SIZE_CHOICES),
+            "batch_size": batch_size,
             "max_encoder_length": trial.suggest_categorical(
                 "max_encoder_length", DEFAULT_TUNING_ENCODER_LENGTH_CHOICES
             ),
@@ -151,9 +221,16 @@ def sample_optuna_params(
         tuple[int, int],
         cast(Any, standard_policy["stage_a_epoch_range"]),
     )
+    batch_size = int(trial.suggest_categorical("batch_size", batch_size_choices))
+    learning_rate_low, learning_rate_high = _batch_scaled_learning_rate_bounds(
+        batch_size=batch_size,
+        runtime_profile_name=runtime_profile_name,
+        low=DEFAULT_TUNING_LEARNING_RATE_LOW,
+        high=DEFAULT_TUNING_LEARNING_RATE_HIGH,
+    )
     return {
         "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
-        "batch_size": trial.suggest_categorical("batch_size", DEFAULT_TUNING_BATCH_SIZE_CHOICES),
+        "batch_size": batch_size,
         "max_encoder_length": trial.suggest_categorical(
             "max_encoder_length", DEFAULT_TUNING_ENCODER_LENGTH_CHOICES
         ),
@@ -162,8 +239,8 @@ def sample_optuna_params(
         ),
         "learning_rate": trial.suggest_float(
             "learning_rate",
-            DEFAULT_TUNING_LEARNING_RATE_LOW,
-            DEFAULT_TUNING_LEARNING_RATE_HIGH,
+            learning_rate_low,
+            learning_rate_high,
             log=True,
         ),
         "hidden_size": trial.suggest_categorical("hidden_size", DEFAULT_TUNING_HIDDEN_SIZE_CHOICES),

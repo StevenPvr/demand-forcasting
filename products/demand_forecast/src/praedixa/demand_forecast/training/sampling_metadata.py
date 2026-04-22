@@ -12,6 +12,10 @@ from praedixa.demand_forecast.training.sampling_models import (
 )
 
 
+def _per_stratum_primary_sample_expr(sample_fraction: float) -> str:
+    return f"cast(floor(stratum_rows * {sample_fraction:.12f}) as bigint)"
+
+
 def load_sampling_metadata_from_relation(
     connection: duckdb.DuckDBPyConnection,
     *,
@@ -135,7 +139,7 @@ def _relation_sampling_counts(
             select
                 dataset_source,
                 sum(stratum_rows) as original_rows,
-                sum(greatest(1, cast(ceil(stratum_rows * {spec.sample_fraction:.12f}) as bigint))) as primary_sampled_rows,
+                sum({_per_stratum_primary_sample_expr(spec.sample_fraction)}) as primary_sampled_rows,
                 count(distinct sample_store) as store_count,
                 count(distinct sampled_dt) as unique_dates,
                 count(*) as strata_count
@@ -202,7 +206,7 @@ def load_gold_split_sampling_metadata(
         select
             dataset_source,
             sum(stratum_rows) as original_rows,
-            sum(greatest(1, cast(ceil(stratum_rows * {spec.sample_fraction:.12f}) as bigint))) as sampled_rows,
+            sum({_per_stratum_primary_sample_expr(spec.sample_fraction)}) as sampled_rows,
             count(distinct sample_store) as store_count,
             count(distinct sampled_dt) as unique_dates,
             count(*) as strata_count

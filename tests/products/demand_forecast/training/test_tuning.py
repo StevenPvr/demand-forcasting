@@ -115,6 +115,56 @@ class TuningPolicyTests(unittest.TestCase):
 
         self.assertEqual(prep_workers, 1)
 
+    def test_hpo_resolved_inputs_apply_gpu_runtime_profile_defaults(self) -> None:
+        train_frame, tuning_frame, target_contract = self._build_target_contract()
+
+        resolved_params, execution_plan, _ = cast(Any, tuning_scoring_module)._resolved_tft_tuning_inputs(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
+            feature_cols=["series_id"],
+            target_contract=target_contract,
+            logger=__import__("logging").getLogger(__name__),
+            model_params={
+                "runtime_profile": "scaleway_l40s",
+                "n_jobs": 8,
+                "max_encoder_length": 14,
+            },
+            total_threads=8,
+            target_transform="log1p",
+            hpo_mode=True,
+        )
+
+        self.assertEqual(resolved_params["runtime_profile"], "scaleway_l40s")
+        self.assertEqual(resolved_params["accelerator"], "gpu")
+        self.assertEqual(resolved_params["determinism_mode"], "warn_only")
+        self.assertEqual(resolved_params["dataset_core_max_encoder_length"], 14)
+        self.assertEqual(execution_plan["fold_workers"], 1)
+
+    def test_prewarm_skips_when_encoder_length_is_variable_across_trials(self) -> None:
+        train_frame, tuning_frame, target_contract = self._build_target_contract()
+
+        with patch(
+            "praedixa.demand_forecast.training.tuning_scoring.build_training_dataset_core",
+        ) as mocked_build_training_core:
+            result = prewarm_tft_fold_cores_for_optuna(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
+                feature_cols=["series_id"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={"runtime_profile": "scaleway_l40s", "n_jobs": 8},
+            )
+
+        self.assertEqual(result["cached_cores"], 0)
+        self.assertEqual(result["core_max_encoder_length"], None)
+        self.assertEqual(
+            cast(dict[str, Any], result["execution_policy"])["reason"],
+            "variable_encoder_length",
+        )
+        mocked_build_training_core.assert_not_called()
+
     def test_optuna_hpo_returns_stage_and_runtime_metadata(self) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
 

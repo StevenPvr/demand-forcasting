@@ -69,8 +69,9 @@ def _configure_gpu_parallelism(imports: dict[str, Any], resolved_params: dict[st
     if cudnn_backend is not None and hasattr(cudnn_backend, "benchmark"):
         setattr(cudnn_backend, "benchmark", benchmark_enabled)
     LOGGER.info(
-        "Configured TFT GPU runtime acceleration: precision=%s matmul_precision=%s allow_tf32=%s cudnn_benchmark=%s dataloader_num_workers=%s prefetch_factor=%s pin_memory=%s",
+        "Configured TFT GPU runtime acceleration: precision=%s determinism_mode=%s matmul_precision=%s allow_tf32=%s cudnn_benchmark=%s dataloader_num_workers=%s prefetch_factor=%s pin_memory=%s",
         str(cast(Any, resolved_params.get("precision", "32-true"))),
+        str(cast(Any, resolved_params.get("determinism_mode", "strict"))),
         str(cast(Any, resolved_params.get("matmul_precision", "high"))),
         True,
         benchmark_enabled,

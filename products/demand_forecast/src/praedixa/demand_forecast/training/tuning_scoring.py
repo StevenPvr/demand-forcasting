@@ -35,6 +35,7 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (
 )
 from praedixa.demand_forecast.backends.tft.model_common import (
     lazy_import_tft_dependencies,
+    resolve_model_params,
 )
 from praedixa.demand_forecast.backends.tft.model_utils import (
     DEFAULT_TFT_MODEL_PARAMS,
@@ -1004,14 +1005,15 @@ def _resolved_tft_tuning_inputs(
     target_transform: str,
     hpo_mode: bool,
 ) -> tuple[dict[str, object], dict[str, object], SharedTuningContext]:
-    resolved_params = {**DEFAULT_TFT_MODEL_PARAMS, **(model_params or {})}
-    if hpo_mode:
-        resolved_params.setdefault("dataset_core_max_encoder_length", 7)
-    else:
-        resolved_params.setdefault(
-            "dataset_core_max_encoder_length",
-            int(cast(Any, resolved_params["max_encoder_length"])),
-        )
+    resolved_params = resolve_model_params(
+        model_params,
+        default_params=DEFAULT_TFT_MODEL_PARAMS,
+        default_max_iter=2000,
+    )
+    resolved_params.setdefault(
+        "dataset_core_max_encoder_length",
+        int(cast(Any, resolved_params["max_encoder_length"])),
+    )
     execution_plan = resolve_fold_execution_plan(
         folds=folds,
         resolved_params=resolved_params,
@@ -1040,6 +1042,26 @@ def prewarm_tft_fold_cores_for_optuna(
     total_threads: int | None = None,
     target_transform: str = DEFAULT_TARGET_TRANSFORM,
 ) -> dict[str, object]:
+    if (
+        model_params is None
+        or (
+            "dataset_core_max_encoder_length" not in model_params
+            and "max_encoder_length" not in model_params
+        )
+    ):
+        logger.info(
+            "Skipping TFT fold core prewarm before Optuna because encoder length is not fixed; "
+            "trial-specific core caches will be built on demand."
+        )
+        return {
+            "cached_cores": 0,
+            "core_max_encoder_length": None,
+            "duration_seconds": 0.0,
+            "execution_policy": {
+                "prewarm_skipped": True,
+                "reason": "variable_encoder_length",
+            },
+        }
     resolved_params, execution_plan, shared_context = _resolved_tft_tuning_inputs(
         train_frame=train_frame,
         tuning_frame=tuning_frame,

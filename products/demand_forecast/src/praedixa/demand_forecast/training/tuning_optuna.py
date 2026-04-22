@@ -194,11 +194,15 @@ def _build_trial_params(
 ) -> dict[str, object]:
     anchor_params = best_completed_trial_params(study) if stage_name == "stage_b" else None
     stage_config = stage_policy[stage_name]
+    runtime_profile_name = str(
+        (model_params or {}).get("runtime_profile", DEFAULT_TFT_MODEL_PARAMS["runtime_profile"])
+    )
     return {
         **(model_params or {}),
         **sample_optuna_params(
             trial=trial,
             random_seed=random_seed,
+            runtime_profile_name=runtime_profile_name,
             stage_name=stage_name,
             anchor_params=anchor_params,
             epoch_range=cast(tuple[int, int], tuple(cast(list[int], stage_config["epoch_range"]))),

@@ -89,10 +89,11 @@ def _sampled_dataset_frame(
     dataset_frame: pd.DataFrame,
     spec: FrameSamplingSpec,
 ) -> pd.DataFrame:
-    sampled_dataset_frame = pd.concat(
-        _sampled_strata_parts(dataset_frame, spec=spec),
-        axis=0,
-        ignore_index=False,
+    sampled_strata_parts = _sampled_strata_parts(dataset_frame, spec=spec)
+    sampled_dataset_frame = (
+        pd.concat(sampled_strata_parts, axis=0, ignore_index=False)
+        if sampled_strata_parts
+        else dataset_frame.iloc[0:0].copy()
     )
     return _top_up_sampled_dataset_frame(
         dataset_frame=dataset_frame,
@@ -108,7 +109,9 @@ def _sampled_strata_parts(
 ) -> list[pd.DataFrame]:
     per_dataset_parts: list[pd.DataFrame] = []
     for _, stratum_frame in dataset_frame.groupby([spec.date_col, spec.sample_store_col], sort=False):
-        sample_size = max(1, int(np.ceil(stratum_frame.shape[0] * spec.sample_fraction)))
+        sample_size = int(np.floor(stratum_frame.shape[0] * spec.sample_fraction))
+        if sample_size <= 0:
+            continue
         per_dataset_parts.append(stratum_frame.head(sample_size))
     return per_dataset_parts
 
