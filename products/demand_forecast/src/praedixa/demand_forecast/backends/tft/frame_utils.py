@@ -78,7 +78,12 @@ def build_combined_frame(
 def cast_categorical_columns(frame: pd.DataFrame, categorical_cols: Iterable[str]) -> pd.DataFrame:
     casted = frame.copy()
     for column in categorical_cols:
-        casted[column] = casted[column].astype("string").fillna("<NA>")
+        series = casted[column]
+        if isinstance(series.dtype, pd.CategoricalDtype):
+            filled = series.cat.add_categories(["<NA>"]) if "<NA>" not in series.cat.categories else series
+            casted[column] = filled.fillna("<NA>")
+            continue
+        casted[column] = series.astype("string").fillna("<NA>").astype("category")
     return defragment_frame(casted)
 
 

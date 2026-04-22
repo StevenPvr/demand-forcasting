@@ -20,6 +20,7 @@ from praedixa.demand_forecast.training.tuning import (  # noqa: E402
 )
 from praedixa.demand_forecast.training.tuning_scoring import (  # noqa: E402
     filter_predictable_validation_rows,
+    _resolve_fold_preparation_workers,
 )
 
 
@@ -73,6 +74,14 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn(plan["accelerator"], {"mps", "cpu"})
         self.assertEqual(plan["fold_workers"], 1)
         self.assertEqual(plan["threads_per_fold"], 6)
+
+    def test_gpu_runtime_profile_forces_single_fold_preparation_worker(self) -> None:
+        prep_workers = _resolve_fold_preparation_workers(
+            folds=[{"fold": 0}, {"fold": 1}],
+            execution_plan={"total_threads": 8, "gpu_safe_mode": True},
+        )
+
+        self.assertEqual(prep_workers, 1)
 
     def test_optuna_hpo_returns_stage_and_runtime_metadata(self) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
@@ -202,6 +211,82 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("mean_coverage_80", result)
         self.assertIn("mean_coverage_95", result)
 
+    def test_fit_and_score_caches_fold_dataset_artifacts_by_encoder_length(self) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a", "a", "a"],
+                "location_id": ["loc_1"] * 4,
+                "product_id": ["sku_1"] * 4,
+                "dataset_source": ["source_a"] * 4,
+                "dt": pd.date_range("2024-01-01", periods=4, freq="D"),
+                "rolling_mean_7": [1.0, 2.0, 3.0, 4.0],
+                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0, 13.0],
+            }
+        )
+        tuning_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a", "a", "a"],
+                "location_id": ["loc_1"] * 4,
+                "product_id": ["sku_1"] * 4,
+                "dataset_source": ["source_a"] * 4,
+                "dt": pd.date_range("2024-01-05", periods=4, freq="D"),
+                "rolling_mean_7": [5.0, 6.0, 7.0, 8.0],
+                "target_demand_qty_d_plus_1": [14.0, 15.0, 16.0, 17.0],
+            }
+        )
+        target_contract = resolve_target_contract(
+            train_frame,
+            tuning_frame,
+            requested_target_col="target_demand_qty_d_plus_1",
+        )
+
+        with (
+            patch(
+                "praedixa.demand_forecast.training.tuning_scoring.build_training_dataset_artifacts",
+                return_value=cast(Any, object()),
+            ) as mocked_build_dataset_artifacts,
+            patch(
+                "praedixa.demand_forecast.training.tuning_scoring.fit_tft_model",
+                return_value=object(),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
+                return_value=np.array([15.0, 16.0], dtype=float),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                return_value=pd.DataFrame(
+                    {
+                        "prediction_p2_5": [14.0, 15.0],
+                        "prediction_p10": [14.5, 15.5],
+                        "prediction_p50": [15.0, 16.0],
+                        "prediction_p90": [15.5, 16.5],
+                        "prediction_p97_5": [16.0, 17.0],
+                    }
+                ),
+            ),
+        ):
+            fit_and_score_tft_model_on_tuning(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[{"fold": 0, "train_idx": [0, 1], "valid_idx": [2, 3]}],
+                feature_cols=["rolling_mean_7"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={"runtime_profile": "local_cpu", "n_jobs": 2, "max_encoder_length": 1},
+            )
+            fit_and_score_tft_model_on_tuning(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[{"fold": 0, "train_idx": [0, 1], "valid_idx": [2, 3]}],
+                feature_cols=["rolling_mean_7"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={"runtime_profile": "local_cpu", "n_jobs": 2, "max_encoder_length": 1},
+            )
+
+        self.assertEqual(mocked_build_dataset_artifacts.call_count, 1)
+
     def test_filter_predictable_validation_rows_drops_insufficient_history(self) -> None:
         fold_train_frame = pd.DataFrame(
             {
@@ -230,6 +315,47 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertEqual(len(filtered_frame), 1)
         self.assertEqual(filtered_frame.iloc[0]["location_id"], "store_1")
         np.testing.assert_array_equal(filtered_indices, np.asarray([10], dtype=np.int32))
+
+    def test_filter_predictable_validation_rows_handles_multiple_groups_without_full_history_scan(self) -> None:
+        fold_train_frame = pd.DataFrame(
+            {
+                "series_id": ["series_1"] * 7 + ["series_2"] * 3,
+                "location_id": ["store_1"] * 7 + ["store_2"] * 3,
+                "product_id": ["sku_1"] * 7 + ["sku_2"] * 3,
+                "dt": pd.to_datetime(
+                    [
+                        "2024-01-01",
+                        "2024-01-02",
+                        "2024-01-03",
+                        "2024-01-04",
+                        "2024-01-05",
+                        "2024-01-06",
+                        "2024-01-07",
+                        "2024-01-01",
+                        "2024-01-02",
+                        "2024-01-03",
+                    ]
+                ),
+            }
+        )
+        fold_valid_frame = pd.DataFrame(
+            {
+                "series_id": ["series_1", "series_2", "series_1"],
+                "location_id": ["store_1", "store_2", "store_1"],
+                "product_id": ["sku_1", "sku_2", "sku_1"],
+                "dt": pd.to_datetime(["2024-01-08", "2024-01-04", "2024-01-09"]),
+            }
+        )
+
+        filtered_frame, filtered_indices = filter_predictable_validation_rows(
+            fold_train_frame=fold_train_frame,
+            fold_valid_frame=fold_valid_frame,
+            valid_indices=np.asarray([20, 21, 22], dtype=np.int32),
+            max_encoder_length=7,
+        )
+
+        self.assertEqual(filtered_frame["series_id"].tolist(), ["series_1", "series_1"])
+        np.testing.assert_array_equal(filtered_indices, np.asarray([20, 22], dtype=np.int32))
 
 
 if __name__ == "__main__":

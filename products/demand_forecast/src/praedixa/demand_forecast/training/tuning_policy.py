@@ -29,6 +29,8 @@ _HPO_PRUNER_CONFIG: dict[str, int | str] = {
     "n_warmup_steps": 1,
     "interval_steps": 1,
 }
+_LEARNING_RATE_SEARCH_LOW = 1e-3
+_LEARNING_RATE_SEARCH_HIGH = 1e-2
 
 
 def _log_float_bounds(anchor: object, *, low: float, high: float) -> tuple[float, float]:
@@ -94,7 +96,11 @@ def sample_optuna_params(
 ) -> dict[str, object]:
     if stage_name == "stage_b":
         resolved_epoch_range = epoch_range or _HPO_STAGE_B_EPOCH_RANGE
-        learning_rate_low, learning_rate_high = _log_float_bounds(anchor_params.get("learning_rate") if anchor_params else None, low=1e-3, high=5e-2)
+        learning_rate_low, learning_rate_high = _log_float_bounds(
+            anchor_params.get("learning_rate") if anchor_params else None,
+            low=_LEARNING_RATE_SEARCH_LOW,
+            high=_LEARNING_RATE_SEARCH_HIGH,
+        )
         dropout_low, dropout_high = _linear_float_bounds(anchor_params.get("dropout") if anchor_params else None, low=0.05, high=0.30, margin=0.08)
         weight_decay_low, weight_decay_high = _log_float_bounds(anchor_params.get("weight_decay") if anchor_params else None, low=1e-6, high=1e-2)
         return {
@@ -117,7 +123,7 @@ def sample_optuna_params(
         "batch_size": trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES),
         "max_encoder_length": trial.suggest_categorical("max_encoder_length", _ENCODER_LENGTH_CHOICES),
         "gradient_clip_val": trial.suggest_categorical("gradient_clip_val", _GRADIENT_CLIP_CHOICES),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 5e-2, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", _LEARNING_RATE_SEARCH_LOW, _LEARNING_RATE_SEARCH_HIGH, log=True),
         "hidden_size": trial.suggest_categorical("hidden_size", _HIDDEN_SIZE_CHOICES),
         "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", _HIDDEN_CONTINUOUS_SIZE_CHOICES),
         "attention_head_size": trial.suggest_categorical("attention_head_size", _ATTENTION_HEAD_SIZE_CHOICES),
@@ -147,7 +153,7 @@ def resolve_fold_execution_plan(
     devices = int(cast(Any, resolved_params.get("devices", runtime_profile["devices"])))
     max_parallel_fold_workers = int(cast(Any, resolved_params.get("max_parallel_fold_workers", DEFAULT_MAX_PARALLEL_FOLD_WORKERS)))
     num_threads = int(total_threads or cast(Any, resolved_params.get("n_jobs", os.cpu_count() or 1)))
-    gpu_safe_mode = accelerator in {"gpu", "mps"}
+    gpu_safe_mode = accelerator in {"gpu", "mps"} or runtime_profile_name == "mac_metal"
     fold_workers = 1 if gpu_safe_mode else max(1, min(len(folds), max_parallel_fold_workers))
     threads_per_fold = max(1, num_threads // fold_workers)
     logger.info(

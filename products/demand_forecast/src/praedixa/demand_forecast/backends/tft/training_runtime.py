@@ -44,6 +44,14 @@ def _build_loggers(imports: dict[str, Any], resolved_params: dict[str, object]) 
     }
 
 
+def _progress_bar_callback(imports: dict[str, Any], resolved_params: dict[str, object]) -> Any | None:
+    if not bool(cast(Any, resolved_params.get("enable_progress_bar", True))):
+        return None
+    return imports["TQDMProgressBar"](
+        refresh_rate=max(1, int(cast(Any, resolved_params.get("progress_bar_refresh_rate", 1)))),
+    )
+
+
 def build_trainer(
     imports: dict[str, Any],
     resolved_params: dict[str, object],
@@ -55,6 +63,9 @@ def build_trainer(
     callbacks: list[Any] = [
         imports["LearningRateMonitor"](logging_interval="epoch", log_weight_decay=True),
     ]
+    progress_bar = _progress_bar_callback(imports, resolved_params)
+    if progress_bar is not None:
+        callbacks.append(progress_bar)
     if str(cast(Any, resolved_params["accelerator"])) == "gpu":
         callbacks.append(imports["DeviceStatsMonitor"]())
     checkpoint_callback = None
@@ -87,7 +98,7 @@ def build_trainer(
         deterministic="warn" if deterministic_mode == "warn_only" else True,
         benchmark=False,
         enable_checkpointing=bool(checkpoint_callback),
-        enable_progress_bar=False,
+        enable_progress_bar=bool(cast(Any, resolved_params.get("enable_progress_bar", True))),
         enable_model_summary=False,
         logger=loggers,
         log_every_n_steps=1,

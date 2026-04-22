@@ -33,6 +33,8 @@ DEFAULT_TFT_MODEL_PARAMS: dict[str, object] = {
     "max_encoder_length": 28,
     "max_epochs": 30,
     "patience": 3,
+    "enable_progress_bar": True,
+    "progress_bar_refresh_rate": 1,
     "quantiles": [0.025, 0.1, 0.5, 0.9, 0.975],
     "tensorboard_logdir": None,
     "weight_decay": 1e-4,
@@ -61,6 +63,7 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
         EarlyStopping,
         LearningRateMonitor,
         ModelCheckpoint,
+        TQDMProgressBar,
     )
     from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
     from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
@@ -78,6 +81,7 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
         "GroupNormalizer": GroupNormalizer,
         "LearningRateMonitor": LearningRateMonitor,
         "ModelCheckpoint": ModelCheckpoint,
+        "TQDMProgressBar": TQDMProgressBar,
         "TensorBoardLogger": TensorBoardLogger,
         "TimeSeriesDataSet": TimeSeriesDataSet,
         "TemporalFusionTransformer": TemporalFusionTransformer,
@@ -162,6 +166,12 @@ def _normalize_runtime_model_params(resolved: dict[str, object]) -> None:
     )
     resolved["lstm_layers"] = int(cast(Any, resolved.get("lstm_layers", DEFAULT_TFT_MODEL_PARAMS["lstm_layers"])))
     resolved["patience"] = int(cast(Any, resolved.get("patience", DEFAULT_TFT_MODEL_PARAMS["patience"])))
+    resolved["enable_progress_bar"] = bool(
+        cast(Any, resolved.get("enable_progress_bar", DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
+    )
+    resolved["progress_bar_refresh_rate"] = int(
+        cast(Any, resolved.get("progress_bar_refresh_rate", DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"]))
+    )
     resolved["quantiles"] = list(cast(Any, resolved.get("quantiles", DEFAULT_TFT_MODEL_PARAMS["quantiles"])))
     resolved["devices"] = int(cast(Any, resolved["devices"]))
     resolved["num_workers"] = int(cast(Any, resolved["num_workers"]))

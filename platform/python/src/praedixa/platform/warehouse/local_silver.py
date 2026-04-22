@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import argparse
 import logging
 from pathlib import Path
 import shutil
@@ -249,20 +248,12 @@ def run_local_silver(config: LocalSilverRunConfig) -> dict[str, object]:
     return {"bronze_load": bronze_load, **dbt_result}
 
 
-def parse_args() -> LocalSilverRunConfig:
-    """Parse CLI args for the local silver runner."""
-
-    parser = argparse.ArgumentParser(description="Run the local Praedixa bronze -> silver workflow.")
-    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="Path to the local bronze input directory.")
-    parser.add_argument("--select", default=DEFAULT_DBT_SELECT, help="dbt selector to run and test.")
-    parser.add_argument("--skip-bronze-load", action="store_true", help="Skip reloading the local bronze schema.")
-    parser.add_argument("--skip-dbt-tests", action="store_true", help="Skip dbt test after dbt run.")
-    args = parser.parse_args()
+def build_default_local_silver_run_config() -> LocalSilverRunConfig:
     return LocalSilverRunConfig(
-        data_dir=Path(args.data_dir),
-        dbt_select=args.select,
-        run_bronze_load=not args.skip_bronze_load,
-        run_dbt_tests=not args.skip_dbt_tests,
+        data_dir=Path(DEFAULT_DATA_DIR),
+        dbt_select=DEFAULT_DBT_SELECT,
+        run_bronze_load=True,
+        run_dbt_tests=True,
     )
 
 
@@ -270,7 +261,7 @@ def main() -> None:
     """CLI entrypoint for the local Praedixa silver workflow."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    run_local_silver(parse_args())
+    run_local_silver(build_default_local_silver_run_config())
 
 
 if __name__ == "__main__":

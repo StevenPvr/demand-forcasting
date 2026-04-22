@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import argparse
 from contextlib import contextmanager
 import logging
 import os
@@ -171,22 +170,11 @@ def run_local_gold(config: LocalGoldRunConfig) -> dict[str, object]:
     return {"open_exogenous_refresh": refresh_result, **dbt_result}
 
 
-def parse_args() -> LocalGoldRunConfig:
-    """Parse CLI args for the local gold runner."""
-
-    parser = argparse.ArgumentParser(description="Run the local Praedixa silver -> gold workflow.")
-    parser.add_argument("--select", default=DEFAULT_DBT_SELECT, help="dbt selector to run and test.")
-    parser.add_argument(
-        "--skip-open-exogenous-refresh",
-        action="store_true",
-        help="Skip refreshing the open-source exogenous files and bronze tables.",
-    )
-    parser.add_argument("--skip-dbt-tests", action="store_true", help="Skip dbt test after dbt run.")
-    args = parser.parse_args()
+def build_default_local_gold_run_config() -> LocalGoldRunConfig:
     return LocalGoldRunConfig(
-        dbt_select=args.select,
-        refresh_open_exogenous=not args.skip_open_exogenous_refresh,
-        run_dbt_tests=not args.skip_dbt_tests,
+        dbt_select=DEFAULT_DBT_SELECT,
+        refresh_open_exogenous=True,
+        run_dbt_tests=True,
     )
 
 
@@ -194,7 +182,7 @@ def main() -> None:
     """CLI entrypoint for the local Praedixa gold workflow."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    run_local_gold(parse_args())
+    run_local_gold(build_default_local_gold_run_config())
 
 
 if __name__ == "__main__":

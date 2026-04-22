@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import runpy
 import sys
 import tempfile
 import unittest
@@ -18,6 +17,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from praedixa.demand_forecast.training.pipeline import OptimisationBuildRequest  # noqa: E402
+from praedixa.demand_forecast.training.main import (  # noqa: E402
+    build_official_optimisation_main_config,
+    main as optimisation_main,
+)
 
 
 def _write_bundle_fixture(bundle_dir: Path) -> None:
@@ -44,6 +47,17 @@ def _assert_bundle_request(request: OptimisationBuildRequest, bundle_dir: Path) 
 
 
 class OptimisationMainTests(unittest.TestCase):
+    def test_official_main_config_uses_gpu_official_defaults(self) -> None:
+        config = build_official_optimisation_main_config()
+
+        self.assertEqual(config.runtime_profile, "scaleway_l40s")
+        self.assertEqual(config.n_folds, 2)
+        self.assertEqual(config.max_trials, 2)
+        self.assertEqual(config.stage_budget, "standard")
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
+        self.assertIsNone(config.bundle_dir)
+
     def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
         from praedixa.demand_forecast.backends.tft.backend import (
             TFTBackendNotReadyError,
@@ -51,55 +65,41 @@ class OptimisationMainTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
+                "praedixa.demand_forecast.training.main.build_optimisation_outputs",
                 side_effect=TFTBackendNotReadyError("tft missing"),
             ),
-            mock.patch.object(sys, "argv", ["optimisation.main"]),
             self.assertRaises(TFTBackendNotReadyError),
         ):
-            runpy.run_module(
-                "praedixa.demand_forecast.training.main", run_name="__main__"
-            )
+            optimisation_main()
 
-    def test_main_accepts_bundle_dir_and_runtime_profile(self) -> None:
+    def test_main_uses_official_config_builder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             bundle_dir = Path(temp_dir)
             _write_bundle_fixture(bundle_dir)
+            official_config = build_official_optimisation_main_config()
+            patched_config = official_config.__class__(
+                bundle_dir=bundle_dir,
+                runtime_profile="scaleway_l40s",
+                output_dir=bundle_dir / "outputs",
+                n_folds=2,
+                max_trials=7,
+                stage_budget="quick",
+                train_sample_fraction=0.02,
+                tuning_sample_fraction=0.03,
+                tensorboard_logdir=bundle_dir / "tensorboard",
+            )
 
             with (
                 mock.patch(
-                    "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
+                    "praedixa.demand_forecast.training.main.build_optimisation_outputs",
                     return_value={"best_params": bundle_dir / "best_optuna_params.json"},
                 ) as mocked_build,
-                mock.patch.object(
-                    sys,
-                    "argv",
-                    [
-                        "optimisation.main",
-                        "--bundle-dir",
-                        str(bundle_dir),
-                        "--runtime-profile",
-                        "scaleway_l40s",
-                        "--output-dir",
-                        str(bundle_dir / "outputs"),
-                        "--n-folds",
-                        "2",
-                        "--max-trials",
-                        "7",
-                        "--stage-budget",
-                        "quick",
-                        "--train-sample-fraction",
-                        "0.02",
-                        "--tuning-sample-fraction",
-                        "0.03",
-                        "--tensorboard-logdir",
-                        str(bundle_dir / "tensorboard"),
-                    ],
+                mock.patch(
+                    "praedixa.demand_forecast.training.main.build_official_optimisation_main_config",
+                    return_value=patched_config,
                 ),
-                ):
-                runpy.run_module(
-                    "praedixa.demand_forecast.training.main", run_name="__main__"
-                )
+            ):
+                optimisation_main()
 
         args, kwargs = mocked_build.call_args
         self.assertEqual(kwargs, {})

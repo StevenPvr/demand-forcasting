@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 import json
 import logging
 
@@ -13,20 +13,21 @@ DEFAULT_OUTPUT_DIR = GLOBAL_DATASET_DIR
 logger = logging.getLogger(__name__)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for the global dataset pipeline."""
+@dataclass(frozen=True)
+class GlobalDatasetMainConfig:
+    output_dir: str = str(DEFAULT_OUTPUT_DIR)
 
-    parser = argparse.ArgumentParser(description="Build canonical daily demand datasets from local bronze files.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    return parser.parse_args()
+
+def build_default_global_dataset_main_config() -> GlobalDatasetMainConfig:
+    return GlobalDatasetMainConfig()
 
 
 def main() -> None:
     """Build the canonical daily dataset artifacts and log their paths."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    args = parse_args()
-    artifacts = build_global_daily_standardization(output_dir=args.output_dir)
+    config = build_default_global_dataset_main_config()
+    artifacts = build_global_daily_standardization(output_dir=config.output_dir)
     logger.info(
         "Global daily dataset built: %s",
         json.dumps(

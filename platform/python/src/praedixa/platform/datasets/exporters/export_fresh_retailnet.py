@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 import json
 import re
 from pathlib import Path
@@ -18,6 +18,15 @@ DEFAULT_VAL_FRACTION = 0.1
 DEFAULT_CSV_FRACTION = 0.05
 DEFAULT_SEED = 42
 DEFAULT_EXCLUDED_COLUMNS: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FreshRetailNetExportConfig:
+    dataset_name: str = DEFAULT_DATASET_NAME
+    output_dir: str = "data"
+    val_fraction: float = DEFAULT_VAL_FRACTION
+    csv_fraction: float = DEFAULT_CSV_FRACTION
+    seed: int = DEFAULT_SEED
 
 
 def _disable_datasets_progress_bars() -> None:
@@ -286,26 +295,18 @@ def export_dataset(
     return metadata
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Export FreshRetailNet to parquet with a train/val split and a CSV preview."
-    )
-    parser.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME)
-    parser.add_argument("--output-dir", default="data")
-    parser.add_argument("--val-fraction", type=float, default=DEFAULT_VAL_FRACTION)
-    parser.add_argument("--csv-fraction", type=float, default=DEFAULT_CSV_FRACTION)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    return parser.parse_args()
+def build_default_export_config() -> FreshRetailNetExportConfig:
+    return FreshRetailNetExportConfig()
 
 
 def main() -> None:
-    args = parse_args()
+    config = build_default_export_config()
     metadata = export_dataset(
-        dataset_name=args.dataset_name,
-        output_dir=args.output_dir,
-        val_fraction=args.val_fraction,
-        csv_fraction=args.csv_fraction,
-        seed=args.seed,
+        dataset_name=config.dataset_name,
+        output_dir=config.output_dir,
+        val_fraction=config.val_fraction,
+        csv_fraction=config.csv_fraction,
+        seed=config.seed,
         excluded_columns=DEFAULT_EXCLUDED_COLUMNS,
     )
     print(json.dumps(metadata, indent=2))

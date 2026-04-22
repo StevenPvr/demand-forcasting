@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -17,20 +17,30 @@ from praedixa.platform.runtime.paths import OPTIMISATION_DIR
 
 DEFAULT_FEATURE_SELECTION_DIR = FEATURE_SELECTION_DIR
 DEFAULT_OUTPUT_DIR = OPTIMISATION_DIR
+DEFAULT_RUNTIME_PROFILE = "scaleway_l40s"
+DEFAULT_N_FOLDS = 2
+DEFAULT_MAX_TRIALS = 2
+DEFAULT_STAGE_BUDGET = "standard"
+DEFAULT_TRAIN_SAMPLE_FRACTION = 1.0
+DEFAULT_TUNING_SAMPLE_FRACTION = 1.0
+DEFAULT_TENSORBOARD_LOGDIR: Path | None = None
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Praedixa TFT optimisation from local parquets or a versioned bundle.")
-    parser.add_argument("--bundle-dir", type=Path, default=None)
-    parser.add_argument("--runtime-profile", type=str, default="local_cpu")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--n-folds", type=int, default=5)
-    parser.add_argument("--max-trials", type=int, default=30)
-    parser.add_argument("--stage-budget", type=str, default="standard")
-    parser.add_argument("--train-sample-fraction", type=float, default=1.0)
-    parser.add_argument("--tuning-sample-fraction", type=float, default=1.0)
-    parser.add_argument("--tensorboard-logdir", type=Path, default=None)
-    return parser.parse_args()
+@dataclass(frozen=True)
+class OptimisationMainConfig:
+    bundle_dir: Path | None = None
+    runtime_profile: str = DEFAULT_RUNTIME_PROFILE
+    output_dir: Path = DEFAULT_OUTPUT_DIR
+    n_folds: int = DEFAULT_N_FOLDS
+    max_trials: int = DEFAULT_MAX_TRIALS
+    stage_budget: str = DEFAULT_STAGE_BUDGET
+    train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION
+    tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION
+    tensorboard_logdir: Path | None = DEFAULT_TENSORBOARD_LOGDIR
+
+
+def build_official_optimisation_main_config() -> OptimisationMainConfig:
+    return OptimisationMainConfig()
 
 
 def _resolve_bundle_inputs(bundle_dir: Path | None) -> tuple[Path, Path]:
@@ -53,27 +63,28 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    args = _parse_args()
-    train_input_path, tuning_input_path = _resolve_bundle_inputs(args.bundle_dir)
+    config = build_official_optimisation_main_config()
+    train_input_path, tuning_input_path = _resolve_bundle_inputs(config.bundle_dir)
     model_params: dict[str, object] = {
         "n_jobs": os.cpu_count() or 1,
-        "runtime_profile": args.runtime_profile,
-        "stage_budget": args.stage_budget,
+        "runtime_profile": config.runtime_profile,
+        "stage_budget": config.stage_budget,
+        "precision": "32-true",
     }
-    if args.tensorboard_logdir is not None:
-        model_params["tensorboard_logdir"] = str(args.tensorboard_logdir)
+    if config.tensorboard_logdir is not None:
+        model_params["tensorboard_logdir"] = str(config.tensorboard_logdir)
     try:
         outputs = build_optimisation_outputs(
             OptimisationBuildRequest(
                 train_input_path=train_input_path,
                 tuning_input_path=tuning_input_path,
-                output_dir=args.output_dir,
-                n_folds=int(args.n_folds),
-                tuning_trials=int(args.max_trials),
-                train_sample_fraction=float(args.train_sample_fraction),
-                tuning_sample_fraction=float(args.tuning_sample_fraction),
+                output_dir=config.output_dir,
+                n_folds=config.n_folds,
+                tuning_trials=config.max_trials,
+                train_sample_fraction=config.train_sample_fraction,
+                tuning_sample_fraction=config.tuning_sample_fraction,
                 model_params=model_params,
-                bundle_dir=args.bundle_dir,
+                bundle_dir=config.bundle_dir,
             ),
         )
     except TFTBackendNotReadyError:

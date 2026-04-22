@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
@@ -129,20 +128,11 @@ def download_commercial_datasets(raw_dir: str | Path = DEFAULT_RAW_DIR) -> dict[
     return outputs
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for the commercial dataset downloader."""
-
-    parser = argparse.ArgumentParser(description="Download commercially usable public datasets for Praedixa.")
-    parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
-    return parser.parse_args()
-
-
 def main() -> None:
     """Download the approved commercial datasets into the configured raw directory."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    args = parse_args()
-    outputs = download_commercial_datasets(raw_dir=args.raw_dir)
+    outputs = download_commercial_datasets(raw_dir=DEFAULT_RAW_DIR)
     logger.info("Commercial dataset downloads complete: %s", json.dumps(outputs, ensure_ascii=True))
 
 

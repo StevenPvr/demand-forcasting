@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from praedixa.demand_forecast.backends.tft.model_utils import (  # noqa: E402
+    DEFAULT_TFT_MODEL_PARAMS,
     fit_tft_model,
     predict_quantiles_with_tft_model,
     predict_with_tft_model,
@@ -25,6 +26,10 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (  # noqa: E402
 
 
 class TFTModelUtilsTests(unittest.TestCase):
+    def test_default_tft_model_params_enable_native_progress_bar(self) -> None:
+        self.assertTrue(bool(DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
+        self.assertEqual(int(DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"]), 1)
+
     def _build_training_frame(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         dates = pd.date_range("2024-01-01", periods=32, freq="D")
         rows: list[dict[str, object]] = []

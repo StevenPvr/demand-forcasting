@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 import logging
+from threading import Lock
+import time
 from typing import Any, cast
 
 import numpy as np
 import optuna
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.frame_utils import (
+    attach_group_and_time_columns,
+    build_combined_frame,
+)
+from praedixa.demand_forecast.backends.tft.model_common import (
+    lazy_import_tft_dependencies,
+)
 from praedixa.demand_forecast.backends.tft.model_utils import (
     DEFAULT_TFT_MODEL_PARAMS,
     fit_tft_model,
@@ -16,6 +26,10 @@ from praedixa.demand_forecast.backends.tft.model_utils import (
 )
 from praedixa.demand_forecast.backends.tft.feature_mapping import (
     select_explicit_tft_group_id_columns,
+)
+from praedixa.demand_forecast.backends.tft.training_dataset import (
+    TrainingDatasetArtifacts,
+    build_training_dataset_artifacts,
 )
 from praedixa.demand_forecast.contracts.targets import TargetContract
 from praedixa.demand_forecast.contracts.targets import reconstruct_absolute_predictions
@@ -28,6 +42,21 @@ from praedixa.demand_forecast.training.constants import (
     DEFAULT_TARGET_TRANSFORM,
 )
 from praedixa.demand_forecast.training.tuning_policy import resolve_fold_execution_plan
+
+
+@dataclass(frozen=True)
+class CachedFoldArtifacts:
+    fold: dict[str, object]
+    fold_train_frame: pd.DataFrame
+    fold_valid_frame: pd.DataFrame
+    valid_indices: np.ndarray
+    fold_train_weights: np.ndarray
+    fold_valid_weights: np.ndarray
+    dataset_artifacts: TrainingDatasetArtifacts
+
+
+_FOLD_DATASET_CACHE: dict[tuple[object, ...], CachedFoldArtifacts] = {}
+_FOLD_DATASET_CACHE_LOCK = Lock()
 
 
 def _build_shared_tuning_context(
@@ -194,13 +223,17 @@ def filter_predictable_validation_rows(
     valid_probe = fold_valid_frame.loc[:, [*group_cols, DEFAULT_DATE_COL]].copy()
     valid_probe[DEFAULT_DATE_COL] = pd.to_datetime(valid_probe[DEFAULT_DATE_COL])
     valid_probe["__row_pos__"] = np.arange(len(valid_probe), dtype=np.int32)
+    history_dates_by_group: dict[tuple[str, ...], np.ndarray] = {}
+    for group_key, group_history in history.groupby(group_cols, sort=False):
+        normalized_group_key = group_key if isinstance(group_key, tuple) else (str(group_key),)
+        history_dates_by_group[normalized_group_key] = np.sort(
+            group_history[DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]")
+        )
     keep_positions: list[int] = []
     for _, group_frame in valid_probe.groupby(group_cols, sort=False):
-        history_mask = np.ones(len(history), dtype=bool)
-        for column in group_cols:
-            history_mask &= history[column].astype(str).to_numpy() == str(group_frame.iloc[0][column])
-        history_dates = np.sort(history.loc[history_mask, DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]"))
-        if history_dates.size == 0:
+        group_key = tuple(str(group_frame.iloc[0][column]) for column in group_cols)
+        history_dates = history_dates_by_group.get(group_key)
+        if history_dates is None or history_dates.size == 0:
             continue
         valid_dates = group_frame[DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]")
         eligible_rows = np.searchsorted(history_dates, valid_dates, side="left") >= max_encoder_length
@@ -211,8 +244,50 @@ def filter_predictable_validation_rows(
     return fold_valid_frame.iloc[keep_index].copy(), valid_indices[keep_index]
 
 
-def _fit_single_tuning_fold(
+def _fold_dataset_cache_key(
     *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    fold: dict[str, object],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    max_encoder_length: int,
+) -> tuple[object, ...]:
+    fold_signature = (
+        int(cast(Any, fold["fold"])),
+        tuple(np.asarray(fold["train_idx"], dtype=np.int32).tolist()),
+        tuple(np.asarray(fold["valid_idx"], dtype=np.int32).tolist()),
+    )
+    return (
+        id(train_frame),
+        id(tuning_frame),
+        fold_signature,
+        tuple(feature_cols),
+        target_contract.learning_target_col,
+        target_contract.absolute_target_col,
+        target_contract.target_mode,
+        target_contract.reconstruction_anchor_col,
+        max_encoder_length,
+    )
+
+
+def _resolve_fold_preparation_workers(
+    *,
+    folds: list[dict[str, object]],
+    execution_plan: dict[str, object],
+) -> int:
+    if bool(cast(Any, execution_plan.get("gpu_safe_mode", False))):
+        return 1
+    total_threads = int(cast(Any, execution_plan["total_threads"]))
+    if len(folds) <= 1 or total_threads <= 1:
+        return 1
+    return max(1, min(len(folds), max(1, total_threads // 2)))
+
+
+def _build_cached_fold_artifacts(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
     fold: dict[str, object],
     shared_frame: pd.DataFrame,
     base_train_indices: np.ndarray,
@@ -222,7 +297,16 @@ def _fit_single_tuning_fold(
     feature_cols: list[str],
     target_contract: TargetContract,
     resolved_params: dict[str, object],
-) -> dict[str, object]:
+    logger: logging.Logger,
+) -> CachedFoldArtifacts:
+    prep_start = time.perf_counter()
+    logger.info(
+        "TFT tuning fold artifact prep started: fold=%s train_candidates=%s valid_candidates=%s encoder_length=%s",
+        int(cast(Any, fold["fold"])),
+        len(cast(Any, fold["train_idx"])),
+        len(cast(Any, fold["valid_idx"])),
+        int(cast(Any, resolved_params["max_encoder_length"])),
+    )
     fold_train_idx = np.asarray(fold["train_idx"], dtype=np.int32)
     fold_valid_idx = np.asarray(fold["valid_idx"], dtype=np.int32)
     if fold_train_idx.size == 0 or fold_valid_idx.size == 0:
@@ -230,43 +314,217 @@ def _fit_single_tuning_fold(
     train_row_count = len(base_train_indices)
     train_indices = np.concatenate([base_train_indices, train_row_count + fold_train_idx]).astype(np.int32)
     valid_indices = train_row_count + fold_valid_idx
+    logger.info("TFT tuning fold frame slicing started: fold=%s", int(cast(Any, fold["fold"])))
     fold_train_frame = shared_frame.iloc[train_indices].copy()
     fold_valid_frame = shared_frame.iloc[valid_indices].copy()
+    logger.info(
+        "TFT tuning fold frame slicing completed: fold=%s duration_seconds=%.3f",
+        int(cast(Any, fold["fold"])),
+        time.perf_counter() - prep_start,
+    )
+    filter_start = time.perf_counter()
+    logger.info("TFT tuning fold predictable-row filter started: fold=%s", int(cast(Any, fold["fold"])))
     fold_valid_frame, valid_indices = filter_predictable_validation_rows(
         fold_train_frame=fold_train_frame,
         fold_valid_frame=fold_valid_frame,
         valid_indices=valid_indices,
         max_encoder_length=int(cast(Any, resolved_params["max_encoder_length"])),
     )
+    logger.info(
+        "TFT tuning fold predictable-row filter completed: fold=%s duration_seconds=%.3f kept_valid_rows=%s",
+        int(cast(Any, fold["fold"])),
+        time.perf_counter() - filter_start,
+        len(fold_valid_frame),
+    )
     fold_train_weights = compute_equal_dataset_row_weights_from_values(shared_dataset_sources[train_indices])
     fold_valid_weights = compute_equal_dataset_row_weights_from_values(shared_dataset_sources[valid_indices])
+    imports = lazy_import_tft_dependencies()
+    combined_start = time.perf_counter()
+    logger.info("TFT tuning fold combined frame build started: fold=%s", int(cast(Any, fold["fold"])))
+    prepared_frame = attach_group_and_time_columns(
+        build_combined_frame(
+            fold_train_frame,
+            fold_valid_frame,
+            train_weights=fold_train_weights,
+            valid_weights=fold_valid_weights,
+        ),
+        feature_cols,
+    )
+    logger.info(
+        "TFT tuning fold combined frame build completed: fold=%s duration_seconds=%.3f prepared_rows=%s",
+        int(cast(Any, fold["fold"])),
+        time.perf_counter() - combined_start,
+        len(prepared_frame),
+    )
+    dataset_start = time.perf_counter()
+    logger.info("TFT tuning fold TimeSeriesDataSet build started: fold=%s", int(cast(Any, fold["fold"])))
+    dataset_artifacts = build_training_dataset_artifacts(
+        imports,
+        prepared_frame=prepared_frame,
+        feature_cols=feature_cols,
+        target_col=target_contract.learning_target_col,
+        resolved_params=resolved_params,
+    )
+    logger.info(
+        "TFT tuning fold TimeSeriesDataSet build completed: fold=%s duration_seconds=%.3f",
+        int(cast(Any, fold["fold"])),
+        time.perf_counter() - dataset_start,
+    )
+    logger.info(
+        "TFT tuning fold artifact prep completed: fold=%s train_rows=%s valid_rows=%s total_duration_seconds=%.3f",
+        int(cast(Any, fold["fold"])),
+        len(fold_train_frame),
+        len(fold_valid_frame),
+        time.perf_counter() - prep_start,
+    )
+    return CachedFoldArtifacts(
+        fold=fold,
+        fold_train_frame=fold_train_frame,
+        fold_valid_frame=fold_valid_frame,
+        valid_indices=valid_indices,
+        fold_train_weights=fold_train_weights,
+        fold_valid_weights=fold_valid_weights,
+        dataset_artifacts=dataset_artifacts,
+    )
+
+
+def _cached_fold_artifacts(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    execution_plan: dict[str, object],
+    shared_frame: pd.DataFrame,
+    base_train_indices: np.ndarray,
+    shared_dataset_sources: np.ndarray,
+    shared_absolute_target: np.ndarray,
+    shared_reconstruction_anchor: np.ndarray | None,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+) -> dict[int, CachedFoldArtifacts]:
+    max_encoder_length = int(cast(Any, resolved_params["max_encoder_length"]))
+    results_by_fold_id: dict[int, CachedFoldArtifacts] = {}
+    pending: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    for fold in folds:
+        cache_key = _fold_dataset_cache_key(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            fold=fold,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            max_encoder_length=max_encoder_length,
+        )
+        with _FOLD_DATASET_CACHE_LOCK:
+            cached = _FOLD_DATASET_CACHE.get(cache_key)
+        if cached is not None:
+            results_by_fold_id[id(fold)] = cached
+            continue
+        pending.append((cache_key, fold))
+    if not pending:
+        return results_by_fold_id
+    prep_workers = _resolve_fold_preparation_workers(
+        folds=[fold for _, fold in pending],
+        execution_plan=execution_plan,
+    )
+    if prep_workers == 1:
+        for cache_key, fold in pending:
+            cached = _build_cached_fold_artifacts(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                fold=fold,
+                shared_frame=shared_frame,
+                base_train_indices=base_train_indices,
+                shared_dataset_sources=shared_dataset_sources,
+                shared_absolute_target=shared_absolute_target,
+                shared_reconstruction_anchor=shared_reconstruction_anchor,
+                feature_cols=feature_cols,
+                target_contract=target_contract,
+                resolved_params=resolved_params,
+                logger=logger,
+            )
+            with _FOLD_DATASET_CACHE_LOCK:
+                _FOLD_DATASET_CACHE[cache_key] = cached
+            results_by_fold_id[id(fold)] = cached
+        return results_by_fold_id
+    with ThreadPoolExecutor(max_workers=prep_workers) as executor:
+        future_map = {
+            executor.submit(
+                _build_cached_fold_artifacts,
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                fold=fold,
+                shared_frame=shared_frame,
+                base_train_indices=base_train_indices,
+                shared_dataset_sources=shared_dataset_sources,
+                shared_absolute_target=shared_absolute_target,
+                shared_reconstruction_anchor=shared_reconstruction_anchor,
+                feature_cols=feature_cols,
+                target_contract=target_contract,
+                resolved_params=resolved_params,
+                logger=logger,
+            ): (cache_key, fold)
+            for cache_key, fold in pending
+        }
+        for future in as_completed(future_map):
+            cache_key, fold = future_map[future]
+            cached = future.result()
+            with _FOLD_DATASET_CACHE_LOCK:
+                _FOLD_DATASET_CACHE[cache_key] = cached
+            results_by_fold_id[id(fold)] = cached
+    return results_by_fold_id
+
+
+def _fit_single_tuning_fold(
+    *,
+    cached_fold: CachedFoldArtifacts,
+    shared_dataset_sources: np.ndarray,
+    shared_absolute_target: np.ndarray,
+    shared_reconstruction_anchor: np.ndarray | None,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+) -> dict[str, object]:
+    fold_number = int(cast(Any, cached_fold.fold["fold"]))
+    logger.info(
+        "TFT tuning fold fit started: fold=%s train_rows=%s valid_rows=%s",
+        fold_number,
+        len(cached_fold.fold_train_frame),
+        len(cached_fold.fold_valid_frame),
+    )
     model = fit_tft_model(
-        fold_train_frame,
+        cached_fold.fold_train_frame,
         feature_cols,
         target_col=target_contract.learning_target_col,
         model_params=resolved_params,
         default_params=DEFAULT_TFT_MODEL_PARAMS,
         default_max_iter=2000,
-        valid_frame=fold_valid_frame,
-        train_weights=fold_train_weights,
-        valid_weights=fold_valid_weights,
+        valid_frame=cached_fold.fold_valid_frame,
+        train_weights=cached_fold.fold_train_weights,
+        valid_weights=cached_fold.fold_valid_weights,
+        dataset_artifacts=cached_fold.dataset_artifacts,
     )
+    logger.info("TFT tuning fold fit completed: fold=%s", fold_number)
+    logger.info("TFT tuning fold point prediction started: fold=%s", fold_number)
     predictions = _reconstruct_absolute_predictions(
-        raw_predictions=cast(Any, predict_with_tft_model(model, fold_valid_frame, feature_cols)),
-        valid_indices=valid_indices,
+        raw_predictions=cast(Any, predict_with_tft_model(model, cached_fold.fold_valid_frame, feature_cols)),
+        valid_indices=cached_fold.valid_indices,
         target_contract=target_contract,
         shared_reconstruction_anchor=shared_reconstruction_anchor,
     )
+    logger.info("TFT tuning fold quantile prediction started: fold=%s", fold_number)
     quantile_predictions = _reconstruct_absolute_quantiles(
-        quantile_predictions=predict_quantiles_with_tft_model(model, fold_valid_frame, feature_cols),
-        frame=fold_valid_frame,
+        quantile_predictions=predict_quantiles_with_tft_model(model, cached_fold.fold_valid_frame, feature_cols),
+        frame=cached_fold.fold_valid_frame,
         target_contract=target_contract,
     )
     return {
-        "fold": int(cast(Any, fold["fold"])),
+        "fold": int(cast(Any, cached_fold.fold["fold"])),
         "dataset_results": _dataset_fold_results(
-            fold=fold,
-            valid_indices=valid_indices,
+            fold=cached_fold.fold,
+            valid_indices=cached_fold.valid_indices,
             shared_dataset_sources=shared_dataset_sources,
             shared_absolute_target=shared_absolute_target,
             predictions=predictions,
@@ -280,28 +538,27 @@ def _fit_single_tuning_fold(
 def _execute_tuning_folds(
     *,
     folds: list[dict[str, object]],
+    cached_folds: dict[int, CachedFoldArtifacts],
     fold_workers: int,
-    shared_frame: pd.DataFrame,
-    base_train_indices: np.ndarray,
     shared_dataset_sources: np.ndarray,
     shared_absolute_target: np.ndarray,
     shared_reconstruction_anchor: np.ndarray | None,
     feature_cols: list[str],
     target_contract: TargetContract,
     resolved_params: dict[str, object],
+    logger: logging.Logger,
 ) -> list[dict[str, object]]:
     if fold_workers == 1:
         return [
             _fit_single_tuning_fold(
-                fold=fold,
-                shared_frame=shared_frame,
-                base_train_indices=base_train_indices,
+                cached_fold=cached_folds[id(fold)],
                 shared_dataset_sources=shared_dataset_sources,
                 shared_absolute_target=shared_absolute_target,
                 shared_reconstruction_anchor=shared_reconstruction_anchor,
                 feature_cols=feature_cols,
                 target_contract=target_contract,
                 resolved_params=resolved_params,
+                logger=logger,
             )
             for fold in folds
         ]
@@ -309,15 +566,14 @@ def _execute_tuning_folds(
         future_to_index = {
             executor.submit(
                 _fit_single_tuning_fold,
-                fold=fold,
-                shared_frame=shared_frame,
-                base_train_indices=base_train_indices,
+                cached_fold=cached_folds[id(fold)],
                 shared_dataset_sources=shared_dataset_sources,
                 shared_absolute_target=shared_absolute_target,
                 shared_reconstruction_anchor=shared_reconstruction_anchor,
                 feature_cols=feature_cols,
                 target_contract=target_contract,
                 resolved_params=resolved_params,
+                logger=logger,
             ): index
             for index, fold in enumerate(folds)
         }
@@ -370,6 +626,7 @@ def _iterative_trial_scoring(
     logger: logging.Logger,
     trial: optuna.trial.Trial,
     folds: list[dict[str, object]],
+    cached_folds: dict[int, CachedFoldArtifacts],
     shared_frame: pd.DataFrame,
     base_train_indices: np.ndarray,
     shared_dataset_sources: np.ndarray,
@@ -383,15 +640,14 @@ def _iterative_trial_scoring(
     folds_completed = 0
     for folds_completed, fold in enumerate(folds, start=1):
         grouped_fold_result = _fit_single_tuning_fold(
-            fold=fold,
-            shared_frame=shared_frame,
-            base_train_indices=base_train_indices,
+            cached_fold=cached_folds[id(fold)],
             shared_dataset_sources=shared_dataset_sources,
             shared_absolute_target=shared_absolute_target,
             shared_reconstruction_anchor=shared_reconstruction_anchor,
             feature_cols=feature_cols,
             target_contract=target_contract,
             resolved_params=resolved_params,
+            logger=logger,
         )
         fold_results.extend(cast(list[dict[str, object]], grouped_fold_result["dataset_results"]))
         dataset_mean_wape = _dataset_macro_scores_from_fold_results(fold_results)
@@ -414,6 +670,7 @@ def _iterative_trial_scoring(
 def _score_all_folds(
     *,
     folds: list[dict[str, object]],
+    cached_folds: dict[int, CachedFoldArtifacts],
     execution_plan: dict[str, object],
     logger: logging.Logger,
     shared_frame: pd.DataFrame,
@@ -431,6 +688,7 @@ def _score_all_folds(
             logger=logger,
             trial=trial,
             folds=folds,
+            cached_folds=cached_folds,
             shared_frame=shared_frame,
             base_train_indices=base_train_indices,
             shared_dataset_sources=shared_dataset_sources,
@@ -442,15 +700,15 @@ def _score_all_folds(
         )
     grouped_fold_results = _execute_tuning_folds(
         folds=folds,
+        cached_folds=cached_folds,
         fold_workers=int(cast(Any, execution_plan["fold_workers"])),
-        shared_frame=shared_frame,
-        base_train_indices=base_train_indices,
         shared_dataset_sources=shared_dataset_sources,
         shared_absolute_target=shared_absolute_target,
         shared_reconstruction_anchor=shared_reconstruction_anchor,
         feature_cols=feature_cols,
         target_contract=target_contract,
         resolved_params=resolved_params,
+        logger=logger,
     )
     fold_results = [result for grouped in grouped_fold_results for result in cast(list[dict[str, object]], grouped["dataset_results"])]
     return fold_results, len(folds)
@@ -472,8 +730,24 @@ def fit_and_score_tft_model_on_tuning(
     shared_frame, base_train_indices, shared_dataset_sources, shared_absolute_target, shared_reconstruction_anchor = _build_shared_tuning_context(
         train_frame=train_frame, tuning_frame=tuning_frame, feature_cols=feature_cols, target_contract=target_contract, target_transform=target_transform
     )
+    cached_folds = _cached_fold_artifacts(
+        train_frame=train_frame,
+        tuning_frame=tuning_frame,
+        folds=folds,
+        execution_plan=execution_plan,
+        shared_frame=shared_frame,
+        base_train_indices=base_train_indices,
+        shared_dataset_sources=shared_dataset_sources,
+        shared_absolute_target=shared_absolute_target,
+        shared_reconstruction_anchor=shared_reconstruction_anchor,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        resolved_params=resolved_params,
+        logger=logger,
+    )
     fold_results, folds_completed = _score_all_folds(
         folds=folds,
+        cached_folds=cached_folds,
         execution_plan=execution_plan,
         logger=logger,
         shared_frame=shared_frame,

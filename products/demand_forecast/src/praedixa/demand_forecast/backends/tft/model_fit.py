@@ -24,6 +24,7 @@ from praedixa.demand_forecast.backends.tft.model_common import (
     suppress_tft_runtime_noise,
 )
 from praedixa.demand_forecast.backends.tft.training_dataset import (
+    TrainingDatasetArtifacts,
     build_training_dataset_artifacts,
 )
 from praedixa.demand_forecast.backends.tft.training_runtime import (
@@ -127,6 +128,7 @@ def fit_tft_model(
     valid_frame: pd.DataFrame | None = None,
     train_weights: np.ndarray | None = None,
     valid_weights: np.ndarray | None = None,
+    dataset_artifacts: TrainingDatasetArtifacts | None = None,
 ) -> FittedTFTModel:
     train_frame, feature_cols, imports, resolved_params = _resolve_fit_request(
         train_frame=train_frame,
@@ -137,27 +139,29 @@ def fit_tft_model(
     )
     with suppress_tft_runtime_noise():
         seed_tft_runtime(imports, resolved_params)
-        prepared_frame = _prepared_training_frame(
-            train_frame=train_frame,
-            valid_frame=valid_frame,
-            feature_cols=feature_cols,
-            train_weights=train_weights,
-            valid_weights=valid_weights,
-        )
-        dataset_artifacts = build_training_dataset_artifacts(
-            imports,
-            prepared_frame=prepared_frame,
-            feature_cols=feature_cols,
-            target_col=target_col,
-            resolved_params=resolved_params,
-        )
+        resolved_dataset_artifacts = dataset_artifacts
+        if resolved_dataset_artifacts is None:
+            prepared_frame = _prepared_training_frame(
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                feature_cols=feature_cols,
+                train_weights=train_weights,
+                valid_weights=valid_weights,
+            )
+            resolved_dataset_artifacts = build_training_dataset_artifacts(
+                imports,
+                prepared_frame=prepared_frame,
+                feature_cols=feature_cols,
+                target_col=target_col,
+                resolved_params=resolved_params,
+            )
         train_loader, valid_loader = _training_loaders(
-            training_dataset=dataset_artifacts.training_dataset,
-            validation_dataset=dataset_artifacts.validation_dataset,
+            training_dataset=resolved_dataset_artifacts.training_dataset,
+            validation_dataset=resolved_dataset_artifacts.validation_dataset,
             batch_size=int(cast(Any, resolved_params["batch_size"])),
             resolved_params=resolved_params,
         )
-        model = _build_model(imports, dataset_artifacts.training_dataset, resolved_params)
+        model = _build_model(imports, resolved_dataset_artifacts.training_dataset, resolved_params)
         model, best_iteration, runtime_metrics = fit_trainer_model(
             imports,
             model=model,
@@ -169,19 +173,19 @@ def fit_tft_model(
             model=model,
             validation_loader=valid_loader,
             resolved_params=resolved_params,
-            layout=dataset_artifacts.layout,
+            layout=resolved_dataset_artifacts.layout,
             target_col=target_col,
         )
     return build_fitted_tft_model(
         model=model,
-        training_dataset=dataset_artifacts.training_dataset,
-        training_slice=dataset_artifacts.training_slice,
+        training_dataset=resolved_dataset_artifacts.training_dataset,
+        training_slice=resolved_dataset_artifacts.training_slice,
         target_col=target_col,
         resolved_params=resolved_params,
         best_iteration=best_iteration,
-        feature_scalers=dataset_artifacts.feature_scalers,
+        feature_scalers=resolved_dataset_artifacts.feature_scalers,
         target_scaler=None,
-        normalization_strategy=dataset_artifacts.normalization_strategy,
+        normalization_strategy=resolved_dataset_artifacts.normalization_strategy,
         runtime_metrics=runtime_metrics,
         interpretability_payload=interpretability_payload,
     )

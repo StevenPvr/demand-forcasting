@@ -67,7 +67,7 @@ def _log_trial_start(
     trial_params: dict[str, object],
 ) -> None:
     logger.info(
-        "Optuna trial started: trial=%s/%s stage=%s params=%s",
+        "[HPO trial %s/%s | %s] started with params=%s",
         trial_number + 1,
         tuning_trials,
         stage_name,
@@ -87,7 +87,7 @@ def _log_trial_completion(
     dataset_mean_wape: dict[str, float],
 ) -> None:
     logger.info(
-        "Optuna trial completed: trial=%s/%s stage=%s mean_wape=%.6f improvement_pct=%.6f folds_completed=%s dataset_mean_wape=%s",
+        "[HPO trial %s/%s | %s] completed mean_wape=%.6f improvement_pct=%.6f folds_completed=%s dataset_mean_wape=%s",
         trial_number + 1,
         tuning_trials,
         stage_name,
@@ -107,7 +107,7 @@ def _log_trial_failure(
     error: Exception,
 ) -> None:
     logger.warning(
-        "Optuna trial failed: trial=%s/%s stage=%s error=%s",
+        "[HPO trial %s/%s | %s] failed error=%s",
         trial_number + 1,
         tuning_trials,
         stage_name,
@@ -380,6 +380,23 @@ def _finalize_search_outputs(
     )
 
 
+def _ensure_successful_trials(study: optuna.study.Study) -> None:
+    completed_trials = [
+        trial for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE and trial.value is not None
+    ]
+    if completed_trials:
+        return
+    failure_reasons = [
+        str(trial.user_attrs.get("failure_reason", trial.state.name))
+        for trial in study.trials
+    ]
+    raise RuntimeError(
+        "Optuna search completed without any successful trials. "
+        f"Failure reasons: {failure_reasons}"
+    )
+
+
 def run_optuna_search(
     *, score_fn: ScoreFn, train_frame: pd.DataFrame, tuning_frame: pd.DataFrame, folds: list[dict[str, object]],
     feature_cols: list[str], baseline_wape: float, target_contract: TargetContract, logger: logging.Logger,
@@ -413,7 +430,13 @@ def run_optuna_search(
         stage_budget=stage_budget,
         stage_policy=stage_policy,
     )
-    study.optimize(_objective_for_search(context=objective_context), n_trials=tuning_trials, n_jobs=1)
+    study.optimize(
+        _objective_for_search(context=objective_context),
+        n_trials=tuning_trials,
+        n_jobs=1,
+        catch=(RuntimeError,),
+    )
+    _ensure_successful_trials(study)
     logger.info(
         "Final TFT optimisation complete: best_trial=%s best_wape=%.6f best_improvement_pct=%.6f",
         study.best_trial.number,

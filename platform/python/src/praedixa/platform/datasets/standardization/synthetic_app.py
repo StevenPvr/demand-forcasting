@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 import logging
 
 from praedixa.platform.datasets.standardization.synthetic import (
@@ -13,32 +13,33 @@ from praedixa.platform.runtime.paths import SOURCES_DIR
 DEFAULT_OUTPUT_PATH = SOURCES_DIR / "commercial_datasets" / "raw" / "synthetic_v1.parquet"
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for synthetic cold-start generation."""
+@dataclass(frozen=True)
+class SyntheticAppConfig:
+    output_path: str = str(DEFAULT_OUTPUT_PATH)
+    start_date: str = "2024-01-01"
+    days: int = 180
+    num_locations: int = 12
+    products_per_location: int = 24
+    random_seed: int = 7
 
-    parser = argparse.ArgumentParser(description="Generate a synthetic cold-start daily dataset for Praedixa.")
-    parser.add_argument("--output-path", default=str(DEFAULT_OUTPUT_PATH))
-    parser.add_argument("--start-date", default="2024-01-01")
-    parser.add_argument("--days", type=int, default=180)
-    parser.add_argument("--num-locations", type=int, default=12)
-    parser.add_argument("--products-per-location", type=int, default=24)
-    parser.add_argument("--random-seed", type=int, default=7)
-    return parser.parse_args()
+
+def build_default_synthetic_app_config() -> SyntheticAppConfig:
+    return SyntheticAppConfig()
 
 
 def main() -> None:
     """Generate the synthetic dataset parquet and log the output path."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    args = parse_args()
+    config = build_default_synthetic_app_config()
     output_path = write_synthetic_cold_start_dataset(
-        output_path=args.output_path,
+        output_path=config.output_path,
         config=SyntheticColdStartConfig(
-            start_date=args.start_date,
-            days=args.days,
-            num_locations=args.num_locations,
-            products_per_location=args.products_per_location,
-            random_seed=args.random_seed,
+            start_date=config.start_date,
+            days=config.days,
+            num_locations=config.num_locations,
+            products_per_location=config.products_per_location,
+            random_seed=config.random_seed,
         ),
     )
     logging.getLogger(__name__).info("Synthetic cold-start dataset written to %s", output_path)
