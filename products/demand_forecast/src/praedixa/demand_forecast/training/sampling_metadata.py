@@ -8,10 +8,8 @@ import pandas as pd
 from praedixa.demand_forecast.training.sampling_models import (
     DEFAULT_IDENTIFIER_FEATURE_COLS,
     GoldSplitSamplingSpec,
-    RelationSamplingQuery,
     RelationSamplingSpec,
 )
-from praedixa.demand_forecast.training.sampling_queries import build_sampling_query_for_relation
 
 
 def load_sampling_metadata_from_relation(
@@ -26,75 +24,37 @@ def load_sampling_metadata_from_relation(
         date_col=spec.date_col,
         sample_store_col=spec.sample_store_col,
     )
-    query = build_sampling_query_for_relation(
-        query=RelationSamplingQuery(spec=spec, selected_columns=metadata_projection_cols)
-    )
-    sampled_counts = _sampled_relation_counts(connection, query=query, spec=spec)
-    original_map = _dataset_original_rows_map(_original_relation_counts(connection, spec=spec))
-    return _relation_sampling_metadata_payload(
-        sampled_counts=sampled_counts,
-        original_map=original_map,
+    sampled_counts = _relation_sampling_counts(
+        connection,
         spec=spec,
+        metadata_projection_cols=metadata_projection_cols,
     )
-
-
-def _sampled_relation_counts(
-    connection: duckdb.DuckDBPyConnection,
-    *,
-    query: str,
-    spec: RelationSamplingSpec,
-) -> list[tuple[object, object, object, object, object]]:
-    return connection.execute(
-        f"""
-        with sampled as (
-            {query}
-        )
-        select
-            {spec.dataset_source_col} as dataset_source,
-            count(*) as sampled_rows,
-            count(distinct {spec.sample_store_col}) as store_count,
-            count(distinct {spec.date_col}) as unique_dates,
-            count(distinct struct_pack(dt_key := {spec.date_col}, store_key := {spec.sample_store_col})) as strata_count
-        from sampled
-        group by 1
-        order by 1
-        """
-    ).fetchall()
-
-
-def _original_relation_counts(
-    connection: duckdb.DuckDBPyConnection,
-    *,
-    spec: RelationSamplingSpec,
-) -> list[tuple[object, object]]:
-    return connection.execute(
-        f"""
-        select
-            {spec.dataset_source_col} as dataset_source,
-            count(*) as original_rows
-        from ({spec.relation_sql}) as relation_source
-        group by 1
-        order by 1
-        """
-    ).fetchall()
+    return _relation_sampling_metadata_payload(sampled_counts=sampled_counts, spec=spec)
 
 
 def _relation_sampling_metadata_payload(
     *,
-    sampled_counts: list[tuple[object, object, object, object, object]],
-    original_map: dict[str, int],
+    sampled_counts: list[tuple[object, object, object, object, object, object, object]],
     spec: RelationSamplingSpec,
 ) -> dict[str, object]:
     datasets: dict[str, dict[str, int | float]] = {}
     total_original_rows = 0
     total_sampled_rows = 0
-    for dataset_source, sampled_rows, store_count, unique_dates, strata_count in sampled_counts:
-        dataset_key = str(dataset_source)
-        dataset_original_rows = original_map[dataset_key]
+    for (
+        dataset_source,
+        original_rows,
+        sampled_rows,
+        primary_sampled_rows,
+        store_count,
+        unique_dates,
+        strata_count,
+    ) in sampled_counts:
+        dataset_original_rows = int(cast(Any, original_rows))
         dataset_sampled_rows = int(cast(Any, sampled_rows))
-        datasets[dataset_key] = _relation_sampling_dataset_metadata(
+        datasets[str(dataset_source)] = _relation_sampling_dataset_metadata(
             dataset_original_rows=dataset_original_rows,
             dataset_sampled_rows=dataset_sampled_rows,
+            primary_sampled_rows=primary_sampled_rows,
             sample_fraction=spec.sample_fraction,
             min_samples_per_dataset=spec.min_samples_per_dataset,
             store_count=store_count,
@@ -115,11 +75,7 @@ def _relation_sampling_metadata_payload(
 
 
 def _metadata_projection_columns(
-    *,
-    available_columns: list[str],
-    dataset_source_col: str,
-    date_col: str,
-    sample_store_col: str,
+    *, available_columns: list[str], dataset_source_col: str, date_col: str, sample_store_col: str
 ) -> list[str]:
     projection_cols = [dataset_source_col, date_col, sample_store_col]
     for candidate in ("product_id", "series_id"):
@@ -128,34 +84,79 @@ def _metadata_projection_columns(
     return projection_cols
 
 
-def _dataset_original_rows_map(
-    original_counts: list[tuple[object, object]],
-) -> dict[str, int]:
-    return {
-        str(dataset_source): int(cast(Any, original_rows))
-        for dataset_source, original_rows in original_counts
-    }
-
-
 def _relation_sampling_dataset_metadata(
     *,
     dataset_original_rows: int,
     dataset_sampled_rows: int,
+    primary_sampled_rows: object,
     sample_fraction: float,
     min_samples_per_dataset: int,
     store_count: object,
     unique_dates: object,
     strata_count: object,
 ) -> dict[str, int | float]:
+    primary_rows = int(cast(Any, primary_sampled_rows))
     return {
         "original_rows": dataset_original_rows,
         "sampled_rows": dataset_sampled_rows,
+        "primary_sampled_rows": primary_rows,
         "sample_fraction": float(sample_fraction),
         "min_samples_per_dataset": int(min_samples_per_dataset),
         "store_count": int(cast(Any, store_count)),
         "unique_dates": int(cast(Any, unique_dates)),
         "strata_count": int(cast(Any, strata_count)),
+        "top_up_required": int(dataset_sampled_rows > primary_rows),
     }
+
+
+def _relation_sampling_counts(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    spec: RelationSamplingSpec,
+    metadata_projection_cols: list[str],
+) -> list[tuple[object, object, object, object, object, object, object]]:
+    select_list = ", ".join(metadata_projection_cols)
+    return connection.execute(
+        f"""
+        with scoped as (
+            select {select_list}
+            from ({spec.relation_sql}) as relation_source
+        ),
+        strata as (
+            select
+                {spec.dataset_source_col} as dataset_source,
+                {spec.date_col} as sampled_dt,
+                {spec.sample_store_col} as sample_store,
+                count(*) as stratum_rows
+            from scoped
+            group by 1, 2, 3
+        ),
+        dataset_stats as (
+            select
+                dataset_source,
+                sum(stratum_rows) as original_rows,
+                sum(greatest(1, cast(ceil(stratum_rows * {spec.sample_fraction:.12f}) as bigint))) as primary_sampled_rows,
+                count(distinct sample_store) as store_count,
+                count(distinct sampled_dt) as unique_dates,
+                count(*) as strata_count
+            from strata
+            group by 1
+        )
+        select
+            dataset_source,
+            original_rows,
+            least(
+                original_rows,
+                greatest(primary_sampled_rows, {int(spec.min_samples_per_dataset)})
+            ) as sampled_rows,
+            primary_sampled_rows,
+            store_count,
+            unique_dates,
+            strata_count
+        from dataset_stats
+        order by 1
+        """
+    ).fetchall()
 
 
 def resolve_gold_projection_columns(
@@ -303,9 +304,15 @@ def _refreshed_dataset_metadata(
     return updated
 
 
+def relation_sampling_requires_top_up(metadata: dict[str, object]) -> bool:
+    datasets = cast(dict[str, dict[str, object]], metadata["datasets"])
+    return any(bool(dataset_metadata.get("top_up_required", False)) for dataset_metadata in datasets.values())
+
+
 __all__ = [
     "load_gold_split_sampling_metadata",
     "load_sampling_metadata_from_relation",
+    "relation_sampling_requires_top_up",
     "refresh_sampling_metadata_from_sampled_frame",
     "resolve_gold_projection_columns",
 ]

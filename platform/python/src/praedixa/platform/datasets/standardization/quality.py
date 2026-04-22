@@ -16,6 +16,11 @@ REQUIRED_NON_NULL_COLUMNS = [
     "location_id",
     "product_id",
     "observed_demand_qty",
+    "target_semantics",
+    "censor_flag",
+    "target_source",
+    "label_quality_score",
+    "usable_for_training_flag",
 ]
 
 

@@ -7,7 +7,7 @@ with allowed_training_sources as (
 unioned as (
     select * from {{ ref("silver_freshretail_daily_product_demand") }}
     union all
-    select * from {{ ref("silver_commercial_external_daily_product_demand") }}
+    select * from {{ ref("silver_supplemental_corpus_daily_product_demand") }}
     union all
     select * from {{ ref("silver_bakery_daily_product_demand") }}
 )

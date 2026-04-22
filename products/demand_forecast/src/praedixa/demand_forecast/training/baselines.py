@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
+import os
+import time
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
+from praedixa.demand_forecast.training.baseline_vectorized import (
+    evaluate_polars_baseline_macro,
+)
 from praedixa.demand_forecast.feature_screening.pipeline import compute_wape
 from praedixa.demand_forecast.contracts.targets import TargetContract
 
@@ -218,6 +224,33 @@ def _resolve_first_available_baseline_column(
     return None
 
 
+def _resolve_first_available_baseline_column_name(
+    frame: pd.DataFrame,
+    candidates: tuple[str, ...],
+) -> str | None:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _resolve_baseline_column_name(
+    frame: pd.DataFrame,
+    baseline_name: str,
+    *,
+    target_contract: TargetContract | None = None,
+) -> str | None:
+    if baseline_name in BASELINE_COLUMN_CANDIDATES:
+        return _resolve_first_available_baseline_column_name(
+            frame,
+            _baseline_column_candidates(
+                baseline_name,
+                target_contract=target_contract,
+            ),
+        )
+    raise ValueError(f"Unsupported baseline `{baseline_name}`.")
+
+
 def resolve_baseline_prediction(
     frame: pd.DataFrame,
     baseline_name: str,
@@ -231,8 +264,17 @@ def resolve_baseline_prediction(
                 baseline_name,
                 target_contract=target_contract,
             ),
-        )
+    )
     raise ValueError(f"Unsupported baseline `{baseline_name}`.")
+
+
+def _fold_frame(
+    *,
+    frame: pd.DataFrame,
+    fold: dict[str, object],
+    index_key: str,
+) -> pd.DataFrame:
+    return frame.iloc[np.asarray(fold[index_key], dtype=np.int32)]
 
 
 def _score_baseline_fold(
@@ -242,15 +284,33 @@ def _score_baseline_fold(
     baseline_name: str,
     absolute_target_col: str,
     target_contract: TargetContract | None,
+    baseline_column_name: str | None = None,
 ) -> dict[str, object] | None:
-    valid_frame = frame.iloc[np.asarray(fold["valid_idx"], dtype=np.int32)].sort_values(_DEFAULT_BASELINE_DATE_COL)
-    predictions = resolve_baseline_prediction(
-        valid_frame,
-        baseline_name,
-        target_contract=target_contract,
-    )
+    valid_frame = _fold_frame(frame=frame, fold=fold, index_key="valid_idx")
+    if baseline_column_name is not None:
+        target_values = pd.to_numeric(valid_frame[absolute_target_col], errors="coerce").to_numpy(
+            dtype=float,
+            copy=False,
+        )
+        prediction_values = pd.to_numeric(
+            valid_frame[baseline_column_name],
+            errors="coerce",
+        ).to_numpy(dtype=float, copy=False)
+        valid_mask = np.isfinite(target_values) & np.isfinite(prediction_values)
+        if not np.any(valid_mask):
+            return None
+        return {
+            "dataset_source": str(fold["dataset_source"]),
+            "fold": int(cast(Any, fold["fold"])),
+            "wape": float(compute_wape(target_values[valid_mask], prediction_values[valid_mask])),
+            "rows_scored": int(np.count_nonzero(valid_mask)),
+        }
+    predictions = resolve_baseline_prediction(valid_frame, baseline_name, target_contract=target_contract)
     if predictions is None or pd.isna(predictions).all():
-        train_frame = frame.iloc[np.asarray(fold["train_idx"], dtype=np.int32)].sort_values(_DEFAULT_BASELINE_DATE_COL)
+        train_frame = _fold_frame(frame=frame, fold=fold, index_key="train_idx").sort_values(
+            _DEFAULT_BASELINE_DATE_COL
+        )
+        valid_frame = valid_frame.sort_values(_DEFAULT_BASELINE_DATE_COL)
         predictions = _history_based_baseline_predictions(
             train_frame,
             valid_frame,
@@ -289,35 +349,6 @@ def _dataset_macro_scores(fold_results: list[dict[str, object]]) -> dict[str, fl
     return dataset_mean_wape
 
 
-def _evaluate_single_baseline_macro(
-    *,
-    frame: pd.DataFrame,
-    folds: list[dict[str, object]],
-    baseline_name: str,
-    absolute_target_col: str,
-    target_contract: TargetContract | None,
-) -> dict[str, object] | None:
-    fold_results: list[dict[str, object]] = []
-    for fold in folds:
-        fold_result = _score_baseline_fold(
-            frame=frame,
-            fold=fold,
-            baseline_name=baseline_name,
-            absolute_target_col=absolute_target_col,
-            target_contract=target_contract,
-        )
-        if fold_result is None:
-            return None
-        fold_results.append(fold_result)
-    dataset_mean_wape = _dataset_macro_scores(fold_results)
-    return {
-        "baseline_name": baseline_name,
-        "mean_wape": float(np.mean(list(dataset_mean_wape.values()))),
-        "dataset_mean_wape": dataset_mean_wape,
-        "fold_wape_scores": fold_results,
-    }
-
-
 def evaluate_statistical_baselines_macro(
     frame: pd.DataFrame,
     folds: list[dict[str, object]],
@@ -333,22 +364,98 @@ def evaluate_statistical_baselines_macro(
         "trailing_mean_28",
         "same_weekday_mean_4",
     )
-    report_rows: list[dict[str, object]] = []
-    for baseline_name in baseline_names:
-        baseline_row = _evaluate_single_baseline_macro(
-            frame=frame,
-            folds=folds,
-            baseline_name=baseline_name,
-            absolute_target_col=absolute_target_col,
+    baseline_column_names = {
+        baseline_name: _resolve_baseline_column_name(
+            frame,
+            baseline_name,
             target_contract=target_contract,
         )
-        if baseline_row is None:
+        for baseline_name in baseline_names
+    }
+    max_workers = min(max(1, os.cpu_count() or 1), max(1, len(baseline_names) * len(folds)))
+    logger.info(
+        "Executing statistical baselines in parallel: baselines=%s fold_evaluations=%s workers=%s",
+        len(baseline_names),
+        len(baseline_names) * len(folds),
+        max_workers,
+    )
+    baseline_started_at = {baseline_name: time.perf_counter() for baseline_name in baseline_names}
+    report_rows: list[dict[str, object]] = []
+    threaded_baselines: list[str] = []
+    for baseline_name in baseline_names:
+        baseline_column_name = baseline_column_names[baseline_name]
+        if baseline_column_name is not None:
+            polars_baseline_row = evaluate_polars_baseline_macro(
+                frame=frame,
+                folds=folds,
+                baseline_name=baseline_name,
+                baseline_column_name=baseline_column_name,
+                absolute_target_col=absolute_target_col,
+                dataset_source_col="dataset_source",
+                logger=logger,
+            )
+            if polars_baseline_row is not None:
+                report_rows.append(polars_baseline_row)
             continue
+        logger.info(
+            "Starting statistical baseline evaluation: baseline=%s fold_evaluations=%s engine=python_fallback",
+            baseline_name,
+            len(folds),
+        )
+        threaded_baselines.append(baseline_name)
+    if not threaded_baselines:
+        return _finalize_baseline_rows(report_rows, logger=logger)
+    baseline_results: dict[str, list[dict[str, object]]] = {baseline_name: [] for baseline_name in baseline_names}
+    failed_baselines: set[str] = set()
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_baseline = {
+            executor.submit(
+                _score_baseline_fold,
+                frame=frame,
+                fold=fold,
+                baseline_name=baseline_name,
+                absolute_target_col=absolute_target_col,
+                target_contract=target_contract,
+                baseline_column_name=baseline_column_names[baseline_name],
+            ): baseline_name
+            for baseline_name in threaded_baselines
+            for fold in folds
+        }
+        for future, baseline_name in future_to_baseline.items():
+            fold_result = future.result()
+            if fold_result is None:
+                failed_baselines.add(baseline_name)
+                continue
+            baseline_results[baseline_name].append(fold_result)
+    report_rows: list[dict[str, object]] = []
+    for baseline_name in baseline_names:
+        fold_results = baseline_results[baseline_name]
+        if baseline_name in failed_baselines or len(fold_results) != len(folds):
+            continue
+        dataset_mean_wape = _dataset_macro_scores(fold_results)
+        baseline_row: dict[str, object] = {
+            "baseline_name": baseline_name,
+            "mean_wape": float(np.mean(list(dataset_mean_wape.values()))),
+            "dataset_mean_wape": dataset_mean_wape,
+            "fold_wape_scores": fold_results,
+        }
+        logger.info(
+            "Finished statistical baseline evaluation: baseline=%s mean_wape=%.6f duration_seconds=%.3f",
+            baseline_name,
+            baseline_row["mean_wape"],
+            time.perf_counter() - baseline_started_at[baseline_name],
+        )
         report_rows.append(baseline_row)
+    return _finalize_baseline_rows(report_rows, logger=logger)
 
+
+def _finalize_baseline_rows(
+    report_rows: list[dict[str, object]],
+    *,
+    logger: logging.Logger,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
     if not report_rows:
         raise ValueError("No statistical baseline could be evaluated with the available columns.")
-
     best_row = min(report_rows, key=lambda row: float(cast(Any, row["mean_wape"])))
     logger.info(
         "Best statistical baseline under macro-dataset WAPE: name=%s mean_wape=%.6f",

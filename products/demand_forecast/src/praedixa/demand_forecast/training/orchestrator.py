@@ -6,22 +6,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
-from praedixa.demand_forecast.feature_screening.pipeline import (
-    DEFAULT_N_FOLDS,
-    DEFAULT_RANDOM_SEED,
-    DEFAULT_TUNING_TRIALS,
-)
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_DATE_COL,
     DEFAULT_DUCKDB_PATH,
     DEFAULT_GOLD_TABLE,
+    DEFAULT_N_FOLDS,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_TARGET_COL,
     DEFAULT_TARGET_TRANSFORM,
+    DEFAULT_TUNING_RANDOM_SEED,
     DEFAULT_TRAIN_INPUT_PATH,
     DEFAULT_TRAIN_SAMPLE_FRACTION,
     DEFAULT_TUNING_INPUT_PATH,
     DEFAULT_TUNING_SAMPLE_FRACTION,
+    DEFAULT_TUNING_TRIALS,
 )
 from praedixa.demand_forecast.training.orchestrator_steps import (
     LoadedOptimisationFrames,
@@ -44,7 +42,7 @@ class OptimisationBuildRequest:
     target_col: str = DEFAULT_TARGET_COL
     n_folds: int = DEFAULT_N_FOLDS
     tuning_trials: int = DEFAULT_TUNING_TRIALS
-    tuning_random_seed: int = DEFAULT_RANDOM_SEED
+    tuning_random_seed: int = DEFAULT_TUNING_RANDOM_SEED
     model_params: dict[str, object] | None = None
     duckdb_path: str | Path = DEFAULT_DUCKDB_PATH
     gold_table: str = DEFAULT_GOLD_TABLE

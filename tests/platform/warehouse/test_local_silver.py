@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,7 +8,10 @@ from unittest import mock
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.platform.warehouse.local_silver import (  # noqa: E402
     DEFAULT_LOCAL_DUCKDB_PATH,
@@ -26,17 +28,12 @@ from praedixa.platform.warehouse.local_silver import (  # noqa: E402
 
 
 class RunLocalSilverTests(unittest.TestCase):
-    def test_run_local_silver_script_can_be_called_directly_via_absolute_path(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "apps" / "warehouse" / "run_silver" / "main.py"), "--help"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            check=False,
-        )
+    def test_run_local_silver_wrapper_uses_no_cli_parser(self) -> None:
+        wrapper_path = PROJECT_ROOT / "apps" / "warehouse" / "run_silver" / "main.py"
+        source = wrapper_path.read_text(encoding="utf-8")
 
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("Run the local Praedixa bronze -> silver workflow.", result.stdout)
+        self.assertNotIn("argparse", source)
+        self.assertNotIn("parse_args", source)
 
     def test_build_local_silver_env_defaults_to_local_duckdb(self) -> None:
         env = build_local_silver_env(base_env={})
@@ -87,15 +84,12 @@ class RunLocalSilverTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "praedixa.platform.warehouse.local_silver.build_commercial_external_standardized_dataset",
-                return_value=PROJECT_ROOT
-                / "var"
-                / "datasets"
-                / "global_dataset"
-                / "commercial_external_daily.parquet",
-            ) as commercial_mock,
+                "praedixa.platform.warehouse.local_silver.build_supplemental_corpus_frame",
+                return_value=mock.MagicMock(to_pandas=mock.MagicMock(return_value=mock.sentinel.supplemental_frame)),
+            ) as supplemental_corpus_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.default_active_bronze_specs", return_value=["active_specs"]) as specs_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.load_selected_bronze_specs", return_value={"ok": True}) as load_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.load_inline_bronze_frame", return_value={"local": 12}) as inline_load_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
             mock.patch("praedixa.platform.warehouse.local_silver.dbt_packages_installed", return_value=True),
@@ -103,9 +97,10 @@ class RunLocalSilverTests(unittest.TestCase):
         ):
             result = run_local_silver(config)
 
-        commercial_mock.assert_called_once()
+        supplemental_corpus_mock.assert_called_once()
         specs_mock.assert_called_once()
         load_mock.assert_called_once_with(specs=["active_specs"])
+        inline_load_mock.assert_called_once()
         self.assertEqual(run_mock.call_count, 3)
         seed_command = run_mock.call_args_list[0].args[0]
         first_command = run_mock.call_args_list[1].args[0]
@@ -128,7 +123,8 @@ class RunLocalSilverTests(unittest.TestCase):
         )
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_silver.build_commercial_external_standardized_dataset") as commercial_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.build_supplemental_corpus_frame") as supplemental_corpus_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.load_inline_bronze_frame") as inline_load_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.load_selected_bronze_specs") as load_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
@@ -137,7 +133,8 @@ class RunLocalSilverTests(unittest.TestCase):
         ):
             result = run_local_silver(config)
 
-        commercial_mock.assert_not_called()
+        supplemental_corpus_mock.assert_not_called()
+        inline_load_mock.assert_not_called()
         load_mock.assert_not_called()
         self.assertEqual(run_mock.call_count, 2)
         self.assertEqual(run_mock.call_args_list[0].args[0][:2], [".venv/bin/dbt", "seed"])
@@ -170,7 +167,8 @@ class RunLocalSilverTests(unittest.TestCase):
         )
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_silver.build_commercial_external_standardized_dataset") as commercial_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.build_supplemental_corpus_frame") as supplemental_corpus_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.load_inline_bronze_frame") as inline_load_mock,
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
             mock.patch("praedixa.platform.warehouse.local_silver.dbt_packages_installed", return_value=False),
@@ -178,7 +176,8 @@ class RunLocalSilverTests(unittest.TestCase):
         ):
             run_local_silver(config)
 
-        commercial_mock.assert_not_called()
+        supplemental_corpus_mock.assert_not_called()
+        inline_load_mock.assert_not_called()
         self.assertEqual(run_mock.call_count, 3)
         self.assertEqual(run_mock.call_args_list[0].args[0][:2], [".venv/bin/dbt", "deps"])
         self.assertEqual(run_mock.call_args_list[1].args[0][:2], [".venv/bin/dbt", "seed"])

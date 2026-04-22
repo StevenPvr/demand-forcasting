@@ -229,31 +229,20 @@ dense_panel as (
         case
             when dense.dataset_source = 'freshretail' then 'public_freshretailnet'
             when dense.dataset_source = 'freshretail_lt' then 'public_freshretailnet_lt'
-            when dense.dataset_source = 'uci_online_retail' then 'public_uci_online_retail'
-            when dense.dataset_source = 'uci_online_retail_ii' then 'public_uci_online_retail_ii'
-            when dense.dataset_source = 'mendeley_ecommerce' then 'public_mendeley_ecommerce'
-            when dense.dataset_source = 'mendeley_pharmacy_id' then 'public_mendeley_pharmacy_id'
-            when dense.dataset_source = 'mendeley_bangladesh_retail' then 'public_mendeley_bangladesh_retail'
             when dense.dataset_source = 'bakery' then 'public_bakery_sales'
             when dense.dataset_source = 'first_party_daily' then 'first_party_client'
-            when dense.dataset_source = 'synthetic_v1' then 'synthetic_training_corpus'
             else 'unknown_public_dataset'
         end as client_id,
         case
             when dense.dataset_source = 'bakery' then 'bakery'
             when dense.dataset_source = 'first_party_daily' then 'food_service'
-            when dense.dataset_source = 'synthetic_v1' then 'food_service'
             else 'retail'
         end as vertical_level_1,
         case
             when dense.dataset_source = 'freshretail' then 'grocery_delivery'
             when dense.dataset_source = 'freshretail_lt' then 'grocery_delivery'
-            when dense.dataset_source in ('uci_online_retail', 'uci_online_retail_ii', 'mendeley_ecommerce') then 'ecommerce'
-            when dense.dataset_source = 'mendeley_pharmacy_id' then 'pharmacy_retail'
-            when dense.dataset_source = 'mendeley_bangladesh_retail' then 'retail'
             when dense.dataset_source = 'bakery' then 'bakery_pastry'
             when dense.dataset_source = 'first_party_daily' then 'client_operation'
-            when dense.dataset_source = 'synthetic_v1' then 'synthetic_operation'
             else null
         end as vertical_level_2,
         coalesce(
@@ -261,9 +250,6 @@ dense_panel as (
             case
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source in ('uci_online_retail', 'uci_online_retail_ii') then 'GB'
-                when dense.dataset_source = 'mendeley_pharmacy_id' then 'ID'
-                when dense.dataset_source = 'mendeley_bangladesh_retail' then 'BD'
                 when dense.dataset_source = 'bakery' then 'FR'
                 else null
             end
@@ -319,9 +305,6 @@ dense_panel as (
             case
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source in ('uci_online_retail', 'uci_online_retail_ii') then 'GB'
-                when dense.dataset_source = 'mendeley_pharmacy_id' then 'ID'
-                when dense.dataset_source = 'mendeley_bangladesh_retail' then 'BD'
                 when dense.dataset_source = 'bakery' then 'FR'
                 else null
             end
@@ -341,9 +324,6 @@ dense_panel as (
             case
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source in ('uci_online_retail', 'uci_online_retail_ii') then 'GB'
-                when dense.dataset_source = 'mendeley_pharmacy_id' then 'ID'
-                when dense.dataset_source = 'mendeley_bangladesh_retail' then 'BD'
                 when dense.dataset_source = 'bakery' then 'FR'
                 else null
             end

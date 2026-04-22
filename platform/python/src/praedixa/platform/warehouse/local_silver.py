@@ -9,14 +9,15 @@ import subprocess
 from praedixa.platform.runtime.constants import DEFAULT_BRONZE_SCHEMA
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_DBT_SELECT
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_SCHEMA
-from praedixa.platform.datasets.standardization.commercial_external import build_commercial_external_standardized_dataset
-from praedixa.platform.runtime.paths import GLOBAL_DATASET_DIR
+from praedixa.platform.datasets.standardization.supplemental_corpus import build_supplemental_corpus_frame
 from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH
 from praedixa.platform.runtime.paths import PROJECT_ROOT
 from praedixa.platform.runtime.paths import SOURCES_DIR
 from praedixa.platform.runtime.paths import WAREHOUSE_PROJECT_DIR
 from praedixa.platform.runtime.warehouse import WarehouseRuntimeConfig
 from praedixa.platform.warehouse.bronze_specs import default_active_bronze_specs
+from praedixa.platform.warehouse.bronze_specs import supplemental_corpus_daily_ddl
+from praedixa.platform.warehouse.local_bronze import load_inline_bronze_frame
 from praedixa.platform.warehouse.local_bronze import load_selected_bronze_specs
 
 logger = logging.getLogger(__name__)
@@ -163,17 +164,25 @@ def run_subprocess(command: list[str], *, env: dict[str, str], cwd: Path) -> Non
 def _maybe_load_local_bronze(config: LocalSilverRunConfig, env: dict[str, str]) -> dict[str, object] | None:
     if not config.run_bronze_load:
         return None
-    build_commercial_external_standardized_dataset(
-        output_path=GLOBAL_DATASET_DIR / "commercial_external_daily.parquet",
-        raw_dir=config.data_dir / "commercial_datasets" / "raw",
-    )
     bronze_specs = default_active_bronze_specs(
         data_dir=config.data_dir,
         schema_name=env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"],
         open_exogenous_dir=env.get("PRAEDIXA_OPEN_EXOGENOUS_DIR"),
-        commercial_external_dir=GLOBAL_DATASET_DIR,
     )
-    return load_selected_bronze_specs(specs=bronze_specs)
+    bronze_load = load_selected_bronze_specs(specs=bronze_specs)
+    supplemental_corpus_frame = build_supplemental_corpus_frame(
+        raw_dir=config.data_dir / "commercial_datasets" / "raw",
+    )
+    if supplemental_corpus_frame is None:
+        bronze_load["inline_supplemental_corpus_row_counts"] = {}
+        return bronze_load
+    bronze_load["inline_supplemental_corpus_row_counts"] = load_inline_bronze_frame(
+        table_name="bronze_supplemental_corpus_daily",
+        ddl=supplemental_corpus_daily_ddl(env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"]),
+        frame=supplemental_corpus_frame.to_pandas(),
+        source_name="supplemental_corpus_runtime",
+    )
+    return bronze_load
 
 
 def _run_local_silver_dbt(

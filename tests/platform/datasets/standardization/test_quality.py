@@ -31,6 +31,11 @@ def _canonical_frame() -> pl.DataFrame:
             "category_level_2": ["dept_1"],
             "category_level_3": ["family_1"],
             "observed_demand_qty": [12.0],
+            "target_semantics": ["observed_sales"],
+            "censor_flag": [False],
+            "target_source": ["observed_sales"],
+            "label_quality_score": [1.0],
+            "usable_for_training_flag": [True],
             "observed_revenue_net": [18.0],
             "observed_discount_amount": [0.1],
             "avg_selling_price": [1.5],
@@ -93,6 +98,15 @@ class GlobalDatasetQualityTests(unittest.TestCase):
         report = validate_canonical_frame(invalid_series, dataset_name="freshretail")
 
         self.assertTrue(any(issue.code == "invalid_series_id" for issue in report.issues))
+
+    def test_validate_canonical_frame_detects_missing_label_contract_columns(self) -> None:
+        missing_contract = _canonical_frame().with_columns(
+            pl.lit(None).cast(pl.Utf8).alias("target_semantics"),
+        )
+
+        report = validate_canonical_frame(missing_contract, dataset_name="freshretail")
+
+        self.assertTrue(any(issue.code == "null_target_semantics" for issue in report.issues))
 
 
 if __name__ == "__main__":

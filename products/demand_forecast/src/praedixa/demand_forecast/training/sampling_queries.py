@@ -18,11 +18,6 @@ def build_gold_split_sampling_query(
     sample_fraction: float,
     selected_columns: list[str] | None = None,
 ) -> str:
-    ordering_columns = [date_col, sample_store_col]
-    for candidate in ("location_id", "product_id"):
-        if candidate not in ordering_columns:
-            ordering_columns.append(candidate)
-    final_order_by = ", ".join(ordering_columns)
     select_list = "*" if selected_columns is None else ", ".join(selected_columns)
     return f"""
 with scoped as (
@@ -48,7 +43,6 @@ ranked as (
 select *
 from ranked
 where rn_sample <= greatest(1, cast(ceil(stratum_row_count * {sample_fraction:.12f}) as bigint))
-order by {final_order_by}
 """
 
 
@@ -74,21 +68,56 @@ def _sampling_query_parts(query: RelationSamplingQuery) -> tuple[str, str, str, 
 
 def build_sampling_query_for_relation(*, query: RelationSamplingQuery) -> str:
     final_order_by, select_list, qualified_topup_select_list, hash_expression = _sampling_query_parts(query)
+    if not query.spec.allow_top_up:
+        return _sampling_query_without_topup(
+            query=query,
+            select_list=select_list,
+            hash_expression=hash_expression,
+        )
     return _sampling_query_sql(
         query=query,
-        final_order_by=final_order_by,
         select_list=select_list,
         qualified_topup_select_list=qualified_topup_select_list,
+        final_order_by=final_order_by,
         hash_expression=hash_expression,
     )
+
+
+def _sampling_query_without_topup(
+    *,
+    query: RelationSamplingQuery,
+    select_list: str,
+    hash_expression: str,
+) -> str:
+    return f"""
+with scoped as (
+    select {select_list}
+    from ({query.spec.relation_sql}) as relation_source
+),
+ranked as (
+    select
+        *,
+        row_number() over (
+            partition by {query.spec.dataset_source_col}, {query.spec.date_col}, {query.spec.sample_store_col}
+            order by hash({hash_expression})
+        ) as rn_sample,
+        count(*) over (
+            partition by {query.spec.dataset_source_col}, {query.spec.date_col}, {query.spec.sample_store_col}
+        ) as stratum_row_count
+    from scoped
+)
+select {select_list}
+from ranked
+where rn_sample <= greatest(1, cast(ceil(stratum_row_count * {query.spec.sample_fraction:.12f}) as bigint))
+"""
 
 
 def _sampling_query_sql(
     *,
     query: RelationSamplingQuery,
-    final_order_by: str,
     select_list: str,
     qualified_topup_select_list: str,
+    final_order_by: str,
     hash_expression: str,
 ) -> str:
     return (
@@ -107,7 +136,6 @@ def _sampling_query_sql(
         + f"""
 select {select_list}
 from sampled
-order by {final_order_by}
 """
     )
 

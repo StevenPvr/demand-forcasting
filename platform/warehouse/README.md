@@ -42,19 +42,20 @@ Par defaut, le chargeur bronze fonctionne avec :
 
 - `PRAEDIXA_ENABLE_LOCAL_WAREHOUSE=true`
 - `PRAEDIXA_ENABLE_CLOUD_WAREHOUSE=false`
-- `PRAEDIXA_ENABLE_LOCAL_BACKUP=true`
+- `PRAEDIXA_ENABLE_LOCAL_BACKUP=false`
 - `PRAEDIXA_DUCKDB_LOCAL_PATH=var/warehouse/praedixa.duckdb`
 - `PRAEDIXA_LOCAL_BACKUP_DIR=var/sources/local_backup`
 
 Dans ce mode :
 
-- les sources bronze locales sont sauvegardees en backup local
 - les tables bronze sont chargees dans un DuckDB local
 - aucun chargement cloud n'est tente
 - les exogenes `gold` viennent uniquement de sources open-source publiques
 - le runner local bootstrap automatiquement `platform/warehouse/profiles.yml` si besoin
 - le runner local lance automatiquement `dbt deps` si `dbt_packages/` manque
 - la `gold` peut etre materialisee localement dans le schema `gold`
+
+Le backup local reste possible, mais seulement sur opt-in explicite via `PRAEDIXA_ENABLE_LOCAL_BACKUP=true`.
 
 ## Sources exogenes open-source
 

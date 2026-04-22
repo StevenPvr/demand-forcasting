@@ -1,4 +1,4 @@
-{{ config(tags=["silver", "commercial_external"], materialized="table") }}
+{{ config(tags=["staging", "supplemental_corpus"]) }}
 
 select
     dataset_source,
@@ -14,6 +14,11 @@ select
     category_level_2,
     category_level_3,
     observed_demand_qty,
+    target_semantics,
+    censor_flag,
+    target_source,
+    label_quality_score,
+    usable_for_training_flag,
     observed_revenue_net,
     observed_discount_amount,
     avg_selling_price,
@@ -40,5 +45,7 @@ select
     weather_humidity,
     weather_wind_level,
     anomaly_flag,
-    silver_run_id
-from {{ ref("stg_commercial_external_daily") }}
+    silver_run_id,
+    source_file_path,
+    loaded_at
+from {{ source("bronze", "bronze_supplemental_corpus_daily") }}

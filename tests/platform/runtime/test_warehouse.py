@@ -20,7 +20,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(env["PRAEDIXA_ENABLE_LOCAL_WAREHOUSE"], "true")
         self.assertEqual(env["PRAEDIXA_ENABLE_CLOUD_WAREHOUSE"], "false")
-        self.assertEqual(env["PRAEDIXA_ENABLE_LOCAL_BACKUP"], "true")
+        self.assertEqual(env["PRAEDIXA_ENABLE_LOCAL_BACKUP"], "false")
         self.assertEqual(env["PRAEDIXA_DUCKDB_TARGET_PATH"], env["PRAEDIXA_DUCKDB_LOCAL_PATH"])
         self.assertEqual(env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"], "bronze")
         self.assertEqual(env["PRAEDIXA_DUCKDB_SILVER_SCHEMA"], "silver")

@@ -12,8 +12,11 @@ import pandas as pd
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.training_bundle.bundle_builder import (  # noqa: E402
     build_training_bundle,
@@ -234,12 +237,16 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         for key in (
             "train",
             "tuning",
+            "optimisation_train",
+            "optimisation_tuning",
             "valid",
+            "optimisation_valid",
             "feature_manifest",
             "feature_roles",
             "split_manifest",
             "target_contract",
             "bundle_manifest",
+            "optimisation_manifest",
         ):
             self.assertTrue(artifacts[key].exists())
 
@@ -247,6 +254,8 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         feature_manifest = json.loads(artifacts["feature_manifest"].read_text(encoding="utf-8"))
         self.assertEqual(feature_manifest["feature_columns"], ["dataset_source", "location_id", "product_id", "rolling_mean_7"])
         self.assertEqual(feature_manifest["group_id_columns"], ["series_id"])
+        self.assertIn("lag_1", feature_manifest["projection_columns"])
+        self.assertEqual(feature_manifest["projection_dtypes"]["lag_1"], "float32")
         self.assertEqual(feature_manifest["projection_dtypes"]["rolling_mean_7"], "float32")
         self.assertEqual(feature_manifest["projection_dtypes"]["target_demand_qty_d_plus_1"], "float32")
         self.assertTrue(feature_manifest["feature_contract"]["rolling_mean_7"]["available_at_prediction"])
@@ -259,9 +268,13 @@ class TrainingBundleBuilderTests(unittest.TestCase):
 
     def _assert_bundled_train(self, artifacts: dict[str, Path]) -> None:
         bundled_train = pd.read_parquet(artifacts["train"])
+        optimisation_train = pd.read_parquet(artifacts["optimisation_train"])
         self.assertIn("series_id", bundled_train.columns)
         self.assertEqual(str(bundled_train["rolling_mean_7"].dtype), "float32")
         self.assertEqual(str(bundled_train["target_demand_qty_d_plus_1"].dtype), "float32")
+        self.assertIn("__tft_group_id", optimisation_train.columns)
+        self.assertIn("__tft_time_idx", optimisation_train.columns)
+        self.assertEqual(str(optimisation_train["__tft_time_idx"].dtype), "int32")
 
     def _assert_target_contract(self, artifacts: dict[str, Path]) -> None:
         target_contract = json.loads(artifacts["target_contract"].read_text(encoding="utf-8"))
@@ -270,6 +283,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
 
     def _assert_bundle_manifest(self, artifacts: dict[str, Path]) -> None:
         bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
+        optimisation_manifest = json.loads(artifacts["optimisation_manifest"].read_text(encoding="utf-8"))
         self.assertEqual(bundle_manifest["bundle_version"], 2)
         self.assertEqual(bundle_manifest["train_rows"], 4)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
@@ -280,6 +294,10 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
         self.assertEqual(bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"]))
         self.assertEqual(bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"]))
+        self.assertTrue(bundle_manifest["optimisation_train_path"].endswith("optimisation_train.parquet"))
+        self.assertTrue(bundle_manifest["optimisation_manifest_path"].endswith("optimisation_manifest.json"))
+        self.assertTrue(optimisation_manifest["precomputed_tft_support"])
+        self.assertEqual(optimisation_manifest["support_columns"], ["__tft_group_id", "__tft_time_idx"])
         split_manifest = json.loads(artifacts["split_manifest"].read_text(encoding="utf-8"))
         self.assertEqual(split_manifest["train"]["rows"], 4)
         self.assertEqual(split_manifest["tuning"]["rows"], 2)
@@ -294,9 +312,12 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertIn("_cache/val.parquet", bundle_manifest["tuning_input_path"])
         self.assertIn("_cache/test.parquet", bundle_manifest["valid_input_path"])
         bundled_train = pd.read_parquet(artifacts["train"])
+        optimisation_train = pd.read_parquet(artifacts["optimisation_train"])
         self.assertNotIn("split_bucket", bundled_train.columns)
-        self.assertNotIn("lag_1", bundled_train.columns)
+        self.assertIn("lag_1", bundled_train.columns)
         self.assertIn("rolling_mean_7", bundled_train.columns)
+        self.assertIn("__tft_group_id", optimisation_train.columns)
+        self.assertIn("__tft_time_idx", optimisation_train.columns)
 
     def _sha256(self, path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()

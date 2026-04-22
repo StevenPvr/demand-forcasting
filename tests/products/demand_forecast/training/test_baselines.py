@@ -10,8 +10,11 @@ import pandas as pd
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.training.baselines import evaluate_statistical_baselines_macro  # noqa: E402
 from praedixa.demand_forecast.training.folds import build_tuning_walk_forward_folds_by_dataset  # noqa: E402

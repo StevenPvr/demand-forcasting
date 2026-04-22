@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from praedixa.platform.datasets.standardization.commercial_external import freshretail_promo_flag_expr
+from praedixa.platform.datasets.standardization.supplemental_corpus import freshretail_promo_flag_expr
 from praedixa.platform.datasets.standardization.schema import align_lazy_frame_to_canonical_schema, build_series_id_expr
 from praedixa.platform.runtime.paths import GLOBAL_DATASET_DIR
 from praedixa.platform.runtime.paths import SOURCES_DIR
@@ -85,18 +85,14 @@ def standardize_freshretail_lazy_frame(
     return align_lazy_frame_to_canonical_schema(normalized)
 
 
-def build_freshretail_standardized_dataset(
-    output_path: str | Path = DEFAULT_OUTPUT_PATH,
+def build_freshretail_standardized_frame(
     *,
     train_input_path: str | Path = DEFAULT_TRAIN_INPUT_PATH,
     val_input_path: str | Path = DEFAULT_VAL_INPUT_PATH,
     source_run_id: str = DEFAULT_SOURCE_RUN_ID,
     silver_run_id: str = DEFAULT_SILVER_RUN_ID,
-) -> Path:
-    """Write the canonical FreshRetail daily dataset as a parquet file."""
-
-    target_path = Path(output_path)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
+) -> pl.DataFrame:
+    """Build the canonical FreshRetail frame in memory."""
 
     lazy_frames: list[pl.LazyFrame] = []
     train_path = Path(train_input_path)
@@ -121,7 +117,26 @@ def build_freshretail_standardized_dataset(
         )
     if not lazy_frames:
         raise FileNotFoundError("No FreshRetail parquet inputs were found for canonical dataset generation.")
+    return pl.concat(lazy_frames, how="vertical_relaxed").collect()
 
-    combined = pl.concat(lazy_frames, how="vertical_relaxed").collect()
+
+def build_freshretail_standardized_dataset(
+    output_path: str | Path = DEFAULT_OUTPUT_PATH,
+    *,
+    train_input_path: str | Path = DEFAULT_TRAIN_INPUT_PATH,
+    val_input_path: str | Path = DEFAULT_VAL_INPUT_PATH,
+    source_run_id: str = DEFAULT_SOURCE_RUN_ID,
+    silver_run_id: str = DEFAULT_SILVER_RUN_ID,
+) -> Path:
+    """Write the canonical FreshRetail daily dataset as a parquet file."""
+
+    target_path = Path(output_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    combined = build_freshretail_standardized_frame(
+        train_input_path=train_input_path,
+        val_input_path=val_input_path,
+        source_run_id=source_run_id,
+        silver_run_id=silver_run_id,
+    )
     combined.write_parquet(target_path)
     return target_path

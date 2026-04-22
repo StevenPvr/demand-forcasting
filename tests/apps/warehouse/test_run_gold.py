@@ -1,30 +1,31 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import subprocess
-import sys
+import importlib
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
 
 
 class GoldMainTests(unittest.TestCase):
-    def test_gold_module_main_can_show_help(self) -> None:
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(PROJECT_ROOT)
-        result = subprocess.run(
-            [sys.executable, "-m", "apps.warehouse.run_gold.main", "--help"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            env=env,
-            check=False,
-        )
+    def test_gold_module_main_delegates_to_local_gold_main(self) -> None:
+        module = importlib.import_module("apps.warehouse.run_gold.main")
 
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("Run the local Praedixa silver -> gold workflow.", result.stdout)
+        with mock.patch(
+            "praedixa.platform.warehouse.local_gold.main"
+        ) as gold_main:
+            module.main()
+
+        gold_main.assert_called_once_with()
+
+    def test_gold_module_main_uses_no_cli_parser(self) -> None:
+        module_path = PROJECT_ROOT / "apps" / "warehouse" / "run_gold" / "main.py"
+        source = module_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("argparse", source)
+        self.assertNotIn("parse_args", source)
 
 
 if __name__ == "__main__":

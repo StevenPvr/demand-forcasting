@@ -31,7 +31,7 @@ class WarehouseRuntimeConfig:
 
     enable_local_warehouse: bool = True
     enable_cloud_warehouse: bool = False
-    enable_local_backup: bool = True
+    enable_local_backup: bool = False
     duckdb_local_path: Path = LOCAL_DUCKDB_PATH
     duckdb_target_path: Path | None = None
     bronze_schema: str = DEFAULT_BRONZE_SCHEMA

@@ -12,7 +12,10 @@ import pandas as pd
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
     BronzeTableSpec,
@@ -97,7 +100,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         global_dataset_root.mkdir(parents=True)
         self._write_freshretail_parquets(bakery_root)
         self._write_bakery_csv(bakery_root)
-        self._write_commercial_external_parquet(global_dataset_root)
+        self._write_supplemental_corpus_parquet(global_dataset_root)
 
     def _write_freshretail_parquets(self, bakery_root: Path) -> None:
         pd.DataFrame([self._freshretail_row(product_id=10000, dt="2024-01-01", sale_amount=12.0)]).to_parquet(
@@ -173,16 +176,16 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             ]
         ).to_csv(bakery_root / "Bakery sales.csv", index=False)
 
-    def _write_commercial_external_parquet(self, root: Path) -> None:
+    def _write_supplemental_corpus_parquet(self, root: Path) -> None:
         pd.DataFrame(
             [
                 {
-                    "dataset_source": "uci_online_retail",
+                    "dataset_source": "freshretail_lt",
                     "source_partition": "historical",
                     "source_run_id": "manual",
-                    "series_id": "uk_online_retail_1__SKU_1",
-                    "dt": "2011-01-29",
-                    "location_id": "uk_online_retail_1",
+                    "series_id": "84__SKU_1",
+                    "dt": "2024-02-10",
+                    "location_id": "84",
                     "product_id": "SKU_1",
                     "region_id": None,
                     "org_group_id": None,
@@ -204,9 +207,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "missing_sales_flag": False,
                     "calendar_weekday_name": "Saturday",
                     "calendar_day_of_week": 5,
-                    "calendar_month": 1,
-                    "calendar_year": 2011,
-                    "calendar_week_key": 4,
+                    "calendar_month": 2,
+                    "calendar_year": 2024,
+                    "calendar_week_key": 6,
                     "event_name_1": None,
                     "event_type_1": None,
                     "event_name_2": None,
@@ -219,7 +222,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "silver_run_id": "manual",
                 }
             ]
-        ).to_parquet(root / "commercial_external_daily.parquet", index=False)
+        ).to_parquet(root / "supplemental_corpus_daily.parquet", index=False)
 
     def _assert_local_duckdb_counts(self, local_db_path: Path) -> None:
         connection = duckdb.connect(str(local_db_path))
@@ -272,7 +275,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
 
         self.assertTrue(config.local_warehouse_enabled)
         self.assertFalse(config.cloud_warehouse_enabled)
-        self.assertTrue(config.local_backup_enabled)
+        self.assertFalse(config.local_backup_enabled)
 
     def test_default_bronze_specs_declares_all_v1_sources(self) -> None:
         specs = default_bronze_specs("data", schema_name="bronze")
@@ -290,26 +293,8 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("freshretail_train", source_names)
         self.assertIn("freshretail_val", source_names)
         self.assertIn("bakery", source_names)
-        self.assertIn("commercial_external_daily", source_names)
         self.assertIn("open_location_catchment", source_names)
-        self.assertIn("bronze_commercial_external_daily", table_names)
         self.assertIn("bronze_open_location_catchment", table_names)
-
-    def test_default_active_bronze_specs_accepts_commercial_external_dir_override(self) -> None:
-        specs = default_active_bronze_specs(
-            "data",
-            schema_name="bronze",
-            commercial_external_dir="custom/global_dataset",
-        )
-
-        commercial_spec = next(
-            spec for spec in specs if spec.table_name == "bronze_commercial_external_daily"
-        )
-
-        self.assertEqual(
-            commercial_spec.source_path,
-            Path("custom/global_dataset") / "commercial_external_daily.parquet",
-        )
 
     def test_prepare_bronze_batch_renames_bakery_columns(self) -> None:
         spec = BronzeTableSpec(

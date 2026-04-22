@@ -17,6 +17,9 @@ from praedixa.demand_forecast.feature_screening.constants import (
     DEFAULT_TUNING_PROGRESS_LOG_EVERY,
     DEFAULT_TUNING_TRIALS,
 )
+from praedixa.demand_forecast.feature_screening.tft_fold_cache import (
+    cached_screening_fold_artifacts,
+)
 from praedixa.demand_forecast.feature_screening.metrics import compute_wape, compute_wape_improvement_pct
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
 from praedixa.demand_forecast.backends.tft.model_utils import DEFAULT_TFT_MODEL_PARAMS, fit_tft_model, predict_with_tft_model
@@ -70,19 +73,25 @@ def _fit_single_screening_fold(
     target_col: str,
     resolved_params: dict[str, object],
 ) -> float:
-    train_frame = cast(pd.DataFrame, frame.iloc[cast(Any, fold["train_idx"])])
-    valid_frame = cast(pd.DataFrame, frame.iloc[cast(Any, fold["valid_idx"])])
+    cached_fold = cached_screening_fold_artifacts(
+        frame=frame,
+        fold=fold,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        model_params=resolved_params,
+    )
     model = fit_tft_model(
-        train_frame,
+        cached_fold.train_frame,
         feature_cols,
         target_col=target_col,
         model_params=resolved_params,
         default_params=DEFAULT_TFT_MODEL_PARAMS,
         default_max_iter=300,
-        valid_frame=valid_frame,
+        valid_frame=cached_fold.valid_frame,
+        dataset_artifacts=cached_fold.dataset_artifacts,
     )
-    predictions = predict_with_tft_model(model, valid_frame, feature_cols)
-    return compute_wape(valid_frame[target_col], predictions)
+    predictions = predict_with_tft_model(model, cached_fold.valid_frame, feature_cols)
+    return compute_wape(cached_fold.valid_frame[target_col], predictions)
 
 
 def _serial_screening_fold_scores(

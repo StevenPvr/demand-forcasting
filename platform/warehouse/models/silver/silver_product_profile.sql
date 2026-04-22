@@ -20,12 +20,8 @@ select
     category_level_2 as product_subfamily,
     case
         when dataset_source = 'bakery' then 'food_core'
-        when dataset_source in ('uci_online_retail', 'uci_online_retail_ii', 'mendeley_ecommerce') then 'general_merchandise'
-        when dataset_source = 'mendeley_pharmacy_id' then 'pharmacy'
-        when dataset_source = 'mendeley_bangladesh_retail' then 'general_trade'
         when dataset_source in ('freshretail', 'freshretail_lt') then 'grocery'
         when dataset_source = 'first_party_daily' then 'client_catalog'
-        when dataset_source = 'synthetic_v1' then 'synthetic_catalog'
         else 'unknown'
     end as menu_role,
     case

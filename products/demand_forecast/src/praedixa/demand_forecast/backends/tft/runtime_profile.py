@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -33,20 +34,39 @@ def _detect_mps_support() -> bool:
     return bool(is_available()) if callable(is_available) else False
 
 
+def _resolved_cpu_count(cpu_count: int | None = None) -> int:
+    detected = os.cpu_count() if cpu_count is None else cpu_count
+    return max(1, int(detected or 1))
+
+
+def _default_local_cpu_num_workers(cpu_count: int | None = None) -> int:
+    resolved_cpu_count = _resolved_cpu_count(cpu_count)
+    return max(0, min(4, resolved_cpu_count - 1))
+
+
+def _default_gpu_num_workers(cpu_count: int | None = None) -> int:
+    resolved_cpu_count = _resolved_cpu_count(cpu_count)
+    return max(4, min(8, resolved_cpu_count // 2))
+
+
 def resolve_runtime_profile(
     profile_name: str,
     *,
     bf16_supported: bool | None = None,
+    cpu_count: int | None = None,
 ) -> dict[str, Any]:
     resolved_bf16 = _detect_bf16_support() if bf16_supported is None else bf16_supported
+    local_cpu_num_workers = _default_local_cpu_num_workers(cpu_count)
+    gpu_num_workers = _default_gpu_num_workers(cpu_count)
     profiles: dict[str, dict[str, Any]] = {
         "local_cpu": {
             "accelerator": "cpu",
             "devices": 1,
             "precision": "32-true",
-            "num_workers": 0,
+            "num_workers": local_cpu_num_workers,
             "pin_memory": False,
-            "persistent_workers": False,
+            "persistent_workers": local_cpu_num_workers > 0,
+            "prefetch_factor": 2 if local_cpu_num_workers > 0 else None,
             "compile_mode": DEFAULT_COMPILE_MODE,
             "determinism_mode": "strict",
             "matmul_precision": "highest",
@@ -58,6 +78,7 @@ def resolve_runtime_profile(
             "num_workers": 0,
             "pin_memory": False,
             "persistent_workers": False,
+            "prefetch_factor": None,
             "compile_mode": DEFAULT_COMPILE_MODE,
             "determinism_mode": "warn_only",
             "matmul_precision": "high",
@@ -66,9 +87,10 @@ def resolve_runtime_profile(
             "accelerator": "gpu",
             "devices": 1,
             "precision": "bf16-mixed" if resolved_bf16 else "32-true",
-            "num_workers": 4,
+            "num_workers": gpu_num_workers,
             "pin_memory": True,
-            "persistent_workers": True,
+            "persistent_workers": gpu_num_workers > 0,
+            "prefetch_factor": 4 if gpu_num_workers > 0 else None,
             "compile_mode": DEFAULT_COMPILE_MODE,
             "determinism_mode": "warn_only",
             "matmul_precision": "high",

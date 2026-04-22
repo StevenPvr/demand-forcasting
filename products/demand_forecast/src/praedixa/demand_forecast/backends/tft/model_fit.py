@@ -39,6 +39,7 @@ def _build_model(
     resolved_params: dict[str, object],
 ) -> Any:
     quantile_loss = imports["QuantileLoss"](quantiles=resolved_params["quantiles"])
+    logging_metrics = imports["ModuleList"]([imports["WAPEMetric"](name="wape")])
     return imports["TemporalFusionTransformer"].from_dataset(
         training_dataset,
         learning_rate=float(cast(Any, resolved_params["learning_rate"])),
@@ -53,6 +54,7 @@ def _build_model(
         reduce_on_plateau_patience=int(cast(Any, resolved_params["patience"])),
         optimizer="adam",
         weight_decay=float(cast(Any, resolved_params["weight_decay"])),
+        logging_metrics=logging_metrics,
     )
 
 
@@ -84,6 +86,7 @@ def _training_loaders(
         num_workers=int(cast(Any, resolved_params["num_workers"])),
         pin_memory=bool(cast(Any, resolved_params["pin_memory"])),
         persistent_workers=bool(cast(Any, resolved_params["persistent_workers"])),
+        prefetch_factor=cast(int | None, resolved_params.get("prefetch_factor")),
     )
     train_loader = training_dataset.to_dataloader(train=True, batch_size=batch_size, **dataloader_kwargs)
     valid_loader = None if validation_dataset is None else validation_dataset.to_dataloader(
@@ -117,6 +120,59 @@ def _resolve_fit_request(
     )
 
 
+def _resolved_dataset_artifacts(
+    *,
+    imports: dict[str, Any],
+    dataset_artifacts: TrainingDatasetArtifacts | None,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame | None,
+    feature_cols: list[str],
+    target_col: str,
+    resolved_params: dict[str, object],
+    train_weights: np.ndarray | None,
+    valid_weights: np.ndarray | None,
+) -> TrainingDatasetArtifacts:
+    if dataset_artifacts is not None:
+        return dataset_artifacts
+    prepared_frame = _prepared_training_frame(
+        train_frame=train_frame,
+        valid_frame=valid_frame,
+        feature_cols=feature_cols,
+        train_weights=train_weights,
+        valid_weights=valid_weights,
+    )
+    return build_training_dataset_artifacts(
+        imports,
+        prepared_frame=prepared_frame,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        resolved_params=resolved_params,
+    )
+
+
+def _fit_resolved_model(
+    *,
+    imports: dict[str, Any],
+    dataset_artifacts: TrainingDatasetArtifacts,
+    resolved_params: dict[str, object],
+) -> tuple[Any, Any, int, dict[str, float | int | str | None]]:
+    train_loader, valid_loader = _training_loaders(
+        training_dataset=dataset_artifacts.training_dataset,
+        validation_dataset=dataset_artifacts.validation_dataset,
+        batch_size=int(cast(Any, resolved_params["batch_size"])),
+        resolved_params=resolved_params,
+    )
+    model = _build_model(imports, dataset_artifacts.training_dataset, resolved_params)
+    fitted_model, best_iteration, runtime_metrics = fit_trainer_model(
+        imports,
+        model=model,
+        resolved_params=resolved_params,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+    )
+    return fitted_model, valid_loader, best_iteration, runtime_metrics
+
+
 def fit_tft_model(
     train_frame: pd.DataFrame | None = None,
     feature_cols: list[str] | None = None,
@@ -139,35 +195,21 @@ def fit_tft_model(
     )
     with suppress_tft_runtime_noise():
         seed_tft_runtime(imports, resolved_params)
-        resolved_dataset_artifacts = dataset_artifacts
-        if resolved_dataset_artifacts is None:
-            prepared_frame = _prepared_training_frame(
-                train_frame=train_frame,
-                valid_frame=valid_frame,
-                feature_cols=feature_cols,
-                train_weights=train_weights,
-                valid_weights=valid_weights,
-            )
-            resolved_dataset_artifacts = build_training_dataset_artifacts(
-                imports,
-                prepared_frame=prepared_frame,
-                feature_cols=feature_cols,
-                target_col=target_col,
-                resolved_params=resolved_params,
-            )
-        train_loader, valid_loader = _training_loaders(
-            training_dataset=resolved_dataset_artifacts.training_dataset,
-            validation_dataset=resolved_dataset_artifacts.validation_dataset,
-            batch_size=int(cast(Any, resolved_params["batch_size"])),
+        resolved_dataset_artifacts = _resolved_dataset_artifacts(
+            imports=imports,
+            dataset_artifacts=dataset_artifacts,
+            train_frame=train_frame,
+            valid_frame=valid_frame,
+            feature_cols=feature_cols,
+            target_col=target_col,
             resolved_params=resolved_params,
+            train_weights=train_weights,
+            valid_weights=valid_weights,
         )
-        model = _build_model(imports, resolved_dataset_artifacts.training_dataset, resolved_params)
-        model, best_iteration, runtime_metrics = fit_trainer_model(
-            imports,
-            model=model,
+        model, valid_loader, best_iteration, runtime_metrics = _fit_resolved_model(
+            imports=imports,
+            dataset_artifacts=resolved_dataset_artifacts,
             resolved_params=resolved_params,
-            train_loader=train_loader,
-            valid_loader=valid_loader,
         )
         interpretability_payload = extract_interpretability_payload(
             model=model,

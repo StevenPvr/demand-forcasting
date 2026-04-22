@@ -1,4 +1,4 @@
-{{ config(tags=["staging", "commercial_external"]) }}
+{{ config(tags=["silver", "supplemental_corpus"], materialized="table") }}
 
 select
     dataset_source,
@@ -40,7 +40,5 @@ select
     weather_humidity,
     weather_wind_level,
     anomaly_flag,
-    silver_run_id,
-    source_file_path,
-    loaded_at
-from {{ source("bronze", "bronze_commercial_external_daily") }}
+    silver_run_id
+from {{ ref("stg_supplemental_corpus_daily") }}

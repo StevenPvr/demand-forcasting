@@ -5,8 +5,14 @@ from pathlib import Path
 from typing import Mapping, cast
 
 import duckdb
+import numpy as np
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.frame_utils import (
+    GROUP_COL,
+    TIME_IDX_COL,
+    build_group_identifier,
+)
 from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN
 from praedixa.demand_forecast.backends.tft.feature_mapping import select_explicit_tft_group_id_columns
 from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
@@ -37,6 +43,8 @@ DEFAULT_SMOKE_DATASET_SOURCE: str | None = None
 DEFAULT_SMOKE_MIN_TRAIN_ROWS = 56
 DEFAULT_SMOKE_MIN_TUNING_ROWS = 28
 DEFAULT_SMOKE_MIN_VALID_ROWS = 0
+BASELINE_SUPPORT_COLUMNS: tuple[str, ...] = ("lag_1",)
+OPTIMISATION_SUPPORT_COLUMNS: tuple[str, ...] = (GROUP_COL, TIME_IDX_COL)
 
 
 def _json_dump(path: Path, payload: Mapping[str, object | None]) -> None:
@@ -285,14 +293,18 @@ def _bundle_output_paths(output_dir: Path, *, include_valid: bool) -> dict[str, 
     paths: dict[str, Path] = {
         "train": output_dir / "train.parquet",
         "tuning": output_dir / "tuning.parquet",
+        "optimisation_train": output_dir / "optimisation_train.parquet",
+        "optimisation_tuning": output_dir / "optimisation_tuning.parquet",
         "feature_manifest": output_dir / "feature_manifest.json",
         "feature_roles": output_dir / "feature_roles.json",
         "split_manifest": output_dir / "split_manifest.json",
         "target_contract": output_dir / "target_contract.json",
         "bundle_manifest": output_dir / "bundle_manifest.json",
+        "optimisation_manifest": output_dir / "optimisation_manifest.json",
     }
     if include_valid:
         paths["valid"] = output_dir / "valid.parquet"
+        paths["optimisation_valid"] = output_dir / "optimisation_valid.parquet"
     return paths
 
 
@@ -306,7 +318,14 @@ def _bundle_projection_columns(
     available_columns: set[str],
 ) -> list[str]:
     ordered: list[str] = [DEFAULT_DATE_COL]
-    for column in [*group_id_cols, absolute_target_col, learning_target_col, reconstruction_anchor_col, *feature_cols]:
+    for column in [
+        *group_id_cols,
+        absolute_target_col,
+        learning_target_col,
+        reconstruction_anchor_col,
+        *BASELINE_SUPPORT_COLUMNS,
+        *feature_cols,
+    ]:
         if column is None or column not in available_columns or column in ordered:
             continue
         ordered.append(column)
@@ -324,10 +343,21 @@ def _optimize_projection_frame(
 ) -> pd.DataFrame:
     float32_columns = {
         column
-        for column in [learning_target_col, absolute_target_col, reconstruction_anchor_col, *feature_cols]
+        for column in [
+            learning_target_col,
+            absolute_target_col,
+            reconstruction_anchor_col,
+            *BASELINE_SUPPORT_COLUMNS,
+            *feature_cols,
+        ]
         if column is not None
         and (
-            column in {learning_target_col, absolute_target_col, reconstruction_anchor_col}
+            column in {
+                learning_target_col,
+                absolute_target_col,
+                reconstruction_anchor_col,
+                *BASELINE_SUPPORT_COLUMNS,
+            }
             or TFT_EXPLICIT_ROLE_BY_COLUMN.get(column, "").endswith("_real")
         )
     }
@@ -356,19 +386,18 @@ def _optimize_projection_frame(
     return optimized
 
 
-def _write_projected_frame(
+def _projected_frame(
     frame: pd.DataFrame,
     *,
     columns: list[str],
-    output_path: Path,
     feature_cols: list[str],
     group_id_columns: list[str],
     learning_target_col: str,
     absolute_target_col: str,
     reconstruction_anchor_col: str | None,
-) -> int:
+) -> pd.DataFrame:
     projected = frame.loc[:, columns].copy().sort_values(DEFAULT_DATE_COL).reset_index(drop=True)
-    projected = _optimize_projection_frame(
+    return _optimize_projection_frame(
         projected,
         feature_cols=feature_cols,
         group_id_columns=group_id_columns,
@@ -376,8 +405,49 @@ def _write_projected_frame(
         absolute_target_col=absolute_target_col,
         reconstruction_anchor_col=reconstruction_anchor_col,
     )
-    projected.to_parquet(output_path, index=False)
-    return int(len(projected))
+
+
+def _build_optimisation_projection(
+    frame: pd.DataFrame,
+    *,
+    group_id_columns: list[str],
+    train_group_sizes: dict[str, int] | None,
+) -> pd.DataFrame:
+    projected = frame.copy()
+    projected[DEFAULT_DATE_COL] = pd.to_datetime(projected[DEFAULT_DATE_COL])
+    projected[GROUP_COL] = build_group_identifier(projected, group_id_columns)
+    projected = projected.sort_values([GROUP_COL, DEFAULT_DATE_COL]).reset_index(drop=True)
+    time_idx = projected.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
+    if train_group_sizes is not None:
+        offsets = projected[GROUP_COL].map(train_group_sizes).fillna(0).astype(np.int32)
+        time_idx = (time_idx + offsets).astype(np.int32)
+    projected[TIME_IDX_COL] = time_idx
+    return projected
+
+
+def _optimisation_manifest_payload(
+    *,
+    output_paths: dict[str, Path],
+    train_group_sizes: dict[str, int],
+    projection_columns: list[str],
+    group_id_columns: list[str],
+    include_valid: bool,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "bundle_version": 1,
+        "train_path": str(output_paths["optimisation_train"]),
+        "tuning_path": str(output_paths["optimisation_tuning"]),
+        "feature_manifest_path": str(output_paths["feature_manifest"]),
+        "target_contract_path": str(output_paths["target_contract"]),
+        "projection_columns": [*projection_columns, *OPTIMISATION_SUPPORT_COLUMNS],
+        "group_id_columns": group_id_columns,
+        "support_columns": list(OPTIMISATION_SUPPORT_COLUMNS),
+        "train_group_count": len(train_group_sizes),
+        "precomputed_tft_support": True,
+    }
+    if include_valid:
+        payload["valid_path"] = str(output_paths["optimisation_valid"])
+    return payload
 
 
 def _feature_manifest_payload(
@@ -486,44 +556,75 @@ def _write_bundle_frames(
     group_id_columns: list[str],
     projection_columns: list[str],
     target_contract: TargetContract,
-) -> tuple[int, int, int, dict[str, str]]:
-    train_rows = _write_projected_frame(
+) -> tuple[int, int, int, dict[str, str], dict[str, int]]:
+    train_projected = _projected_frame(
         train_frame,
         columns=projection_columns,
-        output_path=output_paths["train"],
         feature_cols=feature_cols,
         group_id_columns=group_id_columns,
         learning_target_col=target_contract.learning_target_col,
         absolute_target_col=target_contract.absolute_target_col,
         reconstruction_anchor_col=target_contract.reconstruction_anchor_col,
     )
-    tuning_rows = _write_projected_frame(
+    tuning_projected = _projected_frame(
         tuning_frame,
         columns=projection_columns,
-        output_path=output_paths["tuning"],
         feature_cols=feature_cols,
         group_id_columns=group_id_columns,
         learning_target_col=target_contract.learning_target_col,
         absolute_target_col=target_contract.absolute_target_col,
         reconstruction_anchor_col=target_contract.reconstruction_anchor_col,
     )
+    train_projected.to_parquet(output_paths["train"], index=False)
+    tuning_projected.to_parquet(output_paths["tuning"], index=False)
+    train_rows = int(len(train_projected))
+    tuning_rows = int(len(tuning_projected))
     valid_rows = 0
+    valid_projected: pd.DataFrame | None = None
     if valid_frame is not None:
-        valid_rows = _write_projected_frame(
+        valid_projected = _projected_frame(
             valid_frame,
             columns=projection_columns,
-            output_path=output_paths["valid"],
             feature_cols=feature_cols,
             group_id_columns=group_id_columns,
             learning_target_col=target_contract.learning_target_col,
             absolute_target_col=target_contract.absolute_target_col,
             reconstruction_anchor_col=target_contract.reconstruction_anchor_col,
         )
+        valid_projected.to_parquet(output_paths["valid"], index=False)
+        valid_rows = int(len(valid_projected))
+    train_group_sizes = {
+        str(group_id): int(size)
+        for group_id, size in _build_optimisation_projection(
+            train_projected,
+            group_id_columns=group_id_columns,
+            train_group_sizes=None,
+        ).groupby(GROUP_COL, sort=False).size().items()
+    }
+    optimisation_train = _build_optimisation_projection(
+        train_projected,
+        group_id_columns=group_id_columns,
+        train_group_sizes=None,
+    )
+    optimisation_tuning = _build_optimisation_projection(
+        tuning_projected,
+        group_id_columns=group_id_columns,
+        train_group_sizes=train_group_sizes,
+    )
+    optimisation_train.to_parquet(output_paths["optimisation_train"], index=False)
+    optimisation_tuning.to_parquet(output_paths["optimisation_tuning"], index=False)
+    if valid_projected is not None:
+        optimisation_valid = _build_optimisation_projection(
+            valid_projected,
+            group_id_columns=group_id_columns,
+            train_group_sizes=train_group_sizes,
+        )
+        optimisation_valid.to_parquet(output_paths["optimisation_valid"], index=False)
     projection_dtypes = {
         str(column): str(dtype)
         for column, dtype in pd.read_parquet(output_paths["train"]).dtypes.items()
     }
-    return train_rows, tuning_rows, valid_rows, projection_dtypes
+    return train_rows, tuning_rows, valid_rows, projection_dtypes, train_group_sizes
 
 
 def _bundle_manifest_payload(
@@ -542,6 +643,9 @@ def _bundle_manifest_payload(
         "train_input_path": str(train_path),
         "tuning_input_path": str(tuning_path),
         "valid_input_path": str(valid_path) if valid_path is not None else None,
+        "optimisation_train_path": str(output_paths["optimisation_train"]),
+        "optimisation_tuning_path": str(output_paths["optimisation_tuning"]),
+        "optimisation_manifest_path": str(output_paths["optimisation_manifest"]),
         "train_rows": train_rows,
         "tuning_rows": tuning_rows,
         "valid_rows": valid_rows,
@@ -555,6 +659,7 @@ def _bundle_manifest_payload(
     }
     if valid_path is not None:
         bundle_manifest["valid_sha256"] = sha256_file(output_paths["valid"])
+        bundle_manifest["optimisation_valid_path"] = str(output_paths["optimisation_valid"])
     return bundle_manifest
 
 
@@ -585,6 +690,7 @@ def _persist_bundle_metadata(
     train_rows: int,
     tuning_rows: int,
     valid_rows: int,
+    train_group_sizes: dict[str, int],
 ) -> None:
     feature_contract = build_feature_contract(feature_cols)
     _json_dump(
@@ -617,6 +723,16 @@ def _persist_bundle_metadata(
             tuning_rows=tuning_rows,
             valid_rows=valid_rows,
             feature_count=len(feature_cols),
+        ),
+    )
+    _json_dump(
+        output_paths["optimisation_manifest"],
+        _optimisation_manifest_payload(
+            output_paths=output_paths,
+            train_group_sizes=train_group_sizes,
+            projection_columns=projection_columns,
+            group_id_columns=group_id_columns,
+            include_valid=valid_path is not None,
         ),
     )
 
@@ -659,7 +775,7 @@ def build_training_bundle(
     )
     feature_cols, group_id_columns, projection_columns = _resolve_bundle_features(train_frame=train_frame, target_contract=target_contract)
     output_paths = _bundle_output_paths(resolved_output_dir, include_valid=valid_frame is not None)
-    train_rows, tuning_rows, valid_rows, projection_dtypes = _write_bundle_frames(
+    train_rows, tuning_rows, valid_rows, projection_dtypes, train_group_sizes = _write_bundle_frames(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
         valid_frame=valid_frame,
@@ -682,5 +798,6 @@ def build_training_bundle(
         train_rows=train_rows,
         tuning_rows=tuning_rows,
         valid_rows=valid_rows,
+        train_group_sizes=train_group_sizes,
     )
     return output_paths

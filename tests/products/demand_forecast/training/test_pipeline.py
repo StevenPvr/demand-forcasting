@@ -104,10 +104,10 @@ def _assert_output_artifacts(output_dir: Path) -> dict[str, Any]:
 def _gold_frame() -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     dataset_specs = (
-        ("uci_online_retail", "store_1", "sku_1"),
-        ("uci_online_retail_ii", "store_2", "sku_2"),
+        ("freshretail_lt", "store_1", "sku_1"),
+        ("first_party_daily", "store_2", "sku_2"),
         ("freshretail", "store_3", "sku_3"),
-        ("freshretail", "store_4", "sku_4"),
+        ("bakery", "store_4", "sku_4"),
     )
     for dataset_offset, (dataset_source, location_id, product_id) in enumerate(dataset_specs):
         dates = pd.date_range("2024-01-01", periods=120, freq="D") + pd.Timedelta(days=dataset_offset)

@@ -12,6 +12,7 @@ from praedixa.demand_forecast.training.sampling_frame import (
 from praedixa.demand_forecast.training.sampling_metadata import (
     load_gold_split_sampling_metadata,
     load_sampling_metadata_from_relation,
+    relation_sampling_requires_top_up,
     refresh_sampling_metadata_from_sampled_frame,
     resolve_gold_projection_columns,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "load_gold_split_sampling_metadata",
     "load_sampling_metadata_from_relation",
     "log_sampling_summary",
+    "relation_sampling_requires_top_up",
     "refresh_sampling_metadata_from_sampled_frame",
     "resolve_gold_projection_columns",
     "resolve_sampling_order_cols",

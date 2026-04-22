@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
+import os
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
 from praedixa.platform.utils.memory import downcast_pandas_frame
+from praedixa.demand_forecast.training.sampling_execution import (
+    configure_sampling_connection,
+    full_relation_metadata,
+    load_full_relation_frame,
+    sample_relation_frame,
+    sampling_metadata_for_relation,
+)
 from praedixa.demand_forecast.training.sampling_loader_context import (
-    common_schema_previews,
+    parquet_relations_with_dataset_source,
     parquet_relation_sql,
-    relation_sql_with_dataset_source,
-    target_filter_columns,
+    parquet_target_filter_context,
 )
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_DATASET_SOURCE_COL,
@@ -25,40 +33,15 @@ from praedixa.demand_forecast.training.constants import (
 )
 from praedixa.demand_forecast.training.sampling import (
     GoldSplitSamplingSpec,
-    RelationSamplingQuery,
     RelationSamplingSpec,
     build_gold_split_sampling_query,
-    build_sampling_query_for_relation,
     load_gold_split_sampling_metadata,
-    load_sampling_metadata_from_relation,
     log_sampling_summary,
+    relation_sampling_requires_top_up,
     refresh_sampling_metadata_from_sampled_frame,
     resolve_gold_projection_columns,
     resolve_sampling_store_col,
 )
-def _sampling_metadata_for_relation(
-    *,
-    connection: duckdb.DuckDBPyConnection,
-    spec: RelationSamplingSpec,
-    available_columns: list[str],
-) -> dict[str, object]:
-    return load_sampling_metadata_from_relation(
-        connection,
-        spec=spec,
-        available_columns=available_columns,
-    )
-
-def _sample_relation_frame(
-    *,
-    connection: duckdb.DuckDBPyConnection,
-    spec: RelationSamplingSpec,
-    selected_columns: list[str],
-) -> pd.DataFrame:
-    return connection.execute(
-        build_sampling_query_for_relation(
-            query=RelationSamplingQuery(spec=spec, selected_columns=selected_columns)
-        )
-    ).fetchdf()
 
 def _gold_sampling_context(
     connection: duckdb.DuckDBPyConnection,
@@ -97,18 +80,13 @@ def _gold_sampling_context(
             sample_fraction=tuning_sample_fraction,
         ),
     )
-
 def _load_gold_sampling_metadata(
     connection: duckdb.DuckDBPyConnection,
     *,
     train_spec: GoldSplitSamplingSpec,
     tuning_spec: GoldSplitSamplingSpec,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    return (
-        load_gold_split_sampling_metadata(connection, spec=train_spec),
-        load_gold_split_sampling_metadata(connection, spec=tuning_spec),
-    )
-
+    return (load_gold_split_sampling_metadata(connection, spec=train_spec), load_gold_split_sampling_metadata(connection, spec=tuning_spec))
 def _load_gold_sampled_frames(
     connection: duckdb.DuckDBPyConnection,
     *,
@@ -142,7 +120,6 @@ def _load_gold_sampled_frames(
         )
     ).fetchdf()
     return train_frame, tuning_frame
-
 def _load_gold_from_connection(
     connection: duckdb.DuckDBPyConnection,
     *,
@@ -204,14 +181,14 @@ def _parquet_sampling_context(
     tuning_base_relation_sql = parquet_relation_sql(tuning_path)
     train_schema_preview = train_connection.execute(f"{train_base_relation_sql} limit 0").fetchdf()
     tuning_schema_preview = tuning_connection.execute(f"{tuning_base_relation_sql} limit 0").fetchdf()
-    train_relation_sql, train_columns, tuning_relation_sql, tuning_columns = _parquet_relations_with_dataset_source(
+    train_relation_sql, train_columns, tuning_relation_sql, tuning_columns = parquet_relations_with_dataset_source(
         train_base_relation_sql=train_base_relation_sql,
         tuning_base_relation_sql=tuning_base_relation_sql,
         train_columns=list(train_schema_preview.columns),
         tuning_columns=list(tuning_schema_preview.columns),
         dataset_source_col=dataset_source_col,
     )
-    sample_store_col, train_target_filter_col, tuning_target_filter_col = _parquet_target_filter_context(
+    sample_store_col, train_target_filter_col, tuning_target_filter_col = parquet_target_filter_context(
         train_schema_preview=train_schema_preview,
         tuning_schema_preview=tuning_schema_preview,
         dataset_source_col=dataset_source_col,
@@ -235,58 +212,6 @@ def _parquet_sampling_context(
             sample_store_col=sample_store_col,
             sample_fraction=tuning_sample_fraction,
         ),
-    )
-
-
-def _parquet_relations_with_dataset_source(
-    *,
-    train_base_relation_sql: str,
-    tuning_base_relation_sql: str,
-    train_columns: list[str],
-    tuning_columns: list[str],
-    dataset_source_col: str,
-) -> tuple[str, list[str], str, list[str]]:
-    train_relation_sql, resolved_train_columns = relation_sql_with_dataset_source(
-        base_relation_sql=train_base_relation_sql,
-        columns=train_columns,
-        dataset_source_col=dataset_source_col,
-    )
-    tuning_relation_sql, resolved_tuning_columns = relation_sql_with_dataset_source(
-        base_relation_sql=tuning_base_relation_sql,
-        columns=tuning_columns,
-        dataset_source_col=dataset_source_col,
-    )
-    return (
-        train_relation_sql,
-        resolved_train_columns,
-        tuning_relation_sql,
-        resolved_tuning_columns,
-    )
-
-
-def _parquet_target_filter_context(
-    *,
-    train_schema_preview: pd.DataFrame,
-    tuning_schema_preview: pd.DataFrame,
-    dataset_source_col: str,
-    target_col: str,
-) -> tuple[str, str, str]:
-    train_target_schema_preview, tuning_target_schema_preview = common_schema_previews(
-        train_schema_preview=train_schema_preview,
-        tuning_schema_preview=tuning_schema_preview,
-        dataset_source_col=dataset_source_col,
-    )
-    _target_contract, train_target_filter_col, tuning_target_filter_col = target_filter_columns(
-        train_columns=list(train_target_schema_preview.columns),
-        tuning_columns=list(tuning_target_schema_preview.columns),
-        train_target_schema_preview=train_target_schema_preview,
-        tuning_target_schema_preview=tuning_target_schema_preview,
-        target_col=target_col,
-    )
-    return (
-        resolve_sampling_store_col(train_target_schema_preview),
-        train_target_filter_col,
-        tuning_target_filter_col,
     )
 
 
@@ -314,27 +239,84 @@ def _load_parquet_from_connections(
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
     )
-    train_sampling_metadata = _sampling_metadata_for_relation(
-        connection=train_connection,
-        spec=train_sampling_spec,
-        available_columns=train_columns,
-    )
-    tuning_sampling_metadata = _sampling_metadata_for_relation(
-        connection=tuning_connection,
-        spec=tuning_sampling_spec,
-        available_columns=tuning_columns,
-    )
-    logger.info("Submitting sampled parquet train query.")
-    train_frame = _sample_relation_frame(
-        connection=train_connection,
-        spec=train_sampling_spec,
-        selected_columns=train_columns,
-    )
-    logger.info("Submitting sampled parquet validation query.")
-    tuning_frame = _sample_relation_frame(
-        connection=tuning_connection,
-        spec=tuning_sampling_spec,
-        selected_columns=tuning_columns,
+    train_full_load = train_sampling_spec.sample_fraction >= 1.0
+    tuning_full_load = tuning_sampling_spec.sample_fraction >= 1.0
+    if train_full_load:
+        train_sampling_spec = replace(train_sampling_spec, allow_top_up=False)
+        logger.info("Bypassing parquet train sampling because sample_fraction=1.0; loading full relation directly.")
+        train_frame = load_full_relation_frame(
+            connection=train_connection,
+            relation_sql=train_sampling_spec.relation_sql,
+            selected_columns=train_columns,
+        )
+        train_sampling_metadata = full_relation_metadata(
+            frame=train_frame,
+            spec=train_sampling_spec,
+        )
+    else:
+        train_sampling_metadata = sampling_metadata_for_relation(
+            connection=train_connection,
+            spec=train_sampling_spec,
+            available_columns=train_columns,
+        )
+        train_sampling_spec = replace(
+            train_sampling_spec,
+            allow_top_up=relation_sampling_requires_top_up(train_sampling_metadata),
+        )
+        logger.info(
+            "Executing sampled parquet train query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s",
+            train_path,
+            train_sampling_metadata["original_rows"],
+            train_sampling_metadata["sampled_rows"],
+            len(train_columns),
+        )
+        train_frame = sample_relation_frame(
+            connection=train_connection,
+            spec=train_sampling_spec,
+            selected_columns=train_columns,
+        )
+    if tuning_full_load:
+        tuning_sampling_spec = replace(tuning_sampling_spec, allow_top_up=False)
+        logger.info("Bypassing parquet validation sampling because sample_fraction=1.0; loading full relation directly.")
+        tuning_frame = load_full_relation_frame(
+            connection=tuning_connection,
+            relation_sql=tuning_sampling_spec.relation_sql,
+            selected_columns=tuning_columns,
+        )
+        tuning_sampling_metadata = full_relation_metadata(
+            frame=tuning_frame,
+            spec=tuning_sampling_spec,
+        )
+    else:
+        tuning_sampling_metadata = sampling_metadata_for_relation(
+            connection=tuning_connection,
+            spec=tuning_sampling_spec,
+            available_columns=tuning_columns,
+        )
+        tuning_sampling_spec = replace(
+            tuning_sampling_spec,
+            allow_top_up=relation_sampling_requires_top_up(tuning_sampling_metadata),
+        )
+        logger.info(
+            "Executing sampled parquet validation query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s",
+            tuning_path,
+            tuning_sampling_metadata["original_rows"],
+            tuning_sampling_metadata["sampled_rows"],
+            len(tuning_columns),
+        )
+        tuning_frame = sample_relation_frame(
+            connection=tuning_connection,
+            spec=tuning_sampling_spec,
+            selected_columns=tuning_columns,
+        )
+    log_sampling_summary("Planned train", train_sampling_metadata, logger=logger)
+    log_sampling_summary("Planned validation", tuning_sampling_metadata, logger=logger)
+    logger.info(
+        "Parquet loading execution plan: train_full_load=%s train_top_up=%s tuning_full_load=%s tuning_top_up=%s",
+        train_full_load,
+        train_sampling_spec.allow_top_up,
+        tuning_full_load,
+        tuning_sampling_spec.allow_top_up,
     )
     return train_frame, tuning_frame, sample_store_col, train_sampling_metadata, tuning_sampling_metadata
 
@@ -399,7 +381,14 @@ def load_parquet_train_tuning_frames(
     )
     train_connection = duckdb.connect()
     tuning_connection = duckdb.connect()
+    sampling_threads = max(1, os.cpu_count() or 1)
     try:
+        for connection in (train_connection, tuning_connection):
+            configure_sampling_connection(connection, threads=sampling_threads)
+        logger.info(
+            "Configured DuckDB parquet sampling runtime: threads_per_query=%s preserve_insertion_order=false",
+            sampling_threads,
+        )
         train_frame, tuning_frame, sample_store_col, train_sampling_metadata, tuning_sampling_metadata = _load_parquet_from_connections(
             train_connection=train_connection,
             tuning_connection=tuning_connection,

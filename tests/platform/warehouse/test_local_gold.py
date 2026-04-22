@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 import sys
 import unittest
 from unittest import mock
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.platform.warehouse.local_gold import (  # noqa: E402
     DEFAULT_GOLD_BAKERY_TEST_MONTHS,
@@ -22,17 +24,12 @@ from praedixa.platform.warehouse.local_gold import (  # noqa: E402
 
 
 class RunLocalGoldTests(unittest.TestCase):
-    def test_run_local_gold_script_can_be_called_directly_via_absolute_path(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "apps" / "warehouse" / "run_gold" / "main.py"), "--help"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            check=False,
-        )
+    def test_run_local_gold_wrapper_uses_no_cli_parser(self) -> None:
+        wrapper_path = PROJECT_ROOT / "apps" / "warehouse" / "run_gold" / "main.py"
+        source = wrapper_path.read_text(encoding="utf-8")
 
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("Run the local Praedixa silver -> gold workflow.", result.stdout)
+        self.assertNotIn("argparse", source)
+        self.assertNotIn("parse_args", source)
 
     def test_build_local_gold_env_defaults_to_local_duckdb_gold(self) -> None:
         env = build_local_gold_env(base_env={})

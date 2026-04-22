@@ -30,6 +30,11 @@ def _minimal_canonical_frame() -> pl.DataFrame:
             "category_level_3": ["family_1"],
             "dt": [pd.Timestamp("2024-01-01")],
             "observed_demand_qty": [12.0],
+            "target_semantics": ["observed_sales"],
+            "censor_flag": [False],
+            "target_source": ["observed_sales"],
+            "label_quality_score": [1.0],
+            "usable_for_training_flag": [True],
             "observed_revenue_net": [None],
             "observed_discount_amount": [0.1],
             "avg_selling_price": [None],
@@ -68,6 +73,7 @@ class GlobalDatasetSchemaTests(unittest.TestCase):
 
         self.assertEqual(aligned.schema["dt"], pl.Date)
         self.assertEqual(aligned.schema["observed_demand_qty"], pl.Float32)
+        self.assertEqual(aligned.schema["label_quality_score"], pl.Float32)
         self.assertEqual(aligned.schema["calendar_day_of_week"], pl.Int8)
 
 

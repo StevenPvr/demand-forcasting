@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
+import platform
 from typing import Any, Iterable, Iterator, cast
 import warnings
 
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.business_metrics import WAPEMetric
 from praedixa.demand_forecast.backends.tft.feature_mapping import (
     select_explicit_tft_feature_columns,
 )
@@ -44,19 +46,47 @@ _SUPPRESSED_TFT_WARNING_PATTERNS: tuple[str, ...] = (
     r"Attribute 'loss' is an instance of `nn\.Module` and is already saved during checkpointing\.",
     r"Attribute 'logging_metrics' is an instance of `nn\.Module` and is already saved during checkpointing\.",
     r"`isinstance\(treespec, LeafSpec\)` is deprecated, use `isinstance\(treespec, TreeSpec\) and treespec\.is_leaf\(\)` instead\.",
+    r"Min encoder length and/or min_prediction_idx and/or min prediction length and/or lags are too large for .* series/groups.*",
     r"The 'train_dataloader' does not have many workers which may be a bottleneck\.",
     r"The 'val_dataloader' does not have many workers which may be a bottleneck\.",
     r"The 'predict_dataloader' does not have many workers which may be a bottleneck\.",
     r"GPU available but not used\. You can set it by doing `Trainer\(accelerator='gpu'\)`\.",
 )
 _SUPPRESSED_TFT_LOGGERS: tuple[str, ...] = (
+    "lightning",
+    "lightning.pytorch",
+    "lightning.pytorch.accelerators",
+    "lightning.pytorch.core",
     "lightning.fabric.utilities.seed",
+    "lightning.pytorch.trainer.connectors.data_connector",
+    "lightning.pytorch.utilities.parsing",
     "lightning.pytorch.utilities.rank_zero",
+    "pytorch_lightning",
 )
+
+
+def _filter_tft_dataframe_fragmentation_warnings() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        category=pd.errors.PerformanceWarning,
+        module=r"pytorch_forecasting\.data\.timeseries\._timeseries",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Min encoder length and/or min_prediction_idx and/or min prediction length and/or lags are too large for .* series/groups.*",
+    )
+
+
+@contextmanager
+def suppress_tft_dataframe_fragmentation_warnings() -> Iterator[None]:
+    with warnings.catch_warnings():
+        _filter_tft_dataframe_fragmentation_warnings()
+        yield
 
 
 def lazy_import_tft_dependencies() -> dict[str, Any]:
     import torch
+    from torch.nn import ModuleList
     from lightning.pytorch import Trainer, seed_everything
     from lightning.pytorch.callbacks import (
         DeviceStatsMonitor,
@@ -81,12 +111,14 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
         "GroupNormalizer": GroupNormalizer,
         "LearningRateMonitor": LearningRateMonitor,
         "ModelCheckpoint": ModelCheckpoint,
+        "ModuleList": ModuleList,
         "TQDMProgressBar": TQDMProgressBar,
         "TensorBoardLogger": TensorBoardLogger,
         "TimeSeriesDataSet": TimeSeriesDataSet,
         "TemporalFusionTransformer": TemporalFusionTransformer,
         "NaNLabelEncoder": NaNLabelEncoder,
         "QuantileLoss": QuantileLoss,
+        "WAPEMetric": WAPEMetric,
     }
 
 
@@ -99,6 +131,7 @@ def suppress_tft_runtime_noise() -> Iterator[None]:
     with warnings.catch_warnings():
         for pattern in _SUPPRESSED_TFT_WARNING_PATTERNS:
             warnings.filterwarnings("ignore", message=pattern)
+        _filter_tft_dataframe_fragmentation_warnings()
         for _, logger, previous_level in logger_states:
             logger.setLevel(max(previous_level, logging.ERROR))
         try:
@@ -106,6 +139,12 @@ def suppress_tft_runtime_noise() -> Iterator[None]:
         finally:
             for _, logger, previous_level in logger_states:
                 logger.setLevel(previous_level)
+
+
+def should_serialize_local_cpu_folds() -> bool:
+    """Return whether CPU-only TFT fold execution should stay serial on this host."""
+
+    return platform.system() == "Darwin"
 
 
 def select_tft_feature_columns(
@@ -177,6 +216,11 @@ def _normalize_runtime_model_params(resolved: dict[str, object]) -> None:
     resolved["num_workers"] = int(cast(Any, resolved["num_workers"]))
     resolved["pin_memory"] = bool(cast(Any, resolved["pin_memory"]))
     resolved["persistent_workers"] = bool(cast(Any, resolved["persistent_workers"]))
+    resolved["prefetch_factor"] = (
+        None
+        if resolved.get("prefetch_factor") in {None, 0}
+        else int(cast(Any, resolved["prefetch_factor"]))
+    )
     resolved["precision"] = str(cast(Any, resolved["precision"]))
     resolved["matmul_precision"] = str(cast(Any, resolved["matmul_precision"]))
     resolved["tensorboard_logdir"] = (

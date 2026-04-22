@@ -16,6 +16,7 @@ class RelationSamplingSpec:
     sample_store_col: str
     sample_fraction: float
     min_samples_per_dataset: int = DEFAULT_MIN_SAMPLES_PER_DATASET
+    allow_top_up: bool = True
 
 
 @dataclass(frozen=True)

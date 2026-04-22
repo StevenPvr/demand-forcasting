@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypeAlias
 
+import numpy as np
 import pandas as pd
 import polars as pl
 
@@ -82,7 +83,7 @@ def _template_readme_text() -> str:
             "- observed_demand_qty",
             "",
             "Once filled, convert the daily feed to parquet and save it as",
-            "`data/commercial_datasets/raw/first_party_daily.parquet`.",
+            "`var/sources/commercial_datasets/raw/first_party_daily.parquet`.",
         ]
     )
 
@@ -162,15 +163,17 @@ def _default_first_party_values(
         "observed_revenue_net": None,
         "observed_discount_amount": None,
         "avg_selling_price": None,
+        "target_semantics": "observed_sales",
+        "target_source": "observed_sales",
         "promo_flag": False,
         "holiday_flag": False,
         "activity_flag": False,
         "observed_stockout_flag": None,
         "observed_stockout_available": False,
         "observed_stockout_intensity": None,
-        "location_open_flag": True,
-        "day_complete_flag": True,
-        "missing_sales_flag": False,
+        "location_open_flag": None,
+        "day_complete_flag": None,
+        "missing_sales_flag": None,
         "event_name_1": None,
         "event_type_1": None,
         "event_name_2": None,
@@ -195,6 +198,27 @@ def _apply_missing_defaults(
     return normalized
 
 
+def _finalize_label_columns(normalized: pd.DataFrame) -> pd.DataFrame:
+    finalized = normalized.copy()
+    stockout_flag = finalized.get("observed_stockout_flag")
+    if stockout_flag is None:
+        stockout_mask = pd.Series(False, index=finalized.index, dtype=bool)
+    else:
+        stockout_mask = pd.Series(stockout_flag).fillna(False).astype(bool)
+    stockout_available = pd.Series(
+        finalized.get("observed_stockout_available", False),
+        index=finalized.index,
+    ).fillna(False).astype(bool)
+    finalized["censor_flag"] = stockout_mask
+    finalized["label_quality_score"] = np.where(
+        stockout_mask,
+        0.5,
+        np.where(stockout_available, 1.0, 0.75),
+    ).astype("float32")
+    finalized["usable_for_training_flag"] = (~stockout_mask).astype(bool)
+    return finalized
+
+
 def standardize_first_party_daily_frame(
     frame: pd.DataFrame,
     *,
@@ -214,6 +238,7 @@ def standardize_first_party_daily_frame(
             normalized=normalized,
         ),
     )
+    normalized = _finalize_label_columns(normalized)
 
     lazy_frame = pl.from_pandas(normalized).lazy().with_columns(
         [

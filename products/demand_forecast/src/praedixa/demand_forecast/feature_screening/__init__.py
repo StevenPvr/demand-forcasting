@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Lag feature selection helpers for demand forecasting."""
 
 from praedixa.demand_forecast.feature_screening.pipeline import (

@@ -72,6 +72,15 @@ def _learning_target_column(
     return absolute_target_col
 
 
+def _target_transform_mode(
+    train_frame: pd.DataFrame,
+    *,
+    learning_target_col: str,
+) -> str:
+    train_min = float(train_frame[learning_target_col].min())
+    return "log1p" if train_min >= 0.0 else "identity"
+
+
 def resolve_target_contract(
     train_frame: pd.DataFrame,
     tuning_frame: pd.DataFrame,
@@ -100,11 +109,10 @@ def resolve_target_contract(
         requested_target_col=requested_target_col,
         absolute_target_col=absolute_target_col,
     )
-    combined_min = min(
-        float(train_frame[learning_target_col].min()),
-        float(tuning_frame[learning_target_col].min()),
+    target_mode = _target_transform_mode(
+        train_frame,
+        learning_target_col=learning_target_col,
     )
-    target_mode = "log1p" if combined_min >= 0.0 else "identity"
     return TargetContract(
         learning_target_col=learning_target_col,
         absolute_target_col=absolute_target_col,

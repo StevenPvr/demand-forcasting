@@ -24,6 +24,10 @@ def defragment_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.copy()
 
 
+def has_precomputed_group_and_time_columns(frame: pd.DataFrame) -> bool:
+    return GROUP_COL in frame.columns and TIME_IDX_COL in frame.columns
+
+
 def build_group_identifier(frame: pd.DataFrame, group_source_cols: list[str]) -> pd.Series:
     if not group_source_cols:
         return pd.Series(["global_series"] * len(frame), index=frame.index, dtype="string")
@@ -76,24 +80,43 @@ def build_combined_frame(
 
 
 def cast_categorical_columns(frame: pd.DataFrame, categorical_cols: Iterable[str]) -> pd.DataFrame:
-    casted = frame.copy()
-    for column in categorical_cols:
-        series = casted[column]
+    resolved_columns = [
+        column for column in dict.fromkeys(categorical_cols) if column in frame.columns
+    ]
+    if not resolved_columns:
+        return defragment_frame(frame)
+    transformed_columns: dict[str, pd.Series] = {}
+    for column in resolved_columns:
+        series = frame[column]
         if isinstance(series.dtype, pd.CategoricalDtype):
             filled = series.cat.add_categories(["<NA>"]) if "<NA>" not in series.cat.categories else series
-            casted[column] = filled.fillna("<NA>")
+            transformed_columns[column] = filled.fillna("<NA>")
             continue
-        casted[column] = series.astype("string").fillna("<NA>").astype("category")
-    return defragment_frame(casted)
+        transformed_columns[column] = series.astype("string").fillna("<NA>").astype("category")
+    passthrough_columns = [
+        column for column in frame.columns if column not in transformed_columns
+    ]
+    transformed_frame = pd.DataFrame(transformed_columns, index=frame.index)
+    ordered = pd.concat(
+        [frame.loc[:, passthrough_columns].copy(), transformed_frame],
+        axis=1,
+    ).loc[:, frame.columns]
+    return defragment_frame(ordered)
 
 
 def attach_group_and_time_columns(frame: pd.DataFrame, feature_cols: list[str]) -> pd.DataFrame:
     prepared = frame.copy()
     prepared["dt"] = pd.to_datetime(prepared["dt"])
-    group_source_cols = select_explicit_tft_group_id_columns(prepared)
-    prepared[GROUP_COL] = build_group_identifier(prepared, group_source_cols)
-    prepared = prepared.sort_values([GROUP_COL, "dt"]).reset_index(drop=True)
-    prepared[TIME_IDX_COL] = prepared.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
+    if has_precomputed_group_and_time_columns(prepared):
+        prepared[GROUP_COL] = prepared[GROUP_COL].astype("string").fillna("<NA>")
+        prepared[TIME_IDX_COL] = pd.to_numeric(prepared[TIME_IDX_COL], errors="raise").astype(np.int32)
+        prepared = prepared.sort_values([GROUP_COL, TIME_IDX_COL, "dt"]).reset_index(drop=True)
+        prepared[TIME_IDX_COL] = prepared.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
+    else:
+        group_source_cols = select_explicit_tft_group_id_columns(prepared)
+        prepared[GROUP_COL] = build_group_identifier(prepared, group_source_cols)
+        prepared = prepared.sort_values([GROUP_COL, "dt"]).reset_index(drop=True)
+        prepared[TIME_IDX_COL] = prepared.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
     feature_categoricals = select_explicit_tft_categorical_columns(feature_cols)
     return defragment_frame(cast_categorical_columns(prepared, [*feature_categoricals, GROUP_COL]))
 

@@ -20,10 +20,10 @@ class SourceRegistryTests(unittest.TestCase):
     def test_allowed_training_dataset_sources_excludes_blocked_and_non_training_sources(self) -> None:
         allowed_sources = allowed_training_dataset_sources()
 
-        self.assertIn("freshretail", allowed_sources)
-        self.assertIn("freshretail_lt", allowed_sources)
-        self.assertIn("bakery", allowed_sources)
-        self.assertIn("uci_online_retail_ii", allowed_sources)
+        self.assertEqual(
+            allowed_sources,
+            ["bakery", "first_party_daily", "freshretail", "freshretail_lt"],
+        )
         self.assertNotIn("open_meteo_api", allowed_sources)
 
     def test_registry_seed_contains_expected_statuses(self) -> None:

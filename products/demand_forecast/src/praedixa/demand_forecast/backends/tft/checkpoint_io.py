@@ -15,6 +15,7 @@ from praedixa.demand_forecast.backends.tft.frame_utils import WEIGHT_COL, defrag
 _SUPPRESSED_TFT_WARNING_PATTERNS: tuple[str, ...] = (
     r"Attribute 'loss' is an instance of `nn\.Module` and is already saved during checkpointing\.",
     r"Attribute 'logging_metrics' is an instance of `nn\.Module` and is already saved during checkpointing\.",
+    r"Min encoder length and/or min_prediction_idx and/or min prediction length and/or lags are too large for .* series/groups.*",
 )
 _SUPPRESSED_TFT_LOGGERS: tuple[str, ...] = (
     "lightning.fabric.utilities.seed",

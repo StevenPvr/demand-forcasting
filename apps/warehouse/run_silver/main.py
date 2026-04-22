@@ -17,8 +17,10 @@ def _resolve_project_root() -> Path:
 
 
 PROJECT_ROOT = _resolve_project_root()
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def main() -> None:

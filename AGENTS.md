@@ -567,9 +567,10 @@ df = prices.merge(macro, on="date")
 - Le repo est centré sur la prevision de demande Praedixa.
 - La couche canonique est le pipeline medaillon `bronze -> silver -> gold` dans `platform/warehouse/`.
 - Les points d'entree locaux actifs sont :
-  1. `apps/warehouse/run_silver/main.py`
-  2. `apps/warehouse/run_gold/main.py`
-  3. `apps/platform/build_global_dataset/main.py`
+  1. `apps/warehouse/main.py`
+  2. `apps/warehouse/run_silver/main.py`
+  3. `apps/warehouse/run_gold/main.py`
+  4. `apps/platform/build_global_dataset/main.py`
 - `features_selection_lag` reste utile pour la preparation et l'analyse locale, mais ce n'est pas la vision finale du backend modele.
 - `optimisation` et `evaluation` doivent etre pensees pour un backend TFT unique, meme si ce backend n'est pas encore branche completement. Tant que ce backend n'est pas connecte, ces etapes doivent se comporter comme des placeholders explicites.
 - La cible ideale reste la demande latente. Quand elle n'est pas reconstructible proprement, le repo doit parler explicitement de ventes observees.
@@ -694,6 +695,9 @@ if __name__ == "__main__":
 - [ ] **Tout** pipeline s'active via son `main.py`, jamais en important directement un module.
 - [ ] Le `sys.path` n'est autorise que dans un wrapper mince si l'execution locale le rend necessaire.
 - [ ] Le `if __name__ == "__main__"` est obligatoire.
+- [ ] **Aucun parsing CLI dans les wrappers `main.py`** : pas de `argparse`, pas de `parser`, pas de `click`, pas de flags `--help`.
+- [ ] Un `main.py` de pipeline doit pouvoir etre lance tel quel depuis l'IDE, sans argument, avec une configuration par defaut definie dans le module importable.
+- [ ] Si une variante de configuration est necessaire, elle vit dans une fonction ou une dataclass importable (`build_default_*_config`, `RunConfig`, etc.), pas dans des options de ligne de commande.
 
 ### 5.4.c Packaging et entrypoints
 

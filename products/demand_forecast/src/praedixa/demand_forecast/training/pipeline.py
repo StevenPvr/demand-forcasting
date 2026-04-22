@@ -4,13 +4,13 @@ import logging
 
 import pandas as pd
 
-from praedixa.demand_forecast.feature_screening.pipeline import DEFAULT_N_FOLDS
 from praedixa.demand_forecast.training.baselines import (
     evaluate_statistical_baselines_macro as _evaluate_statistical_baselines_macro_internal,
 )
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_DATASET_SOURCE_COL,
     DEFAULT_DATE_COL,
+    DEFAULT_N_FOLDS,
 )
 from praedixa.demand_forecast.training.folds import (
     build_grouped_tuning_walk_forward_folds_by_dataset as _build_grouped_tuning_walk_forward_folds_by_dataset_internal,

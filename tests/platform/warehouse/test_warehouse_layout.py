@@ -35,6 +35,7 @@ class WarehouseLayoutTests(unittest.TestCase):
             PROJECT_ROOT / "platform" / "warehouse" / "models" / "silver" / "schema.yml",
             PROJECT_ROOT / "platform" / "warehouse" / "models" / "gold" / "gold_daily_product_forecast_panel_d1.sql",
             PROJECT_ROOT / "platform" / "warehouse" / "models" / "gold" / "schema.yml",
+            PROJECT_ROOT / "apps" / "warehouse" / "main.py",
             PROJECT_ROOT / "apps" / "warehouse" / "load_bronze" / "main.py",
             PROJECT_ROOT / "apps" / "platform" / "fetch_open_exogenous" / "main.py",
             PROJECT_ROOT / "apps" / "warehouse" / "run_silver" / "main.py",
@@ -49,7 +50,7 @@ class WarehouseLayoutTests(unittest.TestCase):
         sql = model_path.read_text(encoding="utf-8")
 
         self.assertIn("silver_freshretail_daily_product_demand", sql)
-        self.assertIn("silver_commercial_external_daily_product_demand", sql)
+        self.assertIn("silver_supplemental_corpus_daily_product_demand", sql)
         self.assertIn("silver_bakery_daily_product_demand", sql)
         self.assertIn("silver_allowed_training_dataset_sources", sql)
 

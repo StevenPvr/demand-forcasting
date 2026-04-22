@@ -4,9 +4,6 @@ from typing import Any, cast
 
 import pandas as pd
 
-UCI_ONLINE_RETAIL_ASSUMPTION_SOURCE = "uci_online_retail_single_uk_retailer_hypothesis"
-ECOMMERCE_SITE_FORMAT = "ecommerce"
-DELIVERY_ONLY_SERVICE_MODEL = "delivery_only"
 COUNTER_SERVICE_MODEL = "counter_service"
 STORE_PICK_PACK_SERVICE_MODEL = "store_pick_pack"
 DATASET_SOURCE_COL = "dataset_source"
@@ -27,6 +24,7 @@ def _is_missing_country_code(country_code: object) -> bool:
         return bool(pd.isna(country_code))
     return False
 
+
 def _fixed_source_metadata(
     *,
     country_code: str | None,
@@ -41,6 +39,7 @@ def _fixed_source_metadata(
         "service_model": service_model,
     }
 
+
 FIXED_SOURCE_METADATA = {
     "freshretail_lt": _fixed_source_metadata(
         country_code="CN",
@@ -48,47 +47,11 @@ FIXED_SOURCE_METADATA = {
         site_format="grocery",
         service_model=STORE_PICK_PACK_SERVICE_MODEL,
     ),
-    "uci_online_retail": _fixed_source_metadata(
-        country_code="GB",
-        assumption_source=UCI_ONLINE_RETAIL_ASSUMPTION_SOURCE,
-        site_format=ECOMMERCE_SITE_FORMAT,
-        service_model=DELIVERY_ONLY_SERVICE_MODEL,
-    ),
-    "uci_online_retail_ii": _fixed_source_metadata(
-        country_code="GB",
-        assumption_source=UCI_ONLINE_RETAIL_ASSUMPTION_SOURCE,
-        site_format=ECOMMERCE_SITE_FORMAT,
-        service_model=DELIVERY_ONLY_SERVICE_MODEL,
-    ),
-    "mendeley_pharmacy_id": _fixed_source_metadata(
-        country_code="ID",
-        assumption_source="mendeley_pharmacy_indonesia_country_hypothesis",
-        site_format="pharmacy",
-        service_model=COUNTER_SERVICE_MODEL,
-    ),
-    "mendeley_bangladesh_retail": _fixed_source_metadata(
-        country_code="BD",
-        assumption_source="mendeley_bangladesh_retail_country_hypothesis",
-        site_format="general_trade",
-        service_model="field_replenishment",
-    ),
-    "mendeley_ecommerce": _fixed_source_metadata(
-        country_code=None,
-        assumption_source="mendeley_ecommerce_country_unknown",
-        site_format=ECOMMERCE_SITE_FORMAT,
-        service_model=DELIVERY_ONLY_SERVICE_MODEL,
-    ),
     "first_party_daily": _fixed_source_metadata(
         country_code=None,
         assumption_source="first_party_location_metadata_pending_client_onboarding",
         site_format="unknown",
         service_model="unknown",
-    ),
-    "synthetic_v1": _fixed_source_metadata(
-        country_code=None,
-        assumption_source="synthetic_location_metadata_generated_with_internal_defaults",
-        site_format="synthetic_food_service",
-        service_model=COUNTER_SERVICE_MODEL,
     ),
 }
 
@@ -124,6 +87,8 @@ def _location_profile_fields(
         "residential_density_bucket": residential_density_bucket,
         "competition_intensity_bucket": competition_intensity_bucket,
     }
+
+
 def _bakery_location_metadata_row(
     location: object,
     *,

@@ -2,14 +2,18 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
+for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.backends.tft.model_utils import (  # noqa: E402
     DEFAULT_TFT_MODEL_PARAMS,
@@ -28,7 +32,7 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (  # noqa: E402
 class TFTModelUtilsTests(unittest.TestCase):
     def test_default_tft_model_params_enable_native_progress_bar(self) -> None:
         self.assertTrue(bool(DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
-        self.assertEqual(int(DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"]), 1)
+        self.assertEqual(int(cast(Any, DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"])), 1)
 
     def _build_training_frame(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         dates = pd.date_range("2024-01-01", periods=32, freq="D")
@@ -293,6 +297,24 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertNotIn("lag_1", feature_cols)
         self.assertEqual(layout["time_varying_unknown_categoricals"], [])
         self.assertEqual(layout["time_varying_unknown_reals"], [])
+
+    def test_precomputed_time_idx_is_rebased_after_slicing_gaps(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "series_id": ["store_1__sku_1"] * 4,
+                "location_id": ["store_1"] * 4,
+                "product_id": ["sku_1"] * 4,
+                "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-05", "2024-01-06"]),
+                "__tft_group_id": ["store_1__sku_1"] * 4,
+                "__tft_time_idx": [0, 1, 4, 5],
+                "target": [1.0, 2.0, 3.0, 4.0],
+                "rolling_mean_7": [1.0, 1.5, 2.0, 2.5],
+            }
+        )
+
+        prepared = attach_group_and_time_columns(frame, ["rolling_mean_7"])
+
+        self.assertEqual(prepared["__tft_time_idx"].tolist(), [0, 1, 2, 3])
 
 
 if __name__ == "__main__":

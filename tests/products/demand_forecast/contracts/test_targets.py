@@ -69,6 +69,18 @@ class TargetUtilsTests(unittest.TestCase):
 
         np.testing.assert_allclose(reconstructed, frame["target"].to_numpy(dtype=float))
 
+    def test_resolve_target_contract_uses_train_only_for_transform_selection(self) -> None:
+        train_frame = pd.DataFrame({"target": [1.0, 2.0, 3.0]})
+        tuning_frame = pd.DataFrame({"target": [-5.0, -2.0, -1.0]})
+
+        target_contract = resolve_target_contract(
+            train_frame,
+            tuning_frame,
+            requested_target_col="target",
+        )
+
+        self.assertEqual(target_contract.target_mode, "log1p")
+
 
 if __name__ == "__main__":
     unittest.main()

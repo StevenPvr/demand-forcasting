@@ -102,15 +102,14 @@ def _attach_bakery_canonical_columns(
     return enriched
 
 
-def build_bakery_standardized_dataset(
-    output_path: str | Path = DEFAULT_OUTPUT_PATH,
+def build_bakery_standardized_frame(
     *,
     input_path: str | Path = DEFAULT_INPUT_PATH,
     location_id: str = DEFAULT_LOCATION_ID,
     source_run_id: str = DEFAULT_SOURCE_RUN_ID,
     silver_run_id: str = DEFAULT_SILVER_RUN_ID,
-) -> Path:
-    """Aggregate bakery ticket-line data into the canonical daily demand contract."""
+) -> pl.DataFrame:
+    """Aggregate bakery ticket-line data into the canonical daily demand contract in memory."""
 
     source_path = Path(input_path)
     if not source_path.exists():
@@ -123,9 +122,26 @@ def build_bakery_standardized_dataset(
         source_run_id=source_run_id,
         silver_run_id=silver_run_id,
     )
+    return align_lazy_frame_to_canonical_schema(pl.from_pandas(enriched).lazy()).collect()
+
+
+def build_bakery_standardized_dataset(
+    output_path: str | Path = DEFAULT_OUTPUT_PATH,
+    *,
+    input_path: str | Path = DEFAULT_INPUT_PATH,
+    location_id: str = DEFAULT_LOCATION_ID,
+    source_run_id: str = DEFAULT_SOURCE_RUN_ID,
+    silver_run_id: str = DEFAULT_SILVER_RUN_ID,
+) -> Path:
+    """Aggregate bakery ticket-line data into the canonical daily demand contract."""
 
     target_path = Path(output_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    canonical = align_lazy_frame_to_canonical_schema(pl.from_pandas(enriched).lazy()).collect()
+    canonical = build_bakery_standardized_frame(
+        input_path=input_path,
+        location_id=location_id,
+        source_run_id=source_run_id,
+        silver_run_id=silver_run_id,
+    )
     canonical.write_parquet(target_path)
     return target_path

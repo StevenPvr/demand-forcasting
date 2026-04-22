@@ -12,32 +12,38 @@ from praedixa.demand_forecast.backends.tft.runtime_profile import (
     DEFAULT_RUNTIME_PROFILE_NAME,
     resolve_runtime_profile,
 )
-from praedixa.demand_forecast.training.constants import DEFAULT_MAX_PARALLEL_FOLD_WORKERS
-
-_HIDDEN_SIZE_CHOICES = [8, 16, 24, 32, 48, 64]
-_HIDDEN_CONTINUOUS_SIZE_CHOICES = [4, 8, 12, 16, 24, 32]
-_ATTENTION_HEAD_SIZE_CHOICES = [1, 2, 4]
-_BATCH_SIZE_CHOICES = [32, 64, 128]
-_ENCODER_LENGTH_CHOICES = [14, 28, 56]
-_GRADIENT_CLIP_CHOICES = [0.05, 0.1, 0.5, 1.0]
-_LSTM_LAYER_CHOICES = [1, 2, 3]
-_HPO_STAGE_A_EPOCH_RANGE = (8, 12)
-_HPO_STAGE_B_EPOCH_RANGE = (20, 30)
-_HPO_PRUNER_CONFIG: dict[str, int | str] = {
-    "type": "MedianPruner",
-    "n_startup_trials": 2,
-    "n_warmup_steps": 1,
-    "interval_steps": 1,
-}
-_LEARNING_RATE_SEARCH_LOW = 1e-3
-_LEARNING_RATE_SEARCH_HIGH = 1e-2
+from praedixa.demand_forecast.backends.tft.model_common import (
+    should_serialize_local_cpu_folds,
+)
+from praedixa.demand_forecast.training.constants import (
+    DEFAULT_MAX_PARALLEL_FOLD_WORKERS,
+    DEFAULT_STAGE_BUDGET,
+    DEFAULT_TUNING_ANCHORED_LOG_LOWER_FACTOR,
+    DEFAULT_TUNING_ANCHORED_LOG_UPPER_FACTOR,
+    DEFAULT_TUNING_ATTENTION_HEAD_SIZE_CHOICES,
+    DEFAULT_TUNING_BATCH_SIZE_CHOICES,
+    DEFAULT_TUNING_DROPOUT_HIGH,
+    DEFAULT_TUNING_DROPOUT_LOW,
+    DEFAULT_TUNING_DROPOUT_STAGE_B_MARGIN,
+    DEFAULT_TUNING_ENCODER_LENGTH_CHOICES,
+    DEFAULT_TUNING_GRADIENT_CLIP_CHOICES,
+    DEFAULT_TUNING_HIDDEN_CONTINUOUS_SIZE_CHOICES,
+    DEFAULT_TUNING_HIDDEN_SIZE_CHOICES,
+    DEFAULT_TUNING_LEARNING_RATE_HIGH,
+    DEFAULT_TUNING_LEARNING_RATE_LOW,
+    DEFAULT_TUNING_LSTM_LAYER_CHOICES,
+    DEFAULT_TUNING_PRUNER_CONFIG,
+    DEFAULT_TUNING_STAGE_POLICIES,
+    DEFAULT_TUNING_WEIGHT_DECAY_HIGH,
+    DEFAULT_TUNING_WEIGHT_DECAY_LOW,
+)
 
 
 def _log_float_bounds(anchor: object, *, low: float, high: float) -> tuple[float, float]:
     if not isinstance(anchor, (int, float)):
         return low, high
-    lower = max(low, float(anchor) * 0.5)
-    upper = min(high, float(anchor) * 2.0)
+    lower = max(low, float(anchor) * DEFAULT_TUNING_ANCHORED_LOG_LOWER_FACTOR)
+    upper = min(high, float(anchor) * DEFAULT_TUNING_ANCHORED_LOG_UPPER_FACTOR)
     return (low, high) if lower >= upper else (lower, upper)
 
 
@@ -52,15 +58,15 @@ def _linear_float_bounds(anchor: object, *, low: float, high: float, margin: flo
 def resolve_stage_policy(
     tuning_trials: int,
     *,
-    stage_budget: str = "standard",
+    stage_budget: str = DEFAULT_STAGE_BUDGET,
 ) -> dict[str, dict[str, object]]:
-    stage_a_ratio = 0.75
-    stage_a_epoch_range = _HPO_STAGE_A_EPOCH_RANGE
-    stage_b_epoch_range = _HPO_STAGE_B_EPOCH_RANGE
-    if stage_budget == "quick":
-        stage_a_ratio, stage_a_epoch_range, stage_b_epoch_range = 0.85, (6, 10), (12, 18)
-    elif stage_budget == "full":
-        stage_a_ratio, stage_a_epoch_range, stage_b_epoch_range = 0.65, (10, 14), (24, 36)
+    policy = DEFAULT_TUNING_STAGE_POLICIES.get(
+        stage_budget,
+        DEFAULT_TUNING_STAGE_POLICIES[DEFAULT_STAGE_BUDGET],
+    )
+    stage_a_ratio = float(cast(Any, policy["stage_a_ratio"]))
+    stage_a_epoch_range = cast(tuple[int, int], cast(Any, policy["stage_a_epoch_range"]))
+    stage_b_epoch_range = cast(tuple[int, int], cast(Any, policy["stage_b_epoch_range"]))
     stage_a_trials = max(1, min(tuning_trials, int(math.ceil(tuning_trials * stage_a_ratio))))
     return {
         "stage_a": {"trial_count": stage_a_trials, "epoch_range": list(stage_a_epoch_range), "search_mode": "broad"},
@@ -95,41 +101,88 @@ def sample_optuna_params(
     epoch_range: tuple[int, int] | None = None,
 ) -> dict[str, object]:
     if stage_name == "stage_b":
-        resolved_epoch_range = epoch_range or _HPO_STAGE_B_EPOCH_RANGE
+        standard_policy = DEFAULT_TUNING_STAGE_POLICIES[DEFAULT_STAGE_BUDGET]
+        resolved_epoch_range = epoch_range or cast(
+            tuple[int, int],
+            cast(Any, standard_policy["stage_b_epoch_range"]),
+        )
         learning_rate_low, learning_rate_high = _log_float_bounds(
             anchor_params.get("learning_rate") if anchor_params else None,
-            low=_LEARNING_RATE_SEARCH_LOW,
-            high=_LEARNING_RATE_SEARCH_HIGH,
+            low=DEFAULT_TUNING_LEARNING_RATE_LOW,
+            high=DEFAULT_TUNING_LEARNING_RATE_HIGH,
         )
-        dropout_low, dropout_high = _linear_float_bounds(anchor_params.get("dropout") if anchor_params else None, low=0.05, high=0.30, margin=0.08)
-        weight_decay_low, weight_decay_high = _log_float_bounds(anchor_params.get("weight_decay") if anchor_params else None, low=1e-6, high=1e-2)
+        dropout_low, dropout_high = _linear_float_bounds(
+            anchor_params.get("dropout") if anchor_params else None,
+            low=DEFAULT_TUNING_DROPOUT_LOW,
+            high=DEFAULT_TUNING_DROPOUT_HIGH,
+            margin=DEFAULT_TUNING_DROPOUT_STAGE_B_MARGIN,
+        )
+        weight_decay_low, weight_decay_high = _log_float_bounds(
+            anchor_params.get("weight_decay") if anchor_params else None,
+            low=DEFAULT_TUNING_WEIGHT_DECAY_LOW,
+            high=DEFAULT_TUNING_WEIGHT_DECAY_HIGH,
+        )
         return {
             "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
-            "batch_size": trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES),
-            "max_encoder_length": trial.suggest_categorical("max_encoder_length", _ENCODER_LENGTH_CHOICES),
-            "gradient_clip_val": trial.suggest_categorical("gradient_clip_val", _GRADIENT_CLIP_CHOICES),
+            "batch_size": trial.suggest_categorical("batch_size", DEFAULT_TUNING_BATCH_SIZE_CHOICES),
+            "max_encoder_length": trial.suggest_categorical(
+                "max_encoder_length", DEFAULT_TUNING_ENCODER_LENGTH_CHOICES
+            ),
+            "gradient_clip_val": trial.suggest_categorical(
+                "gradient_clip_val", DEFAULT_TUNING_GRADIENT_CLIP_CHOICES
+            ),
             "learning_rate": trial.suggest_float("learning_rate", learning_rate_low, learning_rate_high, log=True),
-            "hidden_size": trial.suggest_categorical("hidden_size", _HIDDEN_SIZE_CHOICES),
-            "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", _HIDDEN_CONTINUOUS_SIZE_CHOICES),
-            "attention_head_size": trial.suggest_categorical("attention_head_size", _ATTENTION_HEAD_SIZE_CHOICES),
-            "lstm_layers": trial.suggest_categorical("lstm_layers", _LSTM_LAYER_CHOICES),
+            "hidden_size": trial.suggest_categorical("hidden_size", DEFAULT_TUNING_HIDDEN_SIZE_CHOICES),
+            "hidden_continuous_size": trial.suggest_categorical(
+                "hidden_continuous_size",
+                DEFAULT_TUNING_HIDDEN_CONTINUOUS_SIZE_CHOICES,
+            ),
+            "attention_head_size": trial.suggest_categorical(
+                "attention_head_size",
+                DEFAULT_TUNING_ATTENTION_HEAD_SIZE_CHOICES,
+            ),
+            "lstm_layers": trial.suggest_categorical("lstm_layers", DEFAULT_TUNING_LSTM_LAYER_CHOICES),
             "dropout": trial.suggest_float("dropout", dropout_low, dropout_high),
             "weight_decay": trial.suggest_float("weight_decay", weight_decay_low, weight_decay_high, log=True),
             "random_state": int(random_seed + trial.number + 1),
         }
-    resolved_epoch_range = epoch_range or _HPO_STAGE_A_EPOCH_RANGE
+    standard_policy = DEFAULT_TUNING_STAGE_POLICIES[DEFAULT_STAGE_BUDGET]
+    resolved_epoch_range = epoch_range or cast(
+        tuple[int, int],
+        cast(Any, standard_policy["stage_a_epoch_range"]),
+    )
     return {
         "max_epochs": trial.suggest_int("max_epochs", *resolved_epoch_range),
-        "batch_size": trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES),
-        "max_encoder_length": trial.suggest_categorical("max_encoder_length", _ENCODER_LENGTH_CHOICES),
-        "gradient_clip_val": trial.suggest_categorical("gradient_clip_val", _GRADIENT_CLIP_CHOICES),
-        "learning_rate": trial.suggest_float("learning_rate", _LEARNING_RATE_SEARCH_LOW, _LEARNING_RATE_SEARCH_HIGH, log=True),
-        "hidden_size": trial.suggest_categorical("hidden_size", _HIDDEN_SIZE_CHOICES),
-        "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", _HIDDEN_CONTINUOUS_SIZE_CHOICES),
-        "attention_head_size": trial.suggest_categorical("attention_head_size", _ATTENTION_HEAD_SIZE_CHOICES),
-        "lstm_layers": trial.suggest_categorical("lstm_layers", _LSTM_LAYER_CHOICES),
-        "dropout": trial.suggest_float("dropout", 0.05, 0.30),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True),
+        "batch_size": trial.suggest_categorical("batch_size", DEFAULT_TUNING_BATCH_SIZE_CHOICES),
+        "max_encoder_length": trial.suggest_categorical(
+            "max_encoder_length", DEFAULT_TUNING_ENCODER_LENGTH_CHOICES
+        ),
+        "gradient_clip_val": trial.suggest_categorical(
+            "gradient_clip_val", DEFAULT_TUNING_GRADIENT_CLIP_CHOICES
+        ),
+        "learning_rate": trial.suggest_float(
+            "learning_rate",
+            DEFAULT_TUNING_LEARNING_RATE_LOW,
+            DEFAULT_TUNING_LEARNING_RATE_HIGH,
+            log=True,
+        ),
+        "hidden_size": trial.suggest_categorical("hidden_size", DEFAULT_TUNING_HIDDEN_SIZE_CHOICES),
+        "hidden_continuous_size": trial.suggest_categorical(
+            "hidden_continuous_size",
+            DEFAULT_TUNING_HIDDEN_CONTINUOUS_SIZE_CHOICES,
+        ),
+        "attention_head_size": trial.suggest_categorical(
+            "attention_head_size",
+            DEFAULT_TUNING_ATTENTION_HEAD_SIZE_CHOICES,
+        ),
+        "lstm_layers": trial.suggest_categorical("lstm_layers", DEFAULT_TUNING_LSTM_LAYER_CHOICES),
+        "dropout": trial.suggest_float("dropout", DEFAULT_TUNING_DROPOUT_LOW, DEFAULT_TUNING_DROPOUT_HIGH),
+        "weight_decay": trial.suggest_float(
+            "weight_decay",
+            DEFAULT_TUNING_WEIGHT_DECAY_LOW,
+            DEFAULT_TUNING_WEIGHT_DECAY_HIGH,
+            log=True,
+        ),
         "random_state": int(random_seed + trial.number + 1),
     }
 
@@ -154,6 +207,8 @@ def resolve_fold_execution_plan(
     max_parallel_fold_workers = int(cast(Any, resolved_params.get("max_parallel_fold_workers", DEFAULT_MAX_PARALLEL_FOLD_WORKERS)))
     num_threads = int(total_threads or cast(Any, resolved_params.get("n_jobs", os.cpu_count() or 1)))
     gpu_safe_mode = accelerator in {"gpu", "mps"} or runtime_profile_name == "mac_metal"
+    if runtime_profile_name == "local_cpu" and should_serialize_local_cpu_folds():
+        gpu_safe_mode = True
     fold_workers = 1 if gpu_safe_mode else max(1, min(len(folds), max_parallel_fold_workers))
     threads_per_fold = max(1, num_threads // fold_workers)
     logger.info(
@@ -213,22 +268,27 @@ def build_hpo_runtime_metadata(
     execution_policy: dict[str, object],
     tuning_trials: int,
     stage_budget: str,
+    best_trial: optuna.trial.FrozenTrial | None = None,
 ) -> dict[str, object]:
     trial_states = [trial.state.name for trial in study.trials]
     status_counts = {state: trial_states.count(state) for state in sorted(set(trial_states))}
-    best_trial = study.best_trial
+    resolved_best_trial = study.best_trial if best_trial is None else best_trial
     return {
         "execution_policy": execution_policy,
         "stage_policy": resolve_stage_policy(tuning_trials, stage_budget=stage_budget),
-        "pruner": dict(_HPO_PRUNER_CONFIG),
+        "pruner": dict(DEFAULT_TUNING_PRUNER_CONFIG),
         "system": runtime_environment_metadata(execution_policy=execution_policy),
         "trial_status_counts": status_counts,
-        "best_trial_number": int(best_trial.number),
-        "best_improvement_pct": required_trial_value(best_trial),
-        "best_mean_wape": float(best_trial.user_attrs["mean_wape"]),
-        "best_mean_abs_bias": best_trial.user_attrs.get("mean_abs_bias"),
-        "best_coverage_80": best_trial.user_attrs.get("mean_coverage_80"),
-        "best_coverage_95": best_trial.user_attrs.get("mean_coverage_95"),
+        "best_trial_number": int(resolved_best_trial.number),
+        "best_improvement_pct": (
+            required_trial_value(resolved_best_trial)
+            if resolved_best_trial.value is not None
+            else None
+        ),
+        "best_mean_wape": float(resolved_best_trial.user_attrs["mean_wape"]),
+        "best_mean_abs_bias": resolved_best_trial.user_attrs.get("mean_abs_bias"),
+        "best_coverage_80": resolved_best_trial.user_attrs.get("mean_coverage_80"),
+        "best_coverage_95": resolved_best_trial.user_attrs.get("mean_coverage_95"),
     }
 
 
@@ -238,8 +298,8 @@ def create_optuna_study(*, random_seed: int) -> optuna.study.Study:
     optuna.logging.set_verbosity(optuna.logging.INFO)
     sampler = optuna.samplers.TPESampler(seed=random_seed)
     pruner = optuna.pruners.MedianPruner(
-        n_startup_trials=int(cast(Any, _HPO_PRUNER_CONFIG["n_startup_trials"])),
-        n_warmup_steps=int(cast(Any, _HPO_PRUNER_CONFIG["n_warmup_steps"])),
-        interval_steps=int(cast(Any, _HPO_PRUNER_CONFIG["interval_steps"])),
+        n_startup_trials=int(cast(Any, DEFAULT_TUNING_PRUNER_CONFIG["n_startup_trials"])),
+        n_warmup_steps=int(cast(Any, DEFAULT_TUNING_PRUNER_CONFIG["n_warmup_steps"])),
+        interval_steps=int(cast(Any, DEFAULT_TUNING_PRUNER_CONFIG["interval_steps"])),
     )
     return optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)

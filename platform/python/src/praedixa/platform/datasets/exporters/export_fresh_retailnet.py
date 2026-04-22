@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -309,7 +310,10 @@ def main() -> None:
         seed=config.seed,
         excluded_columns=DEFAULT_EXCLUDED_COLUMNS,
     )
-    print(json.dumps(metadata, indent=2))
+    logging.getLogger(__name__).info(
+        "FreshRetail export metadata: %s",
+        json.dumps(metadata, indent=2),
+    )
 
 
 if __name__ == "__main__":

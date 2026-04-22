@@ -111,10 +111,12 @@ La séparation entre backbone `dbt` et stages Python est détaillée dans
   Point d’arrêt explicite qui rappelle que le backend modèle cible est TFT.
 - `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/model_utils.py`
   Surface minimale prévue pour le futur backend TFT.
+- `apps/warehouse/main.py`
+  Entry point unique du medaillon local `bronze -> silver -> gold`.
 - `apps/warehouse/run_silver/main.py`
-  Runner local `bronze -> silver`.
+  Runner local specialise `bronze -> silver`.
 - `apps/warehouse/run_gold/main.py`
-  Runner local `silver -> gold`.
+  Runner local specialise `silver -> gold`.
 - `apps/platform/prepare_first_party_onboarding/main.py`
   Prépare un feed first-party minimal au bon format.
 - `apps/platform/generate_synthetic_cold_start/main.py`
@@ -248,55 +250,24 @@ Ce pipeline construit :
 
 ## Warehouse local
 
-### Silver
+### Medaillon
 
-Chargement bronze préalable :
-
-```bash
-.venv/bin/python -m apps.warehouse.load_bronze.main
-```
-
-Point d’entrée :
+Point d’entrée de référence :
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main
-```
-
-Alias local direct encore supporté :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_silver.main
+.venv/bin/python -m apps.warehouse.main
 ```
 
 Ce runner :
 
-- prépare l’environnement local DuckDB
-- recharge les tables bronze nécessaires
-- exécute `dbt seed`
-- exécute `dbt run` sur `silver`
-- peut exécuter `dbt test`
+- lance la step `silver` avec chargement bronze intégré
+- exécute `dbt seed`, `dbt run` et `dbt test` sur `silver`
+- enchaîne ensuite sur la step `gold`
+- peut rafraîchir les enrichissements open-source avant `gold`
+- exécute `dbt seed`, `dbt run` et `dbt test` sur `gold`
+- reste un `main.py` sans parsing CLI, prévu pour un lancement direct depuis l'IDE ou `python -m`
 
-### Gold
-
-Point d’entrée :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_gold.main
-```
-
-Alias local direct encore supporté :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_gold.main
-```
-
-Ce runner :
-
-- peut rafraîchir les enrichissements open-source
-- recharge les tables bronze exogènes nécessaires
-- exécute `dbt seed`
-- exécute `dbt run` sur `gold`
-- peut exécuter `dbt test`
+Les runners spécialisés `apps.warehouse.run_silver.main` et `apps.warehouse.run_gold.main` restent supportés pour les cas ciblés, mais ne sont plus le point d’entrée recommandé.
 
 ### Fichier DuckDB local
 

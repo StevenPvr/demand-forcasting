@@ -317,6 +317,7 @@ def _metadata_payload(
         "bundle_feature_roles_path": str(bundle_dir / "feature_roles.json") if bundle_dir is not None else None,
         "bundle_split_manifest_path": str(bundle_dir / "split_manifest.json") if bundle_dir is not None else None,
         "bundle_target_contract_path": str(bundle_dir / "target_contract.json") if bundle_dir is not None else None,
+        "bundle_optimisation_manifest_path": str(bundle_dir / "optimisation_manifest.json") if bundle_dir is not None else None,
         "duckdb_path": str(run_config.duckdb_path) if loaded.train_path is None else None,
         "gold_table": run_config.gold_table if loaded.train_path is None else None,
         "n_folds": run_config.n_folds,
@@ -401,6 +402,12 @@ def _baseline_and_hpo_outputs(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, object], dict[str, object], pd.DataFrame, dict[str, object]]:
     baseline_folds = build_tuning_walk_forward_folds_by_dataset(context.tuning_frame, date_col=date_col, dataset_source_col=DEFAULT_DATASET_SOURCE_COL, n_folds=n_folds, logger=logger)
     training_folds = build_grouped_tuning_walk_forward_folds_by_dataset(context.tuning_frame, date_col=date_col, dataset_source_col=DEFAULT_DATASET_SOURCE_COL, n_folds=n_folds, logger=logger)
+    logger.info(
+        "Starting statistical baseline sweep before Optuna: baselines=%s fold_evaluations=%s tuning_rows=%s",
+        5,
+        len(baseline_folds),
+        len(context.tuning_frame),
+    )
     baseline_rows, best_baseline = evaluate_statistical_baselines_macro(
         context.tuning_frame,
         baseline_folds,
@@ -409,6 +416,12 @@ def _baseline_and_hpo_outputs(
         logger=logger,
     )
     logger.info("Best statistical baseline selected under dataset-macro WAPE: name=%s mean_wape=%.6f", best_baseline["baseline_name"], best_baseline["mean_wape"])
+    logger.info(
+        "Starting TFT Optuna search after baseline sweep: grouped_folds=%s train_rows=%s tuning_rows=%s",
+        len(training_folds),
+        len(context.train_frame),
+        len(context.tuning_frame),
+    )
     best_params, tuning_report, hpo_runtime_metadata = optimize_fn(
         train_frame=context.train_frame,
         tuning_frame=context.tuning_frame,

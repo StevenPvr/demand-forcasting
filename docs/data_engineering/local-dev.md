@@ -16,28 +16,19 @@ Le mode local de reference est :
 La commande la plus simple pour lancer la chaine locale est :
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main
+.venv/bin/python -m apps.warehouse.main
 ```
 
 Cette commande fait, dans l'ordre :
 
-1. charge les datasets locaux dans le schema `bronze` DuckDB
-2. lance `dbt run` sur la silver
-3. lance `dbt test` sur la silver
+1. charge les datasets locaux dans le schema `bronze` DuckDB via la step `silver`
+2. lance `dbt run` sur la `silver`
+3. lance `dbt test` sur la `silver`
+4. rafraichit ensuite les fichiers exogenes open-source pour la `gold`
+5. lance `dbt run` sur la `gold`
+6. lance `dbt test` sur la `gold`
 
-Pour la `gold` :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_gold.main
-```
-
-Cette commande :
-
-1. suppose la `silver` deja disponible dans DuckDB
-2. rafraichit les fichiers exogenes open-source
-3. recharge uniquement les tables bronze exogenes
-4. lance `dbt run` sur la `gold`
-5. lance `dbt test` sur la `gold` uniquement
+Les runners specialises existent encore, mais `apps.warehouse.main` devient la commande de reference.
 
 ## Base locale utilisee
 
@@ -89,31 +80,31 @@ Notes utiles :
 ### Rejouer la silver sans recharger la bronze
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main --skip-bronze-load
+.venv/bin/python -m apps.warehouse.main --skip-gold --skip-bronze-load
 ```
 
 ### Lancer seulement le `dbt run` sans `dbt test`
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main --skip-dbt-tests
+.venv/bin/python -m apps.warehouse.main --skip-dbt-tests
 ```
 
 Version `gold` :
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_gold.main --skip-dbt-tests
+.venv/bin/python -m apps.warehouse.main --skip-silver --skip-dbt-tests
 ```
 
 ### Rejouer la gold sans refetch des sources ouvertes
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_gold.main --skip-open-exogenous-refresh
+.venv/bin/python -m apps.warehouse.main --skip-silver --skip-open-exogenous-refresh
 ```
 
 ### Cibler un sous-ensemble dbt
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main --select silver_commercial_external_daily_product_demand
+.venv/bin/python -m apps.warehouse.main --skip-gold --silver-select silver_supplemental_corpus_daily_product_demand
 ```
 
 En pratique, le runner ajoute les parents dbt automatiquement. Donc tu peux cibler un modele silver sans gerer a la main les dependances `staging`.
@@ -121,7 +112,7 @@ En pratique, le runner ajoute les parents dbt automatiquement. Donc tu peux cibl
 Version `gold` :
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_gold.main --select tag:gold
+.venv/bin/python -m apps.warehouse.main --skip-silver --gold-select tag:gold
 ```
 
 ## Ce que signifie "bronze" localement
@@ -142,8 +133,11 @@ et non encore :
 
 ## Fichiers clefs
 
-- runner local : [apps/warehouse/run_silver/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/run_silver/main.py)
+- entrypoint unique : [apps/warehouse/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/main.py)
+- runner silver : [apps/warehouse/run_silver/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/run_silver/main.py)
+- runner gold : [apps/warehouse/run_gold/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/run_gold/main.py)
 - chargeur bronze DuckDB : [apps/warehouse/load_bronze/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/load_bronze/main.py)
+- ces `main.py` sont volontairement sans parsing CLI : lancement direct, sans flags, avec config par defaut cote module importable
 - spec bronze : [docs/data_engineering/medaillon/bronze.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/bronze.md)
 - spec silver : [docs/data_engineering/medaillon/silver.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/silver.md)
 - spec gold : [docs/data_engineering/medaillon/gold.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/gold.md)

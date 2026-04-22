@@ -64,8 +64,10 @@ class FirstPartyTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0]["dataset_source"], "first_party_daily")
         self.assertEqual(records[0]["series_id"], "site_1__sku_1")
-        self.assertEqual(records[0]["location_open_flag"], True)
-        self.assertEqual(records[0]["day_complete_flag"], True)
+        self.assertIsNone(records[0]["location_open_flag"])
+        self.assertIsNone(records[0]["day_complete_flag"])
+        self.assertEqual(records[0]["target_semantics"], "observed_sales")
+        self.assertEqual(records[0]["censor_flag"], False)
         self.assertEqual(records[0]["calendar_month"], 1)
         self.assertEqual(records[1]["promo_flag"], True)
 

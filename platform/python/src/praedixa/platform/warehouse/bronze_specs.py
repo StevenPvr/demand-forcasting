@@ -197,10 +197,10 @@ def _freshretail_ddl(schema_name: str) -> str:
     """
 
 
-def _commercial_external_daily_ddl(schema_name: str) -> str:
+def _supplemental_corpus_daily_ddl(schema_name: str) -> str:
     return f"""
     CREATE SCHEMA IF NOT EXISTS {schema_name};
-    CREATE TABLE IF NOT EXISTS {schema_name}.bronze_commercial_external_daily (
+    CREATE TABLE IF NOT EXISTS {schema_name}.bronze_supplemental_corpus_daily (
         dataset_source VARCHAR,
         source_partition VARCHAR,
         source_run_id VARCHAR,
@@ -214,6 +214,11 @@ def _commercial_external_daily_ddl(schema_name: str) -> str:
         category_level_2 VARCHAR,
         category_level_3 VARCHAR,
         observed_demand_qty DOUBLE,
+        target_semantics VARCHAR,
+        censor_flag BOOLEAN,
+        target_source VARCHAR,
+        label_quality_score DOUBLE,
+        usable_for_training_flag BOOLEAN,
         observed_revenue_net DOUBLE,
         observed_discount_amount DOUBLE,
         avg_selling_price DOUBLE,
@@ -245,6 +250,12 @@ def _commercial_external_daily_ddl(schema_name: str) -> str:
         loaded_at TIMESTAMP
     );
     """
+
+
+def supplemental_corpus_daily_ddl(schema_name: str) -> str:
+    """Return the bronze DDL for the in-memory supplemental corpus runtime table."""
+
+    return _supplemental_corpus_daily_ddl(schema_name)
 
 
 def _bakery_ddl(schema_name: str) -> str:
@@ -293,16 +304,10 @@ def default_core_bronze_specs(data_dir: str | Path, schema_name: str) -> list[Br
 def default_active_core_bronze_specs(
     data_dir: str | Path,
     schema_name: str,
-    commercial_external_dir: str | Path | None = None,
 ) -> list[BronzeTableSpec]:
     """Return the local core bronze sources used by the active commercial workflow."""
 
     root = Path(data_dir)
-    commercial_external_root = (
-        Path(commercial_external_dir)
-        if commercial_external_dir is not None
-        else root / "global_dataset"
-    )
     return [
         BronzeTableSpec(
             table_name="bronze_freshretail_daily",
@@ -321,12 +326,6 @@ def default_active_core_bronze_specs(
             source_path=root / "bakery_sales" / "Bakery sales.csv",
             ddl=_bakery_ddl(schema_name),
             source_name="bakery",
-        ),
-        BronzeTableSpec(
-            table_name="bronze_commercial_external_daily",
-            source_path=commercial_external_root / "commercial_external_daily.parquet",
-            ddl=_commercial_external_daily_ddl(schema_name),
-            source_name="commercial_external_daily",
         ),
     ]
 
@@ -380,7 +379,6 @@ def default_active_bronze_specs(
     data_dir: str | Path,
     schema_name: str,
     open_exogenous_dir: str | Path | None = None,
-    commercial_external_dir: str | Path | None = None,
 ) -> list[BronzeTableSpec]:
     """Return the local bronze sources used by the active commercial workflow."""
 
@@ -388,7 +386,6 @@ def default_active_bronze_specs(
         *default_active_core_bronze_specs(
             data_dir,
             schema_name=schema_name,
-            commercial_external_dir=commercial_external_dir,
         ),
         *default_open_exogenous_bronze_specs(
             data_dir,

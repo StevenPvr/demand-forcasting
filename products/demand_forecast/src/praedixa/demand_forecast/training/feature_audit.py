@@ -67,7 +67,7 @@ def _top_missingness_rows(
     tuning_frame: pd.DataFrame,
     feature_cols: list[str],
 ) -> list[dict[str, float | str]]:
-    missingness = [
+    missingness: list[dict[str, float | str]] = [
         {
             "feature": column,
             "null_rate_train": float(train_frame[column].isna().mean()),
@@ -75,5 +75,8 @@ def _top_missingness_rows(
         }
         for column in feature_cols
     ]
-    missingness.sort(key=lambda row: float(row["null_rate_train"]), reverse=True)
+    missingness.sort(
+        key=lambda row: float(row.get("null_rate_train", 0.0)),
+        reverse=True,
+    )
     return missingness[:25]

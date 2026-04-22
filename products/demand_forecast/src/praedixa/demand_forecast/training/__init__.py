@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Hyperparameter optimisation helpers for selected demand forecasting features."""
 
 from praedixa.demand_forecast.training.pipeline import (

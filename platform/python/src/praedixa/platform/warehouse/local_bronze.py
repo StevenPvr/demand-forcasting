@@ -14,7 +14,11 @@ from typing import Any, Protocol, cast
 import pandas as pd
 import pyarrow.parquet as pq
 
-from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH, PROJECT_ROOT, SOURCES_DIR
+from praedixa.platform.runtime.paths import (
+    LOCAL_DUCKDB_PATH,
+    PROJECT_ROOT,
+    SOURCES_DIR,
+)
 from praedixa.platform.warehouse.bronze_specs import (
     BronzeTableSpec,
     default_active_bronze_specs,
@@ -37,6 +41,7 @@ __all__ = [
     "build_runtime_config_from_env",
     "default_active_bronze_specs",
     "default_bronze_specs",
+    "load_inline_bronze_frame",
     "load_all_bronze_tables",
 ]
 
@@ -99,7 +104,7 @@ def build_runtime_config_from_env() -> BronzeLoadRuntimeConfig:
         cloud_warehouse_enabled=_env_flag(
             "PRAEDIXA_ENABLE_CLOUD_WAREHOUSE", default=False
         ),
-        local_backup_enabled=_env_flag("PRAEDIXA_ENABLE_LOCAL_BACKUP", default=True),
+        local_backup_enabled=_env_flag("PRAEDIXA_ENABLE_LOCAL_BACKUP", default=False),
         local_backup_dir=_env_path(
             "PRAEDIXA_LOCAL_BACKUP_DIR", DEFAULT_LOCAL_BACKUP_DIR
         ),
@@ -326,6 +331,87 @@ def _insert_batch(
         client.unregister(temp_view_name)
 
 
+def _prepare_inline_bronze_batch(
+    frame: pd.DataFrame,
+    *,
+    source_label: str,
+) -> pd.DataFrame:
+    prepared = frame.copy(deep=False)
+    prepared["source_file_path"] = source_label
+    prepared["loaded_at"] = _utc_now()
+    return prepared
+
+
+def _load_inline_frame_target(
+    *,
+    target_name: str,
+    target_config: DuckDBTargetConfig,
+    table_name: str,
+    ddl: str,
+    frame: pd.DataFrame,
+    source_name: str,
+) -> int:
+    client = build_duckdb_client(target_config)
+    try:
+        recreate_table(client, schema_name=target_config.schema_name, table_name=table_name)
+        ensure_table(
+            client,
+            BronzeTableSpec(
+                table_name=table_name,
+                source_path=Path(source_name),
+                ddl=ddl,
+                source_name=source_name,
+            ),
+        )
+        prepared = _prepare_inline_bronze_batch(frame, source_label=source_name)
+        _insert_batch(
+            client,
+            schema_name=target_config.schema_name,
+            table_name=table_name,
+            batch=prepared,
+        )
+        return len(prepared)
+    finally:
+        client.close()
+        logger.info(
+            "Closed DuckDB target %s (%s).", target_name, target_config.database_path
+        )
+
+
+def load_inline_bronze_frame(
+    *,
+    table_name: str,
+    ddl: str,
+    frame: pd.DataFrame,
+    source_name: str,
+) -> dict[str, int]:
+    """Load one in-memory bronze frame into the enabled DuckDB targets without persisting a source file."""
+
+    runtime_config = build_runtime_config_from_env()
+    row_counts: dict[str, int] = {}
+    if runtime_config.local_warehouse_enabled:
+        local_config = build_local_duckdb_config_from_env()
+        row_counts["local"] = _load_inline_frame_target(
+            target_name="local",
+            target_config=local_config,
+            table_name=table_name,
+            ddl=ddl,
+            frame=frame,
+            source_name=source_name,
+        )
+    if runtime_config.cloud_warehouse_enabled:
+        cloud_config = build_cloud_duckdb_config_from_env()
+        row_counts["cloud"] = _load_inline_frame_target(
+            target_name="cloud",
+            target_config=cloud_config,
+            table_name=table_name,
+            ddl=ddl,
+            frame=frame,
+            source_name=source_name,
+        )
+    return row_counts
+
+
 def _group_specs_by_table(
     specs: list[BronzeTableSpec],
 ) -> dict[str, list[BronzeTableSpec]]:
@@ -457,8 +543,10 @@ def main() -> None:
     """Load all local bronze replacement datasets into DuckDB targets."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    data_dir = os.environ.get("PRAEDIXA_BRONZE_DATA_DIR", "data")
-    load_all_bronze_tables(data_dir=data_dir)
+    data_dir = os.environ.get("PRAEDIXA_BRONZE_DATA_DIR", str(SOURCES_DIR))
+    load_all_bronze_tables(
+        data_dir=data_dir,
+    )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from praedixa.platform.runtime.paths import CACHE_DIR
+
 def _resolve_project_root() -> Path:
     current_file = Path(__file__).resolve()
     try:
@@ -19,7 +21,7 @@ def _resolve_project_root() -> Path:
 
 
 PROJECT_ROOT = _resolve_project_root()
-CACHE_ROOT = PROJECT_ROOT / "var" / "cache"
+CACHE_ROOT = CACHE_DIR
 MPL_CACHE_DIR = CACHE_ROOT / "matplotlib"
 CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 MPL_CACHE_DIR.mkdir(parents=True, exist_ok=True)

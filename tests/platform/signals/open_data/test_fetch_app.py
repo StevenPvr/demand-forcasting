@@ -85,11 +85,11 @@ class FetchOpenExogenousTests(unittest.TestCase):
                     "max_dt": "2024-04-02",
                 },
                 {
-                    "dataset_source": "uci_online_retail",
-                    "location_id": "uk_online_retail_1",
+                    "dataset_source": "freshretail_lt",
+                    "location_id": "84",
                     "region_code": None,
-                    "min_dt": "2011-01-29",
-                    "max_dt": "2011-02-02",
+                    "min_dt": "2024-02-10",
+                    "max_dt": "2024-02-14",
                 },
             ]
         )
@@ -112,7 +112,7 @@ class FetchOpenExogenousTests(unittest.TestCase):
             bakery_longitude=DEFAULT_BAKERY_LONGITUDE,
         )
 
-        self.assertEqual(sorted(metadata["dataset_source"].tolist()), ["bakery", "freshretail", "uci_online_retail"])
+        self.assertEqual(sorted(metadata["dataset_source"].tolist()), ["bakery", "freshretail", "freshretail_lt"])
 
         bakery_row = metadata.loc[metadata["dataset_source"].eq("bakery")].iloc[0]
         self.assertEqual(bakery_row["country_code"], "FR")
@@ -126,10 +126,10 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertTrue(pd.isna(freshretail_row["latitude"]))
         self.assertEqual(freshretail_row["assumption_source"], "freshretail_city_id_without_public_geocoding")
 
-        uci_row = metadata.loc[metadata["dataset_source"].eq("uci_online_retail")].iloc[0]
-        self.assertEqual(uci_row["country_code"], "GB")
-        self.assertEqual(uci_row["site_format"], "ecommerce")
-        self.assertEqual(uci_row["service_model"], "delivery_only")
+        freshretail_lt_row = metadata.loc[metadata["dataset_source"].eq("freshretail_lt")].iloc[0]
+        self.assertEqual(freshretail_lt_row["country_code"], "CN")
+        self.assertEqual(freshretail_lt_row["site_format"], "grocery")
+        self.assertEqual(freshretail_lt_row["service_model"], "store_pick_pack")
 
     def test_compute_country_years_includes_target_day_spillover(self) -> None:
         silver_locations = pd.DataFrame(
@@ -168,8 +168,7 @@ class FetchOpenExogenousTests(unittest.TestCase):
         bounds = compute_country_date_bounds(silver_locations, metadata, lookback_days=30)
 
         self.assertEqual(bounds["FR"], ("2023-11-30", "2024-01-03"))
-        self.assertEqual(bounds["CN"], ("2024-02-27", "2024-04-03"))
-        self.assertEqual(bounds["GB"], ("2010-12-30", "2011-02-03"))
+        self.assertEqual(bounds["CN"], ("2024-01-11", "2024-04-03"))
 
     def test_parse_school_holiday_ics_expands_each_event_into_daily_rows(self) -> None:
         frame = parse_school_holiday_ics(

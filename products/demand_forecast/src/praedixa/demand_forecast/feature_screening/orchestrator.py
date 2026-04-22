@@ -25,6 +25,7 @@ from praedixa.demand_forecast.feature_screening.orchestrator_io import prepare_l
 from praedixa.demand_forecast.feature_screening.orchestrator_models import (
     LagSelectionConfig,
     LagSelectionExecutionContext,
+    PreparedLagSelectionInputs,
 )
 from praedixa.demand_forecast.feature_screening.tuning import optimize_non_lag_model_params
 
@@ -110,7 +111,7 @@ def prepare_lag_selection_inputs_from_config(
     *,
     config: LagSelectionConfig,
     logger: logging.Logger,
-):
+) -> PreparedLagSelectionInputs:
     return prepare_lag_selection_inputs(
         input_path=config.input_path,
         output_dir=config.output_dir,

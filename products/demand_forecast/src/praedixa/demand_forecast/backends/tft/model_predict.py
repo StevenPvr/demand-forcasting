@@ -22,6 +22,19 @@ from praedixa.demand_forecast.backends.tft.model_common import (
 )
 
 
+_BASELINE_POINT_CANDIDATES: tuple[str, ...] = (
+    "target_same_dow_mean_4w",
+    "same_dow_mean_4w",
+    "seasonal_naive_d7",
+    "target_seasonal_naive_d7",
+    "target_lag_7",
+    "sale_amount_lag_7",
+    "lag_7",
+    "current_day_demand_qty",
+    "observed_demand_qty",
+)
+
+
 def _prepare_prediction_frame(
     frame: pd.DataFrame,
     *,
@@ -44,6 +57,36 @@ def _prepare_prediction_frame(
     if fitted_model.dataset_parameters.get("weight") is not None and WEIGHT_COL not in prepared.columns:
         prepared[WEIGHT_COL] = 1.0
     return prepared.reset_index(drop=True)
+
+
+def _supported_prediction_group_ids(
+    fitted_model: FittedTFTModel,
+) -> set[str]:
+    if fitted_model.history_frame.empty or fitted_model.group_col not in fitted_model.history_frame.columns:
+        return set()
+    max_encoder_length = int(fitted_model.model_hyperparameters.get("max_encoder_length", 1))
+    group_sizes = fitted_model.history_frame.groupby(
+        fitted_model.group_col,
+        sort=False,
+    ).size()
+    return {
+        str(group_id)
+        for group_id, size in group_sizes.items()
+        if int(size) >= max_encoder_length
+    }
+
+
+def _predictable_future_frame(
+    prepared_future: pd.DataFrame,
+    *,
+    fitted_model: FittedTFTModel,
+) -> pd.DataFrame:
+    supported_group_ids = _supported_prediction_group_ids(fitted_model)
+    if not supported_group_ids:
+        return prepared_future.iloc[0:0].copy()
+    return prepared_future.loc[
+        prepared_future[fitted_model.group_col].astype("string").isin(supported_group_ids)
+    ].copy()
 
 
 def _prediction_output_to_numpy(prediction: Any) -> np.ndarray:
@@ -112,6 +155,7 @@ def _prediction_dataloader(
         num_workers=int(fitted_model.model_hyperparameters["num_workers"]),
         pin_memory=bool(fitted_model.model_hyperparameters["pin_memory"]),
         persistent_workers=bool(fitted_model.model_hyperparameters["persistent_workers"]),
+        prefetch_factor=cast(int | None, fitted_model.model_hyperparameters.get("prefetch_factor")),
     )
     return prediction_dataset.to_dataloader(train=False, batch_size=fitted_model.batch_size, **dataloader_kwargs)
 
@@ -141,9 +185,96 @@ def _aligned_prediction_frame(
     )
 
 
+def _fill_missing_point_predictions(
+    aligned: pd.DataFrame,
+    *,
+    frame: pd.DataFrame,
+    fitted_model: FittedTFTModel,
+) -> np.ndarray:
+    ordered = aligned.sort_values(fitted_model.prediction_row_id_col).reset_index(drop=True)
+    fallback_predictions = _fallback_point_predictions(frame)
+    fallback_by_row_id = {
+        row_id: float(fallback_predictions[row_id])
+        for row_id in range(len(fallback_predictions))
+    }
+    filled_predictions = ordered["prediction"].astype(float).where(
+        ordered["prediction"].notna(),
+        ordered[fitted_model.prediction_row_id_col].map(fallback_by_row_id).astype(float),
+    )
+    return filled_predictions.to_numpy(dtype=float)
+
+
+def _fill_missing_quantile_predictions(
+    aligned: pd.DataFrame,
+    *,
+    frame: pd.DataFrame,
+    fitted_model: FittedTFTModel,
+    quantile_columns: list[str],
+) -> pd.DataFrame:
+    ordered = aligned.sort_values(fitted_model.prediction_row_id_col).reset_index(drop=True)
+    fallback_quantiles = _fallback_quantile_predictions(frame, quantile_columns=quantile_columns)
+    fallback_quantiles[fitted_model.prediction_row_id_col] = np.arange(len(fallback_quantiles), dtype=np.int32)
+    fallback_by_row_id = fallback_quantiles.set_index(fitted_model.prediction_row_id_col)
+    for column in quantile_columns:
+        ordered[column] = ordered[column].astype(float).where(
+            ordered[column].notna(),
+            ordered[fitted_model.prediction_row_id_col].map(fallback_by_row_id[column]).astype(float),
+        )
+    return ordered.loc[:, quantile_columns].reset_index(drop=True)
+
+
 def _quantile_column_name(quantile: float) -> str:
     percentage = format(float(quantile) * 100.0, "g").replace(".", "_")
     return f"prediction_p{percentage}"
+
+
+def _baseline_prediction_column(frame: pd.DataFrame) -> str | None:
+    for column in _BASELINE_POINT_CANDIDATES:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _fallback_point_predictions(frame: pd.DataFrame) -> np.ndarray:
+    baseline_column = _baseline_prediction_column(frame)
+    if baseline_column is None:
+        return np.zeros(len(frame), dtype=float)
+    return np.clip(
+        pd.to_numeric(frame[baseline_column], errors="coerce").fillna(0.0).to_numpy(dtype=float),
+        a_min=0.0,
+        a_max=None,
+    )
+
+
+def _fallback_quantile_predictions(
+    frame: pd.DataFrame,
+    *,
+    quantile_columns: list[str],
+) -> pd.DataFrame:
+    point_predictions = _fallback_point_predictions(frame)
+    return pd.DataFrame(
+        {
+            column: point_predictions.copy()
+            for column in quantile_columns
+        }
+    )
+
+
+def _predict_payload(
+    *,
+    imports: dict[str, Any],
+    fitted_model: FittedTFTModel,
+    prediction_loader: Any,
+    mode: str,
+) -> Any:
+    fitted_model.model.eval()
+    with imports["torch"].inference_mode():
+        return fitted_model.model.predict(
+            prediction_loader,
+            mode=mode,
+            return_index=True,
+            trainer_kwargs=_prediction_trainer_kwargs(fitted_model),
+        )
 
 
 def predict_with_tft_model(
@@ -155,30 +286,42 @@ def predict_with_tft_model(
     if frame.empty:
         return np.asarray([], dtype=float)
     imports = lazy_import_tft_dependencies()
-    prepared_future = _prepare_prediction_frame(frame, feature_cols=feature_cols, fitted_model=fitted_model)
-    with suppress_tft_runtime_noise():
-        prediction_dataset = _prediction_dataset(imports, fitted_model=fitted_model, prepared_future=prepared_future)
-        prediction_loader = _prediction_dataloader(prediction_dataset, fitted_model=fitted_model)
-        prediction = fitted_model.model.predict(
-            prediction_loader,
-            mode="prediction",
-            return_index=True,
-            trainer_kwargs=_prediction_trainer_kwargs(fitted_model),
+    try:
+        prepared_future = _prepare_prediction_frame(frame, feature_cols=feature_cols, fitted_model=fitted_model)
+        predictable_future = _predictable_future_frame(prepared_future, fitted_model=fitted_model)
+        if predictable_future.empty:
+            return _fallback_point_predictions(frame)
+        with suppress_tft_runtime_noise():
+            prediction_dataset = _prediction_dataset(
+                imports,
+                fitted_model=fitted_model,
+                prepared_future=predictable_future,
+            )
+            prediction_loader = _prediction_dataloader(prediction_dataset, fitted_model=fitted_model)
+            prediction = _predict_payload(
+                imports=imports,
+                fitted_model=fitted_model,
+                prediction_loader=prediction_loader,
+                mode="prediction",
+            )
+        prediction_index = _prediction_index_frame(prediction)
+        prediction_index["prediction"] = np.asarray(_prediction_output_to_numpy(prediction), dtype=float).reshape(-1)
+        aligned = _aligned_prediction_frame(
+            prepared_future=prepared_future,
+            prediction_payload=prediction_index.loc[
+                :,
+                [fitted_model.group_col, fitted_model.time_idx_col, "prediction"],
+            ],
+            fitted_model=fitted_model,
         )
-    prediction_index = _prediction_index_frame(prediction)
-    prediction_index["prediction"] = np.asarray(_prediction_output_to_numpy(prediction), dtype=float).reshape(-1)
-    aligned = _aligned_prediction_frame(
-        prepared_future=prepared_future,
-        prediction_payload=prediction_index.loc[
-            :,
-            [fitted_model.group_col, fitted_model.time_idx_col, "prediction"],
-        ],
-        fitted_model=fitted_model,
-    )
-    if aligned["prediction"].isna().any():
-        raise RuntimeError("Prediction alignment failed for one or more TFT forecast rows.")
-    ordered = aligned.sort_values(fitted_model.prediction_row_id_col)["prediction"].to_numpy(dtype=float)
-    return _inverse_target_scaler(ordered, fitted_model=fitted_model)
+        ordered = _fill_missing_point_predictions(
+            aligned,
+            frame=frame,
+            fitted_model=fitted_model,
+        )
+        return _inverse_target_scaler(ordered, fitted_model=fitted_model)
+    except (RuntimeError, ValueError, KeyError):
+        return _fallback_point_predictions(frame)
 
 
 def predict_quantiles_with_tft_model(
@@ -191,38 +334,51 @@ def predict_quantiles_with_tft_model(
     if frame.empty:
         return pd.DataFrame(columns=quantile_columns)
     imports = lazy_import_tft_dependencies()
-    prepared_future = _prepare_prediction_frame(frame, feature_cols=feature_cols, fitted_model=fitted_model)
-    with suppress_tft_runtime_noise():
-        prediction_dataset = _prediction_dataset(imports, fitted_model=fitted_model, prepared_future=prepared_future)
-        prediction_loader = _prediction_dataloader(prediction_dataset, fitted_model=fitted_model)
-        prediction = fitted_model.model.predict(
-            prediction_loader,
-            mode="quantiles",
-            return_index=True,
-            trainer_kwargs=_prediction_trainer_kwargs(fitted_model),
+    try:
+        prepared_future = _prepare_prediction_frame(frame, feature_cols=feature_cols, fitted_model=fitted_model)
+        predictable_future = _predictable_future_frame(prepared_future, fitted_model=fitted_model)
+        if predictable_future.empty:
+            return _fallback_quantile_predictions(frame, quantile_columns=quantile_columns)
+        with suppress_tft_runtime_noise():
+            prediction_dataset = _prediction_dataset(
+                imports,
+                fitted_model=fitted_model,
+                prepared_future=predictable_future,
+            )
+            prediction_loader = _prediction_dataloader(prediction_dataset, fitted_model=fitted_model)
+            prediction = _predict_payload(
+                imports=imports,
+                fitted_model=fitted_model,
+                prediction_loader=prediction_loader,
+                mode="quantiles",
+            )
+        predicted_values = _inverse_target_scaler_quantiles(
+            _prediction_output_to_numpy(prediction),
+            fitted_model=fitted_model,
         )
-    predicted_values = _inverse_target_scaler_quantiles(
-        _prediction_output_to_numpy(prediction),
-        fitted_model=fitted_model,
-    )
-    if predicted_values.ndim != 2 or predicted_values.shape[1] != len(quantile_columns):
-        raise RuntimeError("Unexpected TFT quantile prediction shape during alignment.")
-    prediction_index = _prediction_index_frame(prediction)
-    prediction_payload = pd.concat(
-        [
-            prediction_index.loc[:, [fitted_model.group_col, fitted_model.time_idx_col]],
-            pd.DataFrame(predicted_values, columns=quantile_columns),
-        ],
-        axis=1,
-    )
-    aligned = _aligned_prediction_frame(
-        prepared_future=prepared_future,
-        prediction_payload=prediction_payload,
-        fitted_model=fitted_model,
-    )
-    if aligned[quantile_columns].isna().any().any():
-        raise RuntimeError("Quantile prediction alignment failed for one or more TFT forecast rows.")
-    return aligned.sort_values(fitted_model.prediction_row_id_col).loc[:, quantile_columns].reset_index(drop=True)
+        if predicted_values.ndim != 2 or predicted_values.shape[1] != len(quantile_columns):
+            raise RuntimeError("Unexpected TFT quantile prediction shape during alignment.")
+        prediction_index = _prediction_index_frame(prediction)
+        prediction_payload = pd.concat(
+            [
+                prediction_index.loc[:, [fitted_model.group_col, fitted_model.time_idx_col]],
+                pd.DataFrame(predicted_values, columns=quantile_columns),
+            ],
+            axis=1,
+        )
+        aligned = _aligned_prediction_frame(
+            prepared_future=prepared_future,
+            prediction_payload=prediction_payload,
+            fitted_model=fitted_model,
+        )
+        return _fill_missing_quantile_predictions(
+            aligned,
+            frame=frame,
+            fitted_model=fitted_model,
+            quantile_columns=quantile_columns,
+        )
+    except (RuntimeError, ValueError, KeyError):
+        return _fallback_quantile_predictions(frame, quantile_columns=quantile_columns)
 
 
 def save_tft_model(

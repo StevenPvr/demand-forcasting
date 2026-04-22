@@ -12,14 +12,8 @@ models:
                   [
                     "freshretail",
                     "freshretail_lt",
-                    "uci_online_retail",
-                    "uci_online_retail_ii",
-                    "mendeley_ecommerce",
-                    "mendeley_pharmacy_id",
-                    "mendeley_bangladesh_retail",
                     "bakery",
                     "first_party_daily",
-                    "synthetic_v1",
                   ]
       - name: dt
         tests:
