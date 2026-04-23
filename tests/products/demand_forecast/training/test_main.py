@@ -70,8 +70,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 2)
         self.assertEqual(config.max_trials, 2)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.10)
-        self.assertEqual(config.tuning_sample_fraction, 0.10)
+        self.assertEqual(config.train_sample_fraction, 0.05)
+        self.assertEqual(config.tuning_sample_fraction, 0.05)
         self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
 
     def test_default_config_selects_scaleway_profile_when_cuda_is_available(self) -> None:
@@ -89,7 +89,7 @@ class OptimisationMainTests(unittest.TestCase):
 
         self.assertEqual(config.runtime_profile, "scaleway_l40s")
 
-    def test_default_config_selects_mac_metal_when_only_mps_is_available(self) -> None:
+    def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
         with (
             mock.patch(
                 "praedixa.demand_forecast.training.main._cuda_available",
@@ -102,7 +102,7 @@ class OptimisationMainTests(unittest.TestCase):
         ):
             config = build_default_optimisation_main_config()
 
-        self.assertEqual(config.runtime_profile, "mac_metal")
+        self.assertEqual(config.runtime_profile, "local_cpu")
 
     def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
         from praedixa.demand_forecast.backends.tft.backend import (

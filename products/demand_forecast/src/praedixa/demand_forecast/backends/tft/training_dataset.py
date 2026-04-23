@@ -176,6 +176,16 @@ def _build_validation_frame(
     return defragment_frame(pd.concat(grouped_frames, ignore_index=True))
 
 
+def _rebase_training_slice_time_idx(
+    training_slice: pd.DataFrame,
+) -> pd.DataFrame:
+    if training_slice.empty:
+        return defragment_frame(training_slice)
+    rebased = training_slice.sort_values([GROUP_COL, TIME_IDX_COL, "dt"]).reset_index(drop=True).copy()
+    rebased[TIME_IDX_COL] = rebased.groupby(GROUP_COL, sort=False).cumcount().astype("int32")
+    return defragment_frame(rebased)
+
+
 def _real_feature_scaler_columns(layout: TFTLayout) -> list[str]:
     columns: list[str] = []
     for column in [*layout["static_reals"], *layout["time_varying_known_reals"], *layout["time_varying_unknown_reals"]]:
@@ -250,7 +260,9 @@ def build_training_dataset_artifacts(
         max_encoder_length=max_encoder_length,
     )
     layout = resolve_layout(prepared_frame, feature_cols)
-    training_slice = defragment_frame(prepared_frame.loc[prepared_frame[SPLIT_COL] == "train"].copy())
+    training_slice = _rebase_training_slice_time_idx(
+        prepared_frame.loc[prepared_frame[SPLIT_COL] == "train"].copy()
+    )
     categorical_encoders = build_categorical_encoders(imports, layout=layout)
     feature_scalers = fit_real_feature_scalers(training_slice, layout=layout)
     training_dataset = _build_timeseries_dataset(

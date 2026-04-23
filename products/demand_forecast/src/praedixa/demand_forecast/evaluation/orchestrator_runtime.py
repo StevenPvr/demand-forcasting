@@ -61,10 +61,12 @@ def _fit_final_model(
     best_iteration: int,
     fit_final_model_fn: Callable[..., Any],
 ) -> Any:
-    fit_frame = pd.concat(
-        [context.train_frame, context.valid_frame, context.test_frame],
+    fit_history_frame = pd.concat(
+        [context.train_frame, context.valid_frame],
         ignore_index=True,
     )
+    aligned_test_frame = context.test_frame.reindex(columns=fit_history_frame.columns)
+    fit_frame = pd.concat([fit_history_frame, aligned_test_frame], ignore_index=True)
     return fit_final_model_fn(
         fit_frame=fit_frame,
         feature_cols=context.feature_cols,
@@ -88,9 +90,6 @@ def _loaded_evaluation_context(
         gold_table=request.gold_table,
         train_sample_fraction=request.train_sample_fraction,
         tuning_sample_fraction=request.tuning_sample_fraction,
-        bakery_reference_train_csv=request.bakery_reference_train_csv,
-        bakery_reference_val_csv=request.bakery_reference_val_csv,
-        bakery_reference_test_csv=request.bakery_reference_test_csv,
         logger=logger,
     )
     return prepare_evaluation_context(
@@ -113,6 +112,7 @@ def _built_evaluation_artifacts(
 ) -> EvaluationRunArtifacts:
     payloads = build_evaluation_payloads(
         context=context,
+        duckdb_path=request.duckdb_path,
         predictions_df=predictions_df,
         best_iteration=best_iteration,
     )

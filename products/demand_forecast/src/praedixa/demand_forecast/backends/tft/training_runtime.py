@@ -6,12 +6,18 @@ import sys
 from tempfile import TemporaryDirectory, mkdtemp
 from threading import Lock
 import time
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 
 LOGGER = logging.getLogger(__name__)
 _CPU_INTEROP_THREADS_LOCK = Lock()
 _cpu_interop_threads_configured = False
+_VISIBLE_VALIDATION_METRIC_ORDER: tuple[str, ...] = (
+    "val_wape",
+    "val_loss",
+    "train_loss_epoch",
+    "train_loss_step",
+)
 
 
 def _callable_int_value(func: Any, *, default: int) -> int:
@@ -107,6 +113,30 @@ def _training_logger_root(resolved_params: dict[str, object]) -> str:
     return mkdtemp(prefix="praedixa-tft-logs-")
 
 
+def _metric_float_value(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return float(cast(Any, item)())
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _visible_validation_metrics(metrics: Mapping[str, object]) -> dict[str, str]:
+    formatted: dict[str, str] = {}
+    for metric_name in _VISIBLE_VALIDATION_METRIC_ORDER:
+        metric_value = _metric_float_value(metrics.get(metric_name))
+        if metric_value is None:
+            continue
+        formatted[metric_name] = f"{metric_value:.6f}" if metric_name == "val_wape" else f"{metric_value:.6g}"
+    return formatted
+
+
 def _build_loggers(imports: dict[str, Any], resolved_params: dict[str, object]) -> tuple[list[Any], dict[str, str | None]]:
     logger_root = _training_logger_root(resolved_params)
     loggers: list[Any] = [
@@ -127,10 +157,44 @@ def _build_loggers(imports: dict[str, Any], resolved_params: dict[str, object]) 
     }
 
 
+def _validation_metrics_logging_callback(imports: dict[str, Any]) -> Any:
+    callback_base = imports["Callback"]
+
+    class _ValidationMetricsLoggingCallback(callback_base):
+        def on_validation_epoch_end(self, trainer: Any, pl_module: Any) -> None:
+            _ = pl_module
+            visible_metrics = _visible_validation_metrics(cast(Mapping[str, object], getattr(trainer, "callback_metrics", {})))
+            if not visible_metrics:
+                return
+            metrics_summary = " ".join(
+                f"{metric_name}={metric_value}"
+                for metric_name, metric_value in visible_metrics.items()
+            )
+            LOGGER.info(
+                "TFT validation metrics: epoch=%s %s",
+                int(getattr(trainer, "current_epoch", 0)),
+                metrics_summary,
+            )
+
+    return _ValidationMetricsLoggingCallback()
+
+
 def _progress_bar_callback(imports: dict[str, Any], resolved_params: dict[str, object]) -> Any | None:
     if not bool(cast(Any, resolved_params.get("enable_progress_bar", True))):
         return None
-    return imports["TQDMProgressBar"](
+    progress_bar_base = imports["TQDMProgressBar"]
+
+    class _VisibleMetricsProgressBar(progress_bar_base):
+        def get_metrics(self, trainer: Any, model: Any) -> dict[str, object]:
+            progress_bar_super: Any = super()
+            metrics = dict(cast(Mapping[str, object], progress_bar_super.get_metrics(trainer, model)))
+            for metric_name, metric_value in _visible_validation_metrics(
+                cast(Mapping[str, object], getattr(trainer, "callback_metrics", {}))
+            ).items():
+                metrics[metric_name] = metric_value
+            return metrics
+
+    return _VisibleMetricsProgressBar(
         refresh_rate=max(1, int(cast(Any, resolved_params.get("progress_bar_refresh_rate", 1)))),
     )
 
@@ -169,6 +233,7 @@ def build_trainer(
     loggers, logger_paths = _build_loggers(imports, resolved_params)
     callbacks: list[Any] = [
         imports["LearningRateMonitor"](logging_interval="epoch", log_weight_decay=True),
+        _validation_metrics_logging_callback(imports),
     ]
     progress_bar = _progress_bar_callback(imports, resolved_params)
     if progress_bar is not None:

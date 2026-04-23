@@ -6,6 +6,9 @@ import re
 
 import numpy as np
 import pandas as pd
+import polars as pl
+
+from praedixa.platform.utils.memory import downcast_pandas_frame
 
 
 REFERENCE_DATE_COL = "date"
@@ -14,9 +17,18 @@ REFERENCE_TARGET_COL = "quantity"
 
 
 def load_reference_split(csv_path: str | Path) -> pd.DataFrame:
-    frame = pd.read_csv(csv_path)
-    frame[REFERENCE_DATE_COL] = pd.to_datetime(frame[REFERENCE_DATE_COL], format="%Y-%m-%d")
-    return frame.sort_values([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL]).reset_index(drop=True)
+    frame = (
+        pl.read_csv(str(csv_path))
+        .with_columns(
+            [
+                pl.col(REFERENCE_DATE_COL).str.to_datetime(format="%Y-%m-%d", strict=True),
+                pl.col(REFERENCE_PRODUCT_COL).cast(pl.Utf8, strict=False),
+                pl.col(REFERENCE_TARGET_COL).cast(pl.Float64, strict=False),
+            ]
+        )
+        .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
+    )
+    return downcast_pandas_frame(frame.to_pandas())
 
 
 def mae_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:
@@ -26,9 +38,18 @@ def mae_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) ->
 
 
 def rmse_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:
-    actual = np.asarray(y_true, dtype=float)
-    predicted = np.asarray(y_pred, dtype=float)
-    return float(np.sqrt(np.mean(np.square(actual - predicted))))
+    actual = np.asarray(y_true, dtype=np.float64)
+    predicted = np.asarray(y_pred, dtype=np.float64)
+    if len(actual) == 0:
+        return 0.0
+    diff = actual - predicted
+    max_abs_diff = float(np.max(np.abs(diff)))
+    if not np.isfinite(max_abs_diff):
+        return float(max_abs_diff)
+    if max_abs_diff == 0.0:
+        return 0.0
+    scaled_diff = diff / max_abs_diff
+    return float(max_abs_diff * np.sqrt(np.mean(np.square(scaled_diff))))
 
 
 def smape(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:

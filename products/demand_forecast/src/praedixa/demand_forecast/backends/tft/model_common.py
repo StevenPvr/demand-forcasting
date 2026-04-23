@@ -89,6 +89,7 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
     from torch.nn import ModuleList
     from lightning.pytorch import Trainer, seed_everything
     from lightning.pytorch.callbacks import (
+        Callback,
         DeviceStatsMonitor,
         EarlyStopping,
         LearningRateMonitor,
@@ -103,6 +104,7 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
 
     return {
         "CSVLogger": CSVLogger,
+        "Callback": Callback,
         "DeviceStatsMonitor": DeviceStatsMonitor,
         "torch": torch,
         "Trainer": Trainer,

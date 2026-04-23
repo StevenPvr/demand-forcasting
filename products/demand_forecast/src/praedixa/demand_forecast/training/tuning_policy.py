@@ -26,7 +26,6 @@ from praedixa.demand_forecast.training.constants import (
     DEFAULT_TUNING_DROPOUT_LOW,
     DEFAULT_TUNING_DROPOUT_STAGE_B_MARGIN,
     DEFAULT_TUNING_ENCODER_LENGTH_CHOICES,
-    DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES,
     DEFAULT_TUNING_GRADIENT_CLIP_CHOICES,
     DEFAULT_TUNING_HIDDEN_CONTINUOUS_SIZE_CHOICES,
     DEFAULT_TUNING_HIDDEN_SIZE_CHOICES,
@@ -59,14 +58,12 @@ def _linear_float_bounds(anchor: object, *, low: float, high: float, margin: flo
 
 
 def _runtime_profile_batch_size_choices(runtime_profile_name: str) -> tuple[int, ...]:
-    if runtime_profile_name == "scaleway_l40s":
-        return DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES
+    _ = runtime_profile_name
     return DEFAULT_TUNING_BATCH_SIZE_CHOICES
 
 
 def _batch_learning_rate_scale(*, batch_size: int, runtime_profile_name: str) -> float:
-    if runtime_profile_name != "scaleway_l40s":
-        return 1.0
+    _ = runtime_profile_name
     return min(
         DEFAULT_TUNING_MAX_BATCH_SCALED_LEARNING_RATE_SCALE,
         math.sqrt(float(batch_size) / float(DEFAULT_TUNING_LEARNING_RATE_REFERENCE_BATCH_SIZE)),

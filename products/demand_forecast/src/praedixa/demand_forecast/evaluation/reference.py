@@ -1,86 +1,54 @@
 from __future__ import annotations
 
-import numpy as np
+from typing import Any
+
 import pandas as pd
+import polars as pl
 
 from praedixa.demand_forecast.evaluation.bakery_style import REFERENCE_DATE_COL
 from praedixa.demand_forecast.evaluation.bakery_style import REFERENCE_PRODUCT_COL
 from praedixa.demand_forecast.evaluation.bakery_style import REFERENCE_TARGET_COL
+from praedixa.platform.utils.memory import downcast_pandas_frame
 
 
-def _normalize_reference_split_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    normalized = frame.copy()
-    normalized[REFERENCE_DATE_COL] = pd.to_datetime(normalized[REFERENCE_DATE_COL])
-    normalized[REFERENCE_PRODUCT_COL] = normalized[REFERENCE_PRODUCT_COL].astype(str)
-    normalized[REFERENCE_TARGET_COL] = normalized[REFERENCE_TARGET_COL].astype(float)
-    return normalized.sort_values([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL]).reset_index(drop=True)
+def _to_polars_frame(frame: pd.DataFrame) -> pl.DataFrame:
+    return pl.from_pandas(frame, include_index=False)
 
 
-def _build_bakery_overlap_feature_block(merged: pd.DataFrame) -> pd.DataFrame:
-    product_group = merged.groupby("product_id", sort=False)
-    quantity_series = merged["current_day_demand_qty"].astype(float)
-    target_dt = pd.to_datetime(merged["target_dt"])
-
-    gdp_growth_latest_lag_28 = product_group["gdp_growth_latest"].shift(28)
-    gdp_current_usd_latest_lag_28 = product_group["gdp_current_usd_latest"].shift(28)
-    lending_interest_rate_latest_lag_28 = product_group["lending_interest_rate_latest"].shift(28)
-    government_debt_pct_gdp_latest_lag_28 = product_group["government_debt_pct_gdp_latest"].shift(28)
-
-    feature_map: dict[str, object] = {
-        "target_demand_qty_d_plus_1": product_group["current_day_demand_qty"].shift(-1),
-        "lag_1": product_group["current_day_demand_qty"].shift(1),
-        "lag_7": product_group["current_day_demand_qty"].shift(7),
-        "lag_14": product_group["current_day_demand_qty"].shift(14),
-        "lag_21": product_group["current_day_demand_qty"].shift(21),
-        "lag_28": product_group["current_day_demand_qty"].shift(28),
-        # `target_lag_7` is anchored on the forecast date (target_dt = dt + 1),
-        # so the matching observed quantity sits six rows back on the current-day axis.
-        "target_lag_7": product_group["current_day_demand_qty"].shift(6),
-        "avg_selling_price_lag_1": product_group["avg_selling_price"].shift(1),
-        "promo_flag_lag_1": product_group["promo_flag"].shift(1),
-        "promo_rate_7": merged["promo_flag"].astype(float).groupby(merged["product_id"], sort=False).transform(
-            lambda s: s.rolling(7, min_periods=1).mean()
-        ),
-        "activity_rate_7": merged["activity_flag"].astype(float).groupby(merged["product_id"], sort=False).transform(
-            lambda s: s.rolling(7, min_periods=1).mean()
-        ),
-        "weather_temperature_lag_0": merged["weather_temperature"],
-        "weather_temperature_lag_1": product_group["weather_temperature"].shift(1),
-        "weather_precipitation_lag_0": merged["weather_precipitation"],
-        "weather_humidity_lag_0": merged["weather_humidity"],
-        "weather_wind_level_lag_0": merged["weather_wind_level"],
-        "target_same_dow_mean_4w": quantity_series.groupby(
-            [merged["product_id"], target_dt.dt.dayofweek], sort=False
-        ).transform(lambda s: s.shift(7).rolling(4, min_periods=1).mean()),
-        "gdp_growth_latest_delta_28": merged["gdp_growth_latest"] - gdp_growth_latest_lag_28,
-        "gdp_current_usd_latest_delta_28": merged["gdp_current_usd_latest"] - gdp_current_usd_latest_lag_28,
-        "lending_interest_rate_latest_delta_28": merged["lending_interest_rate_latest"] - lending_interest_rate_latest_lag_28,
-        "government_debt_pct_gdp_latest_delta_28": merged["government_debt_pct_gdp_latest"] - government_debt_pct_gdp_latest_lag_28,
-    }
-    return pd.DataFrame(feature_map, index=merged.index)
-
-
-def _reference_base_frame(reference_full_df: pd.DataFrame) -> pd.DataFrame:
-    reference_full = _normalize_reference_split_frame(reference_full_df)
-    base = reference_full.rename(
-        columns={
-            REFERENCE_DATE_COL: "dt",
-            REFERENCE_PRODUCT_COL: "product_id",
-            REFERENCE_TARGET_COL: "current_day_demand_qty",
-        }
+def _normalized_reference_split_frame_polars(frame: pd.DataFrame) -> pl.DataFrame:
+    return (
+        _to_polars_frame(frame)
+        .with_columns(
+            [
+                pl.col(REFERENCE_DATE_COL).cast(pl.Datetime, strict=False),
+                pl.col(REFERENCE_PRODUCT_COL).cast(pl.Utf8, strict=False),
+                pl.col(REFERENCE_TARGET_COL).cast(pl.Float64, strict=False),
+            ]
+        )
+        .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
     )
-    return base.loc[:, ["dt", "product_id", "current_day_demand_qty"]].copy()
+
+def _reference_base_frame(reference_full_df: pd.DataFrame) -> pl.DataFrame:
+    return _normalized_reference_split_frame_polars(reference_full_df).select(
+        [
+            pl.col(REFERENCE_DATE_COL).alias("dt"),
+            pl.col(REFERENCE_PRODUCT_COL).alias("product_id"),
+            pl.col(REFERENCE_TARGET_COL).alias("current_day_demand_qty"),
+        ]
+    )
 
 
-def _normalized_gold_base_frame(gold_base_panel_df: pd.DataFrame) -> pd.DataFrame:
-    gold_base = gold_base_panel_df.copy()
-    gold_base["dt"] = pd.to_datetime(gold_base["dt"])
-    gold_base["target_dt"] = pd.to_datetime(gold_base["target_dt"])
-    gold_base["product_id"] = gold_base["product_id"].astype(str)
-    return gold_base
+def _normalized_gold_base_frame(gold_base_panel_df: pd.DataFrame) -> pl.DataFrame:
+    return _to_polars_frame(gold_base_panel_df).with_columns(
+        [
+            pl.col("dt").cast(pl.Datetime, strict=False),
+            pl.col("target_dt").cast(pl.Datetime, strict=False),
+            pl.col("product_id").cast(pl.Utf8, strict=False),
+        ]
+    )
 
 
-def _reference_enrichment_columns(gold_base: pd.DataFrame) -> list[str]:
+def _reference_enrichment_columns(gold_base: pl.DataFrame) -> list[str]:
     return [
         column
         for column in gold_base.columns
@@ -88,122 +56,234 @@ def _reference_enrichment_columns(gold_base: pd.DataFrame) -> list[str]:
     ]
 
 
-def _merged_reference_frame(base: pd.DataFrame, gold_base: pd.DataFrame) -> pd.DataFrame:
+def _merged_reference_frame(base: pl.DataFrame, gold_base: pl.DataFrame) -> pl.DataFrame:
     enrichment_cols = _reference_enrichment_columns(gold_base)
-    return base.merge(
-        gold_base.loc[:, ["dt", "product_id", *enrichment_cols]],
+    return base.join(
+        gold_base.select(["dt", "product_id", *enrichment_cols]),
         how="left",
         on=["dt", "product_id"],
     )
 
 
-def _reference_templates(gold_base: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
-    date_template = gold_base.sort_values(["dt", "product_id"]).groupby("dt").first(numeric_only=False)
-    product_template = gold_base.sort_values(["dt"]).groupby("product_id").last(numeric_only=False)
-    price_template = gold_base.groupby("product_id")["avg_selling_price"].median(numeric_only=True)
+def _reference_templates(gold_base: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    date_template = gold_base.sort(["dt", "product_id"]).group_by("dt", maintain_order=True).first()
+    product_template = gold_base.sort("dt").group_by("product_id", maintain_order=True).last()
+    price_template = gold_base.group_by("product_id", maintain_order=True).agg(
+        pl.col("avg_selling_price").median().alias("avg_selling_price_template")
+    )
     return date_template, product_template, price_template
 
 
 def _fill_template_columns(
-    merged: pd.DataFrame,
+    merged: pl.DataFrame,
     *,
-    template: pd.DataFrame,
+    template: pl.DataFrame,
     fill_columns: list[str],
     key_column: str,
-) -> None:
-    for column in fill_columns:
-        if column in merged.columns and column in template.columns:
-            merged[column] = merged[column].fillna(merged[key_column].map(template[column]))
+    suffix: str,
+) -> pl.DataFrame:
+    available = [column for column in fill_columns if column in merged.columns and column in template.columns]
+    if not available:
+        return merged
+    renamed = {column: f"{column}{suffix}" for column in available}
+    return (
+        merged.join(
+            template.select([key_column, *available]).rename(renamed),
+            how="left",
+            on=key_column,
+        )
+        .with_columns([pl.coalesce(pl.col(column), pl.col(renamed[column])).alias(column) for column in available])
+        .drop(list(renamed.values()))
+    )
 
 
 def _fill_reference_templates(
-    merged: pd.DataFrame,
+    merged: pl.DataFrame,
     *,
-    date_template: pd.DataFrame,
-    product_template: pd.DataFrame,
-) -> None:
-    _fill_template_columns(
+    date_template: pl.DataFrame,
+    product_template: pl.DataFrame,
+) -> pl.DataFrame:
+    with_dates = _fill_template_columns(
         merged,
         template=date_template,
         fill_columns=_DATE_TEMPLATE_FILL_COLUMNS,
         key_column="dt",
+        suffix="__date_template",
     )
-    _fill_template_columns(
-        merged,
+    return _fill_template_columns(
+        with_dates,
         template=product_template,
         fill_columns=_PRODUCT_TEMPLATE_FILL_COLUMNS,
         key_column="product_id",
+        suffix="__product_template",
     )
 
 
-def _macro_available_flag(merged: pd.DataFrame) -> pd.Series:
+def _resolved_column_expr(
+    frame: pl.DataFrame,
+    column: str,
+    default: object,
+    *,
+    dtype: Any,
+) -> pl.Expr:
+    base_expr = pl.col(column) if column in frame.columns else pl.lit(default, dtype=dtype)
+    return base_expr.cast(dtype, strict=False).fill_null(default)
+
+
+def _optional_float_expr(frame: pl.DataFrame, column: str) -> pl.Expr:
+    if column in frame.columns:
+        return pl.col(column).cast(pl.Float64, strict=False)
+    return pl.lit(None, dtype=pl.Float64)
+
+
+def _weather_available_expr() -> pl.Expr:
+    return pl.any_horizontal(
+        [
+            pl.col("weather_temperature").is_not_null(),
+            pl.col("weather_precipitation").is_not_null(),
+            pl.col("weather_humidity").is_not_null(),
+            pl.col("weather_wind_level").is_not_null(),
+        ]
+    ).alias("weather_available")
+
+
+def _macro_available_expr() -> pl.Expr:
+    return pl.any_horizontal(
+        [
+            pl.col("gdp_growth_latest").is_not_null(),
+            pl.col("gdp_current_usd_latest").is_not_null(),
+            pl.col("lending_interest_rate_latest").is_not_null(),
+            pl.col("government_debt_pct_gdp_latest").is_not_null(),
+        ]
+    ).alias("macro_available")
+
+
+def _apply_reference_defaults(merged: pl.DataFrame, *, price_template: pl.DataFrame) -> pl.DataFrame:
+    base = merged.join(price_template, how="left", on="product_id").with_columns(
+        [
+            pl.lit("bakery").alias("dataset_source"),
+            _resolved_column_expr(merged, "location_id", "bakery_store_1", dtype=pl.Utf8).alias("location_id"),
+            _resolved_column_expr(merged, "product_active_flag", True, dtype=pl.Boolean).alias("product_active_flag"),
+            _resolved_column_expr(merged, "location_open_flag", True, dtype=pl.Boolean).alias("location_open_flag"),
+            _resolved_column_expr(merged, "day_complete_flag", True, dtype=pl.Boolean).alias("day_complete_flag"),
+            _resolved_column_expr(merged, "is_missing_day", 0, dtype=pl.Int64)
+            .cast(pl.Boolean)
+            .alias("missing_sales_flag"),
+            _resolved_column_expr(merged, "observed_stockout_flag", False, dtype=pl.Boolean).alias(
+                "observed_stockout_flag"
+            ),
+            _resolved_column_expr(merged, "observed_stockout_available", False, dtype=pl.Boolean).alias(
+                "observed_stockout_available"
+            ),
+            _resolved_column_expr(merged, "anomaly_flag", False, dtype=pl.Boolean).alias("anomaly_flag"),
+            _resolved_column_expr(merged, "location_closed_flag", False, dtype=pl.Boolean).alias(
+                "location_closed_flag"
+            ),
+            pl.coalesce(
+                _optional_float_expr(merged, "avg_selling_price"),
+                pl.col("avg_selling_price_template"),
+            ).alias("avg_selling_price"),
+            _resolved_column_expr(merged, "observed_discount_amount", 0.0, dtype=pl.Float64).alias(
+                "observed_discount_amount"
+            ),
+            _resolved_column_expr(merged, "promo_flag", False, dtype=pl.Boolean).alias("promo_flag"),
+            (pl.col("dt") + pl.duration(days=1)).alias("target_dt"),
+        ]
+    )
+    revenue_fill = pl.col("current_day_demand_qty").fill_null(0.0) * pl.col("avg_selling_price").fill_null(0.0)
     return (
-        merged["gdp_growth_latest"].notna()
-        | merged["gdp_current_usd_latest"].notna()
-        | merged["lending_interest_rate_latest"].notna()
-        | merged["government_debt_pct_gdp_latest"].notna()
+        base.with_columns(
+            [
+                (~pl.col("missing_sales_flag")).alias("is_observed_row"),
+                pl.col("current_day_demand_qty").fill_null(0.0).eq(0.0).alias("true_zero_demand_flag"),
+                pl.coalesce(_optional_float_expr(base, "observed_revenue_net"), revenue_fill).alias(
+                    "observed_revenue_net"
+                ),
+                pl.col("avg_selling_price").is_not_null().alias("price_available"),
+                _weather_available_expr(),
+                _macro_available_expr(),
+            ]
+        )
+        .drop("avg_selling_price_template")
+        .sort(["product_id", "dt"])
     )
 
 
-def _apply_reference_defaults(merged: pd.DataFrame, *, price_template: pd.Series) -> pd.DataFrame:
-    merged["dataset_source"] = "bakery"
-    merged["location_id"] = merged["location_id"].fillna("bakery_store_1")
-    merged["product_active_flag"] = merged.get("product_active_flag", True)
-    merged["product_active_flag"] = merged["product_active_flag"].fillna(True)
-    merged["location_open_flag"] = merged["location_open_flag"].fillna(True)
-    merged["day_complete_flag"] = merged["day_complete_flag"].fillna(True)
-    merged["missing_sales_flag"] = merged.get("is_missing_day", 0)
-    merged["missing_sales_flag"] = merged["missing_sales_flag"].fillna(0).astype(bool)
-    merged["is_observed_row"] = ~merged["missing_sales_flag"]
-    merged["observed_stockout_flag"] = merged.get("observed_stockout_flag", False)
-    merged["observed_stockout_flag"] = merged["observed_stockout_flag"].fillna(False)
-    merged["observed_stockout_available"] = merged.get("observed_stockout_available", False)
-    merged["observed_stockout_available"] = merged["observed_stockout_available"].fillna(False)
-    merged["anomaly_flag"] = merged.get("anomaly_flag", False)
-    merged["anomaly_flag"] = merged["anomaly_flag"].fillna(False)
-    merged["true_zero_demand_flag"] = merged["current_day_demand_qty"].fillna(0.0).eq(0.0)
-    merged["location_closed_flag"] = merged.get("location_closed_flag", False)
-    merged["location_closed_flag"] = merged["location_closed_flag"].fillna(False)
-    merged["avg_selling_price"] = merged["avg_selling_price"].fillna(merged["product_id"].map(price_template))
-    merged["observed_discount_amount"] = merged.get("observed_discount_amount", 0.0)
-    merged["observed_discount_amount"] = merged["observed_discount_amount"].fillna(0.0)
-    merged["promo_flag"] = merged.get("promo_flag", False)
-    merged["promo_flag"] = merged["promo_flag"].fillna(False)
-    merged["observed_revenue_net"] = merged.get("observed_revenue_net", np.nan)
-    revenue_fill = merged["current_day_demand_qty"].fillna(0.0) * merged["avg_selling_price"].fillna(0.0)
-    merged["observed_revenue_net"] = merged["observed_revenue_net"].fillna(revenue_fill)
-    merged["price_available"] = merged["avg_selling_price"].notna()
-    merged["weather_available"] = (
-        merged["weather_temperature"].notna()
-        | merged["weather_precipitation"].notna()
-        | merged["weather_humidity"].notna()
-        | merged["weather_wind_level"].notna()
-    )
-    merged["macro_available"] = _macro_available_flag(merged)
-    merged["target_dt"] = merged["dt"] + pd.Timedelta(days=1)
-    merged = merged.sort_values(["product_id", "dt"]).reset_index(drop=True)
-    return pd.concat([merged, _build_bakery_overlap_feature_block(merged)], axis=1)
+def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
+    with_target_dow = merged.with_columns(((pl.col("target_dt").dt.weekday() - 1).cast(pl.Int8)).alias("__target_dow"))
+    return with_target_dow.with_columns(
+        [
+            pl.col("current_day_demand_qty").shift(-1).over("product_id").alias("target_demand_qty_d_plus_1"),
+            pl.col("current_day_demand_qty").shift(1).over("product_id").alias("lag_1"),
+            pl.col("current_day_demand_qty").shift(7).over("product_id").alias("lag_7"),
+            pl.col("current_day_demand_qty").shift(14).over("product_id").alias("lag_14"),
+            pl.col("current_day_demand_qty").shift(21).over("product_id").alias("lag_21"),
+            pl.col("current_day_demand_qty").shift(28).over("product_id").alias("lag_28"),
+            pl.col("current_day_demand_qty").shift(6).over("product_id").alias("target_lag_7"),
+            pl.col("avg_selling_price").shift(1).over("product_id").alias("avg_selling_price_lag_1"),
+            pl.col("promo_flag").shift(1).over("product_id").alias("promo_flag_lag_1"),
+            pl.col("promo_flag")
+            .cast(pl.Float64)
+            .rolling_mean(window_size=7, min_samples=1)
+            .over("product_id")
+            .alias("promo_rate_7"),
+            pl.col("activity_flag")
+            .cast(pl.Float64)
+            .rolling_mean(window_size=7, min_samples=1)
+            .over("product_id")
+            .alias("activity_rate_7"),
+            pl.col("weather_temperature").alias("weather_temperature_lag_0"),
+            pl.col("weather_temperature").shift(1).over("product_id").alias("weather_temperature_lag_1"),
+            pl.col("weather_precipitation").alias("weather_precipitation_lag_0"),
+            pl.col("weather_humidity").alias("weather_humidity_lag_0"),
+            pl.col("weather_wind_level").alias("weather_wind_level_lag_0"),
+            pl.col("current_day_demand_qty")
+            .shift(7)
+            .rolling_mean(window_size=4, min_samples=1)
+            .over(["product_id", "__target_dow"])
+            .alias("target_same_dow_mean_4w"),
+            (
+                pl.col("gdp_growth_latest")
+                - pl.col("gdp_growth_latest").shift(28).over("product_id")
+            ).alias("gdp_growth_latest_delta_28"),
+            (
+                pl.col("gdp_current_usd_latest")
+                - pl.col("gdp_current_usd_latest").shift(28).over("product_id")
+            ).alias("gdp_current_usd_latest_delta_28"),
+            (
+                pl.col("lending_interest_rate_latest")
+                - pl.col("lending_interest_rate_latest").shift(28).over("product_id")
+            ).alias("lending_interest_rate_latest_delta_28"),
+            (
+                pl.col("government_debt_pct_gdp_latest")
+                - pl.col("government_debt_pct_gdp_latest").shift(28).over("product_id")
+            ).alias("government_debt_pct_gdp_latest_delta_28"),
+        ]
+    ).drop("__target_dow")
 
 
-def _target_rows_from_reference(merged: pd.DataFrame, reference_test: pd.DataFrame) -> pd.DataFrame:
-    target_rows = merged.merge(
-        reference_test.loc[:, [REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL, REFERENCE_TARGET_COL]],
-        how="right",
-        left_on=["product_id", "target_dt"],
-        right_on=[REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL],
+def _target_rows_from_reference(merged: pl.DataFrame, reference_test: pl.DataFrame) -> pd.DataFrame:
+    target_rows = (
+        reference_test.join(
+            merged,
+            how="left",
+            left_on=[REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL],
+            right_on=["product_id", "target_dt"],
+        )
+        .with_columns(
+            [
+                pl.col(REFERENCE_PRODUCT_COL).cast(pl.Utf8, strict=False).alias("product_id"),
+                pl.col(REFERENCE_DATE_COL).cast(pl.Datetime, strict=False).alias("target_dt"),
+                pl.col(REFERENCE_TARGET_COL).cast(pl.Float64, strict=False).alias("target_demand_qty_d_plus_1"),
+                pl.when(pl.col("target_lag_7").is_not_null() & (pl.col("target_lag_7") >= 0.0))
+                .then(pl.col("target_demand_qty_d_plus_1").log1p() - pl.col("target_lag_7").log1p())
+                .otherwise(None)
+                .alias("target_delta_log_wow_d_plus_1"),
+            ]
+        )
+        .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
     )
-    target_rows["product_id"] = target_rows["product_id"].fillna(target_rows[REFERENCE_PRODUCT_COL]).astype(str)
-    target_rows["target_dt"] = pd.to_datetime(target_rows[REFERENCE_DATE_COL])
-    target_rows["target_demand_qty_d_plus_1"] = target_rows[REFERENCE_TARGET_COL].astype(float)
-    target_rows["target_delta_log_wow_d_plus_1"] = np.where(
-        target_rows["target_lag_7"].notna() & (target_rows["target_lag_7"].astype(float) >= 0.0),
-        np.log1p(target_rows["target_demand_qty_d_plus_1"].astype(float))
-        - np.log1p(target_rows["target_lag_7"].astype(float)),
-        np.nan,
-    )
-    target_rows[REFERENCE_PRODUCT_COL] = target_rows[REFERENCE_PRODUCT_COL].astype(str)
-    target_rows[REFERENCE_DATE_COL] = pd.to_datetime(target_rows[REFERENCE_DATE_COL])
-    return target_rows.sort_values([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL]).reset_index(drop=True)
+    return downcast_pandas_frame(target_rows.to_pandas())
 
 
 def build_bakery_reference_feature_frame(
@@ -211,13 +291,17 @@ def build_bakery_reference_feature_frame(
     reference_test_df: pd.DataFrame,
     gold_base_panel_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    reference_test = _normalize_reference_split_frame(reference_test_df)
+    reference_test = _normalized_reference_split_frame_polars(reference_test_df)
     gold_base = _normalized_gold_base_frame(gold_base_panel_df)
     merged = _merged_reference_frame(_reference_base_frame(reference_full_df), gold_base)
     date_template, product_template, price_template = _reference_templates(gold_base)
-    _fill_reference_templates(merged, date_template=date_template, product_template=product_template)
-    merged = _apply_reference_defaults(merged, price_template=price_template)
-    return _target_rows_from_reference(merged, reference_test)
+    merged = _fill_reference_templates(
+        merged,
+        date_template=date_template,
+        product_template=product_template,
+    )
+    prepared = _apply_reference_defaults(merged, price_template=price_template)
+    return _target_rows_from_reference(_build_bakery_overlap_feature_block(prepared), reference_test)
 
 
 _DATE_TEMPLATE_FILL_COLUMNS = [
@@ -258,15 +342,4 @@ _PRODUCT_TEMPLATE_FILL_COLUMNS = [
     "category_level_1",
     "category_level_2",
     "category_level_3",
-    "location_open_flag",
-    "product_active_flag",
-    "client_id",
-    "vertical_level_1",
-    "vertical_level_2",
-    "country_code",
-    "region_code",
-    "city_name",
-    "freshretail_rescaled_flag",
-    "target_scale_assumption",
-    "gold_run_id",
 ]

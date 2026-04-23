@@ -95,7 +95,7 @@ def _load_gold_sampled_frames(
     tuning_spec: GoldSplitSamplingSpec,
     projection_columns: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    logger.info("Submitting sampled gold train query.")
+    logger.info("Submitting sampled gold train split query.")
     train_frame = connection.execute(
         build_gold_split_sampling_query(
             gold_table=train_spec.gold_table,
@@ -107,7 +107,7 @@ def _load_gold_sampled_frames(
             selected_columns=projection_columns,
         )
     ).fetchdf()
-    logger.info("Submitting sampled gold validation query.")
+    logger.info("Submitting sampled gold validation split query.")
     tuning_frame = connection.execute(
         build_gold_split_sampling_query(
             gold_table=tuning_spec.gold_table,
@@ -332,7 +332,7 @@ def load_gold_train_tuning_frames(
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     logger.info(
-        "Loading sampled gold splits for optimisation: duckdb_path=%s gold_table=%s train_split=train tuning_split=val train_sample_fraction=%.4f tuning_sample_fraction=%.4f",
+        "Loading sampled gold train/validation splits: duckdb_path=%s gold_table=%s train_split=train tuning_split=val train_sample_fraction=%.4f tuning_sample_fraction=%.4f",
         duckdb_path,
         gold_table,
         train_sample_fraction,

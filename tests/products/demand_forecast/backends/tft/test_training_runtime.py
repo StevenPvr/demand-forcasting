@@ -146,6 +146,31 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
 
         self.assertTrue(benchmark_enabled)
 
+    def test_visible_validation_metrics_formats_wape_and_losses_for_logs(self) -> None:
+        class _FakeScalar:
+            def __init__(self, value: float) -> None:
+                self._value = value
+
+            def item(self) -> float:
+                return self._value
+
+        visible_metrics = cast(Any, training_runtime_module)._visible_validation_metrics(
+            {
+                "val_wape": _FakeScalar(0.123456789),
+                "val_loss": _FakeScalar(0.212345678),
+                "train_loss_epoch": _FakeScalar(0.000000865),
+            }
+        )
+
+        self.assertEqual(
+            visible_metrics,
+            {
+                "val_wape": "0.123457",
+                "val_loss": "0.212346",
+                "train_loss_epoch": "8.65e-07",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

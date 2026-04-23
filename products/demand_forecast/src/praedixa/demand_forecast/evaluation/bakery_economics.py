@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+import duckdb
 import pandas as pd
 
 from praedixa.demand_forecast.evaluation.bakery_baselines import FIELD_BASELINE_NAME
@@ -11,7 +12,7 @@ from praedixa.demand_forecast.evaluation.bakery_metrics import REFERENCE_PRODUCT
 
 DEFAULT_UNIT_SALE_PRICE_EUR = 1.0
 DEFAULT_PRODUCTION_COST_RATIO = 0.35
-DEFAULT_RAW_SALES_CSV = Path("bakery_sales/data/Bakery sales.csv")
+DEFAULT_RAW_SALES_CSV: Path | None = None
 INVALID_ARTICLES: tuple[str, ...] = (
     "COUPON",
     "DECOUVERTE",
@@ -24,6 +25,7 @@ def build_simple_economic_gain_payload(
     predictions_df: pd.DataFrame,
     metrics_payload: dict[str, Any],
     *,
+    duckdb_path: str | Path | None = None,
     raw_sales_csv: str | Path | None = DEFAULT_RAW_SALES_CSV,
     production_cost_ratio: float = DEFAULT_PRODUCTION_COST_RATIO,
 ) -> dict[str, Any]:
@@ -34,6 +36,7 @@ def build_simple_economic_gain_payload(
 
     unit_sale_prices = _test_window_unit_prices(
         predictions_df=predictions_df,
+        duckdb_path=duckdb_path,
         raw_sales_csv=raw_sales_csv,
     )
     priced_comparison_df = _apply_loss_model(
@@ -205,8 +208,15 @@ def _remove_negative_cancellations(sales_df: pd.DataFrame) -> pd.DataFrame:
 def _test_window_unit_prices(
     *,
     predictions_df: pd.DataFrame,
+    duckdb_path: str | Path | None,
     raw_sales_csv: str | Path | None,
 ) -> dict[str, float]:
+    from_gold = _test_window_unit_prices_from_gold(
+        predictions_df=predictions_df,
+        duckdb_path=duckdb_path,
+    )
+    if from_gold:
+        return from_gold
     if raw_sales_csv is None or not Path(raw_sales_csv).exists():
         return {}
 
@@ -233,6 +243,51 @@ def _test_window_unit_prices(
         total_revenue=("line_revenue", "sum"),
     )
     grouped_df = grouped_df.loc[grouped_df["total_quantity"].astype(float) > 0.0].copy()
+    grouped_df["unit_sale_price_eur"] = (
+        grouped_df["total_revenue"].astype(float)
+        / grouped_df["total_quantity"].astype(float)
+    )
+    return {
+        str(row["article"]): float(row["unit_sale_price_eur"])
+        for row in grouped_df.to_dict(orient="records")
+    }
+
+
+def _test_window_unit_prices_from_gold(
+    *,
+    predictions_df: pd.DataFrame,
+    duckdb_path: str | Path | None,
+) -> dict[str, float]:
+    if duckdb_path is None or not Path(duckdb_path).exists():
+        return {}
+    prediction_targets = pd.DataFrame(
+        {
+            "dt": pd.to_datetime(predictions_df["target_date"], format="%Y-%m-%d", errors="raise"),
+            "product_id": predictions_df["product"].astype(str),
+        }
+    ).drop_duplicates(ignore_index=True)
+    connection = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        connection.register("prediction_targets", prediction_targets)
+        grouped_df = connection.execute(
+            """
+            select
+                bakery.product_id as article,
+                sum(coalesce(bakery.observed_revenue_net, 0.0)) as total_revenue,
+                sum(coalesce(bakery.current_day_demand_qty, 0.0)) as total_quantity
+            from gold.gold_base_panel_d1 as bakery
+            inner join prediction_targets as target
+                on bakery.dt = target.dt
+               and bakery.product_id = target.product_id
+            where bakery.dataset_source = 'bakery'
+            group by 1
+            """
+        ).fetchdf()
+    finally:
+        connection.close()
+    grouped_df = grouped_df.loc[grouped_df["total_quantity"].astype(float) > 0.0].copy()
+    if len(grouped_df) == 0:
+        return {}
     grouped_df["unit_sale_price_eur"] = (
         grouped_df["total_revenue"].astype(float)
         / grouped_df["total_quantity"].astype(float)

@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.feature_mapping import resolve_explicit_tft_layout
 from praedixa.demand_forecast.contracts.targets import (
     TargetContract,
     build_target_contract_metadata,
@@ -79,18 +80,12 @@ def _load_gold_evaluation_frames(
     gold_table: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
-    bakery_reference_train_csv: str | Path,
-    bakery_reference_val_csv: str | Path,
-    bakery_reference_test_csv: str | Path,
 ) -> LoadedEvaluationFrames:
     loaded = load_gold_reference_mode_frames(
         duckdb_path=duckdb_path,
         gold_table=gold_table,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
-        bakery_reference_train_csv=bakery_reference_train_csv,
-        bakery_reference_val_csv=bakery_reference_val_csv,
-        bakery_reference_test_csv=bakery_reference_test_csv,
     )
     return LoadedEvaluationFrames("bakery_reference_overlap", *loaded)
 
@@ -105,9 +100,6 @@ def load_evaluation_frames(
     gold_table: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
-    bakery_reference_train_csv: str | Path,
-    bakery_reference_val_csv: str | Path,
-    bakery_reference_test_csv: str | Path,
     logger: logging.Logger,
 ) -> LoadedEvaluationFrames:
     explicit_local_mode = (
@@ -129,7 +121,7 @@ def load_evaluation_frames(
             requested_target_col=requested_target_col,
         )
     logger.info(
-        "Running evaluation in bakery reference mode: duckdb_path=%s gold_table=%s train_sample_fraction=%.4f tuning_sample_fraction=%.4f",
+        "Running evaluation in bakery reference mode: duckdb_path=%s gold_table=%s train_sample_fraction=%.4f tuning_sample_fraction=%.4f bakery_test=unsampled_reference_split reference_protocol=bakery_product_arima_equivalent_from_gold",
         duckdb_path,
         gold_table,
         train_sample_fraction,
@@ -140,9 +132,6 @@ def load_evaluation_frames(
         gold_table=gold_table,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
-        bakery_reference_train_csv=bakery_reference_train_csv,
-        bakery_reference_val_csv=bakery_reference_val_csv,
-        bakery_reference_test_csv=bakery_reference_test_csv,
     )
 
 
@@ -162,6 +151,77 @@ def _resolve_feature_context(
     missing_in_test_feature_cols = [column for column in feature_cols if column not in test_frame.columns]
     filtered_feature_cols = [column for column in feature_cols if column in test_frame.columns]
     return filtered_feature_cols, constant_feature_cols, identifier_feature_cols, missing_in_test_feature_cols
+
+
+def _real_feature_columns(
+    feature_cols: list[str],
+) -> list[str]:
+    layout = resolve_explicit_tft_layout(feature_cols)
+    ordered_reals: list[str] = []
+    for column in [*layout["static_reals"], *layout["time_varying_known_reals"], *layout["time_varying_unknown_reals"]]:
+        if column not in ordered_reals:
+            ordered_reals.append(column)
+    return ordered_reals
+
+
+def _feature_cols_all_null_in_test(
+    test_frame: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+) -> list[str]:
+    return [column for column in feature_cols if column in test_frame.columns and bool(test_frame[column].isna().all())]
+
+
+def _train_real_feature_fill_values(
+    train_frame: pd.DataFrame,
+    *,
+    real_feature_cols: list[str],
+) -> dict[str, float]:
+    fill_values: dict[str, float] = {}
+    for column in real_feature_cols:
+        numeric_values = pd.to_numeric(train_frame[column], errors="coerce").dropna()
+        fill_values[column] = float(numeric_values.median()) if not numeric_values.empty else 0.0
+    return fill_values
+
+
+def _impute_real_feature_values(
+    frame: pd.DataFrame,
+    *,
+    real_feature_fill_values: dict[str, float],
+) -> pd.DataFrame:
+    imputed = frame.copy()
+    for column, fill_value in real_feature_fill_values.items():
+        if column not in imputed.columns:
+            continue
+        imputed[column] = pd.to_numeric(imputed[column], errors="coerce").fillna(fill_value)
+    return imputed
+
+
+def _sanitize_evaluation_feature_frames(
+    *,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    feature_cols: list[str],
+    missing_in_test_feature_cols: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], list[str]]:
+    fully_missing_in_test_feature_cols = _feature_cols_all_null_in_test(test_frame, feature_cols=feature_cols)
+    resolved_feature_cols = [
+        column
+        for column in feature_cols
+        if column not in fully_missing_in_test_feature_cols
+    ]
+    real_feature_fill_values = _train_real_feature_fill_values(
+        train_frame,
+        real_feature_cols=_real_feature_columns(resolved_feature_cols),
+    )
+    return (
+        _impute_real_feature_values(train_frame, real_feature_fill_values=real_feature_fill_values),
+        _impute_real_feature_values(valid_frame, real_feature_fill_values=real_feature_fill_values),
+        _impute_real_feature_values(test_frame, real_feature_fill_values=real_feature_fill_values),
+        resolved_feature_cols,
+        [*missing_in_test_feature_cols, *fully_missing_in_test_feature_cols],
+    )
 
 
 def _log_evaluation_dataset_summary(
@@ -286,6 +346,15 @@ def prepare_evaluation_context(
             valid_frame=valid_frame,
             test_frame=test_frame,
             target_contract=target_contract,
+        )
+    )
+    train_frame, valid_frame, test_frame, feature_cols, missing_in_test_feature_cols = (
+        _sanitize_evaluation_feature_frames(
+            train_frame=train_frame,
+            valid_frame=valid_frame,
+            test_frame=test_frame,
+            feature_cols=feature_cols,
+            missing_in_test_feature_cols=missing_in_test_feature_cols,
         )
     )
     overlap_metadata = _log_evaluation_dataset_summary(

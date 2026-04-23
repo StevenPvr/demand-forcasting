@@ -49,6 +49,8 @@ def _source_system_for_column(column: str) -> str:
         return "events"
     if column.endswith("_holiday_name") or column.endswith("_holiday_flag"):
         return "calendar"
+    if column.startswith("data_quality_"):
+        return "data_quality"
     if "stockout" in column or "closure" in column or "saturation" in column:
         return "operations"
     if "price" in column or "discount" in column or "promo" in column:

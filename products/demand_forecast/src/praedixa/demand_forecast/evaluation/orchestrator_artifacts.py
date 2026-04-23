@@ -173,6 +173,7 @@ def _baseline_prediction_payloads(
 def build_evaluation_payloads(
     *,
     context: EvaluationPreparedContext,
+    duckdb_path: str | Path,
     predictions_df: pd.DataFrame,
     best_iteration: int,
 ) -> tuple[
@@ -206,6 +207,7 @@ def build_evaluation_payloads(
     economic_gain_payload = build_simple_economic_gain_payload(
         canonical_predictions_df,
         metrics_payload,
+        duckdb_path=duckdb_path,
     )
     return (
         baselines_payload,
@@ -240,9 +242,6 @@ def build_evaluation_metadata_payload(
         "test_rows": int(len(context.test_frame)),
         "history_reference_rows": int(len(context.history_reference)),
         "reference_test_rows": int(len(context.scored_reference_test)),
-        "reference_train_csv": str(request.bakery_reference_train_csv),
-        "reference_val_csv": str(request.bakery_reference_val_csv),
-        "reference_test_csv": str(request.bakery_reference_test_csv),
         "duckdb_path": str(request.duckdb_path),
         "gold_table": request.gold_table,
         "train_sample_fraction": float(request.train_sample_fraction),

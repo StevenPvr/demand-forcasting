@@ -272,7 +272,7 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertEqual(len(predictions), len(valid_frame))
         self.assertTrue(np.isfinite(predictions).all())
 
-    def test_status_features_are_treated_as_known_categoricals(self) -> None:
+    def test_data_quality_counts_are_treated_as_known_reals(self) -> None:
         frame = pd.DataFrame(
             {
                 "series_id": ["store_1__sku_1"] * 4,
@@ -280,8 +280,8 @@ class TFTModelUtilsTests(unittest.TestCase):
                 "product_id": ["sku_1"] * 4,
                 "dt": pd.date_range("2024-01-01", periods=4, freq="D"),
                 "target": [1.0, 2.0, 3.0, 4.0],
-                "promo_flag_status": [2, 1, 2, 0],
-                "rolling_mean_7_status": [2, 2, 1, 0],
+                "data_quality_pricing_promo_missing_count": [0.0, 1.0, 2.0, 0.0],
+                "data_quality_history_unavailable_count": [0.0, 0.0, 1.0, 1.0],
                 "rolling_mean_7": [1.0, 1.0, 2.0, 3.0],
                 "lag_1": [1.0, 1.0, 2.0, 3.0],
             }
@@ -291,9 +291,18 @@ class TFTModelUtilsTests(unittest.TestCase):
         prepared = attach_group_and_time_columns(frame, feature_cols)
         layout = resolve_layout(prepared, feature_cols)
 
-        self.assertIn("promo_flag_status", layout["time_varying_known_categoricals"])
-        self.assertIn("rolling_mean_7_status", layout["time_varying_known_categoricals"])
-        self.assertNotIn("promo_flag_status", layout["time_varying_known_reals"])
+        self.assertIn(
+            "data_quality_pricing_promo_missing_count",
+            layout["time_varying_known_reals"],
+        )
+        self.assertIn(
+            "data_quality_history_unavailable_count",
+            layout["time_varying_known_reals"],
+        )
+        self.assertNotIn(
+            "data_quality_pricing_promo_missing_count",
+            layout["time_varying_known_categoricals"],
+        )
         self.assertNotIn("lag_1", feature_cols)
         self.assertEqual(layout["time_varying_unknown_categoricals"], [])
         self.assertEqual(layout["time_varying_unknown_reals"], [])

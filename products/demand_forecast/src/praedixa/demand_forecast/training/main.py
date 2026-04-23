@@ -120,8 +120,6 @@ def _default_output_dir() -> Path:
 def _default_runtime_profile() -> str:
     if _cuda_available():
         return "scaleway_l40s"
-    if _mps_available():
-        return "mac_metal"
     return DEFAULT_RUNTIME_PROFILE
 
 

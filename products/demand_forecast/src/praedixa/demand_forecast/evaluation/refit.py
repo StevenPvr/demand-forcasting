@@ -7,7 +7,12 @@ from typing import Any, Callable, cast
 import numpy as np
 import pandas as pd
 
-from praedixa.demand_forecast.evaluation.bakery_metrics import REFERENCE_DATE_COL, REFERENCE_PRODUCT_COL, build_predictions_frame
+from praedixa.demand_forecast.evaluation.bakery_metrics import (
+    REFERENCE_DATE_COL,
+    REFERENCE_PRODUCT_COL,
+    build_predictions_frame,
+    rmse_score,
+)
 from praedixa.demand_forecast.evaluation.folds import build_daily_walk_forward_folds
 from praedixa.demand_forecast.evaluation.modeling import fit_evaluation_model, predict_absolute, predict_absolute_quantiles
 from praedixa.demand_forecast.contracts.targets import TargetContract
@@ -244,7 +249,8 @@ def _fit_refit_fold_model(
     target_contract: TargetContract,
     model_params: dict[str, object],
 ) -> tuple[object, int]:
-    refit_train_frame = pd.concat([train_frame, bakery_history_frame], ignore_index=True)
+    aligned_history_frame = bakery_history_frame.reindex(columns=train_frame.columns)
+    refit_train_frame = pd.concat([train_frame, aligned_history_frame], ignore_index=True)
     return fit_model_fn(
         train_frame=refit_train_frame,
         valid_frame=valid_frame,
@@ -275,7 +281,7 @@ def _daily_refit_report_row(
         "valid_rows": int(len(fold_predictions)),
         "best_iteration": int(best_iteration),
         "mae": float(np.mean(np.abs(absolute_target - prediction_values))),
-        "rmse": float(np.sqrt(np.mean(np.square(absolute_target - prediction_values)))),
+        "rmse": rmse_score(absolute_target, prediction_values),
     }
 
 

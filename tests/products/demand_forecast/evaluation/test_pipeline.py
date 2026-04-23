@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 from types import SimpleNamespace
-from typing import cast
+from typing import Callable, cast
 import unittest
 from unittest.mock import patch
 
@@ -16,10 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from praedixa.demand_forecast.evaluation import pipeline as evaluation_pipeline  # noqa: E402
+import praedixa.demand_forecast.evaluation.orchestrator_runtime as evaluation_orchestrator_runtime  # noqa: E402
 from praedixa.demand_forecast.evaluation.modeling import select_feature_columns  # noqa: E402
 from praedixa.demand_forecast.evaluation.bakery_metrics import (  # noqa: E402
     build_predictions_frame,
     compute_probabilistic_metrics_payload,
+    rmse_score,
 )
 from praedixa.demand_forecast.contracts.targets import TargetContract  # noqa: E402
 
@@ -28,6 +30,10 @@ evaluate_daily_refit_predictions = evaluation_pipeline.evaluate_daily_refit_pred
 build_daily_walk_forward_folds = evaluation_pipeline.build_daily_walk_forward_folds
 build_evaluation_outputs = evaluation_pipeline.build_evaluation_outputs
 EvaluationBuildRequest = evaluation_pipeline.EvaluationBuildRequest
+_FIT_FINAL_MODEL = cast(
+    Callable[..., object],
+    getattr(evaluation_orchestrator_runtime, "_fit_final_model"),
+)
 
 
 def _build_eval_output_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -232,6 +238,7 @@ def _build_refit_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Tar
             "target": [10.0, 20.0, 30.0, 40.0],
             "target_abs": [10.0, 20.0, 30.0, 40.0],
             "feat": [1.0, 2.0, 3.0, 4.0],
+            "reference_only_col": ["x", "y", "z", "w"],
         }
     )
     contract = TargetContract("target", "target_abs", "identity", None)
@@ -350,6 +357,15 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(overall_metrics["coverage_95"], 1.0)
         self.assertIn("pinball_loss_p50", per_product_metrics["10"])
 
+    def test_rmse_score_handles_large_residuals_without_overflow(self) -> None:
+        rmse = rmse_score(
+            np.array([1.0e200, 1.0e200], dtype=float),
+            np.array([0.0, 0.0], dtype=float),
+        )
+
+        self.assertTrue(np.isfinite(rmse))
+        self.assertEqual(rmse, 1.0e200)
+
     def test_build_daily_walk_forward_folds_creates_one_fold_per_day(self) -> None:
         frame = pd.DataFrame(
             {
@@ -411,9 +427,11 @@ class EvaluationPipelineTests(unittest.TestCase):
     def test_daily_refit_predictions_keep_actuals_aligned_with_product_and_target_date(self) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         train_row_counts: list[int] = []
+        train_fit_columns: list[list[str]] = []
 
         def _record_fit_call(**kwargs: object) -> tuple[str, int]:
             train_row_counts.append(len(cast(pd.DataFrame, kwargs["train_frame"])))
+            train_fit_columns.append(list(cast(pd.DataFrame, kwargs["train_frame"]).columns))
             return "model", 7
 
         def _predict_absolute_stub(_model: object, frame: pd.DataFrame, **_: object) -> np.ndarray:
@@ -438,6 +456,7 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(best_iteration, 7)
         self.assertEqual(len(daily_report_df), 2)
         self.assertEqual(train_row_counts, [2, 4])
+        self.assertEqual(train_fit_columns, [list(train_frame.columns), list(train_frame.columns)])
         self.assertEqual(daily_report_df["bakery_history_rows"].tolist(), [0, 2])
         pd.testing.assert_frame_equal(
             predictions_df.loc[:, ["product", "target_date", "actual"]].reset_index(drop=True),
@@ -449,6 +468,34 @@ class EvaluationPipelineTests(unittest.TestCase):
                 }
             ),
         )
+
+    def test_final_model_fit_aligns_test_frame_to_train_valid_schema(self) -> None:
+        train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
+        recorded: dict[str, object] = {}
+        context = SimpleNamespace(
+            train_frame=train_frame,
+            valid_frame=valid_frame,
+            test_frame=test_frame,
+            feature_cols=["feat"],
+            target_contract=target_contract,
+            best_params={"runtime_profile": "local_cpu"},
+        )
+
+        def _record_final_fit(**kwargs: object) -> str:
+            fit_frame = cast(pd.DataFrame, kwargs["fit_frame"])
+            recorded["columns"] = list(fit_frame.columns)
+            recorded["rows"] = len(fit_frame)
+            return "final-model"
+
+        result = _FIT_FINAL_MODEL(
+            context=context,
+            best_iteration=2,
+            fit_final_model_fn=_record_final_fit,
+        )
+
+        self.assertEqual(result, "final-model")
+        self.assertEqual(recorded["columns"], list(train_frame.columns))
+        self.assertEqual(recorded["rows"], len(train_frame) + len(valid_frame) + len(test_frame))
 
 
 if __name__ == "__main__":

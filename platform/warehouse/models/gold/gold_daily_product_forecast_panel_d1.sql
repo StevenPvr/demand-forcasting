@@ -1,6 +1,6 @@
 {{ config(tags=["gold", "d1"], materialized="view", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
 
-{% set feature_status_bases = [
+{% set data_quality_metadata_bases = [
     "country_code",
     "region_code",
     "city_name",
@@ -8,13 +8,44 @@
     "category_level_1",
     "category_level_2",
     "category_level_3",
-    "target_delta_log_wow_d_plus_1",
-    "current_day_demand_qty",
-    "observed_stockout_flag",
+    "population_1km",
+    "population_3km",
+    "office_poi_count_1km",
+    "school_poi_count_1km",
+    "transit_station_count_1km",
+    "mall_poi_count_1km",
+    "tourism_poi_count_1km",
+    "competitor_count_500m",
+    "competitor_count_1km",
+    "parking_score",
+] %}
+{% set data_quality_pricing_promo_bases = [
     "avg_selling_price",
     "observed_discount_amount",
     "promo_flag",
     "activity_flag",
+    "avg_selling_price_lag_1",
+    "avg_selling_price_lag_7",
+    "avg_selling_price_lag_28",
+    "avg_selling_price_rolling_mean_7",
+    "avg_selling_price_rolling_mean_28",
+    "observed_discount_amount_lag_1",
+    "observed_discount_amount_lag_7",
+    "observed_discount_amount_lag_28",
+    "observed_discount_amount_rolling_mean_7",
+    "observed_discount_amount_rolling_mean_28",
+    "promo_flag_lag_1",
+    "promo_flag_lag_7",
+    "promo_flag_lag_28",
+    "promo_rate_7",
+    "promo_rate_28",
+    "activity_flag_lag_1",
+    "activity_flag_lag_7",
+    "activity_flag_lag_28",
+    "activity_rate_7",
+    "activity_rate_28",
+] %}
+{% set data_quality_weather_bases = [
     "weather_temperature_lag_0",
     "weather_temperature_lag_1",
     "weather_temperature_lag_7",
@@ -45,16 +76,8 @@
     "weather_wind_level_rolling_mean_7",
     "weather_humidity",
     "weather_wind_level",
-    "population_1km",
-    "population_3km",
-    "office_poi_count_1km",
-    "school_poi_count_1km",
-    "transit_station_count_1km",
-    "mall_poi_count_1km",
-    "tourism_poi_count_1km",
-    "competitor_count_500m",
-    "competitor_count_1km",
-    "parking_score",
+] %}
+{% set data_quality_macro_bases = [
     "gdp_growth_latest",
     "gdp_growth_latest_lag_28",
     "gdp_growth_latest_delta_28",
@@ -72,11 +95,18 @@
     "fr_cpi_yoy_latest",
     "fr_food_cpi_yoy_latest",
     "fr_retail_food_volume_index_latest",
+] %}
+{% set data_quality_operations_bases = [
+    "target_delta_log_wow_d_plus_1",
+    "current_day_demand_qty",
+    "observed_stockout_flag",
     "closure_minutes",
     "channel_disabled_flag",
     "kitchen_saturation_flag",
     "assortment_restriction_flag",
     "order_cutoff_flag",
+] %}
+{% set data_quality_history_bases = [
     "lag_1",
     "lag_7",
     "lag_14",
@@ -89,26 +119,6 @@
     "rolling_mean_14",
     "rolling_mean_28",
     "rolling_std_28",
-    "avg_selling_price_lag_1",
-    "avg_selling_price_lag_7",
-    "avg_selling_price_lag_28",
-    "avg_selling_price_rolling_mean_7",
-    "avg_selling_price_rolling_mean_28",
-    "observed_discount_amount_lag_1",
-    "observed_discount_amount_lag_7",
-    "observed_discount_amount_lag_28",
-    "observed_discount_amount_rolling_mean_7",
-    "observed_discount_amount_rolling_mean_28",
-    "promo_flag_lag_1",
-    "promo_flag_lag_7",
-    "promo_flag_lag_28",
-    "promo_rate_7",
-    "promo_rate_28",
-    "activity_flag_lag_1",
-    "activity_flag_lag_7",
-    "activity_flag_lag_28",
-    "activity_rate_7",
-    "activity_rate_28",
     "observed_stockout_flag_lag_1",
     "observed_stockout_flag_lag_7",
     "observed_stockout_flag_lag_28",
@@ -122,6 +132,22 @@
     "moving_average_7",
     "moving_average_28",
 ] %}
+{% set data_quality_families = [
+    ("metadata", data_quality_metadata_bases),
+    ("pricing_promo", data_quality_pricing_promo_bases),
+    ("weather", data_quality_weather_bases),
+    ("macro", data_quality_macro_bases),
+    ("operations", data_quality_operations_bases),
+    ("history", data_quality_history_bases),
+] %}
+{% set feature_status_bases = (
+    data_quality_metadata_bases
+    + data_quality_pricing_promo_bases
+    + data_quality_weather_bases
+    + data_quality_macro_bases
+    + data_quality_operations_bases
+    + data_quality_history_bases
+) %}
 
 with raw_features as (
     select *
@@ -774,11 +800,16 @@ select
         {{ base }}_missing_flag{{ "," if not loop.last }}
 {% endfor %}
     ),
-{% for base in feature_status_bases %}
-    case
-        when legacy_panel.{{ base }}_applicable_flag = 0 then 0
-        when legacy_panel.{{ base }}_missing_flag = 1 then 1
-        else 2
-    end as {{ base }}_status{{ "," if not loop.last }}
+{% for family_name, bases in data_quality_families %}
+    (
+{% for base in bases %}
+        case when legacy_panel.{{ base }}_applicable_flag = 0 then 1 else 0 end{{ " +" if not loop.last }}
+{% endfor %}
+    ) as data_quality_{{ family_name }}_unavailable_count,
+    (
+{% for base in bases %}
+        legacy_panel.{{ base }}_missing_flag{{ " +" if not loop.last }}
+{% endfor %}
+    ) as data_quality_{{ family_name }}_missing_count{{ "," if not loop.last }}
 {% endfor %}
 from legacy_panel

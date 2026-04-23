@@ -5,9 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from praedixa.demand_forecast.evaluation.constants import (
-    DEFAULT_BAKERY_REFERENCE_TEST_CSV,
-    DEFAULT_BAKERY_REFERENCE_TRAIN_CSV,
-    DEFAULT_BAKERY_REFERENCE_VAL_CSV,
     DEFAULT_BEST_PARAMS_PATH,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_REQUESTED_TARGET_COL,
@@ -48,9 +45,6 @@ class EvaluationBuildRequest:
     gold_table: str = DEFAULT_GOLD_TABLE
     train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION
-    bakery_reference_train_csv: str | Path = DEFAULT_BAKERY_REFERENCE_TRAIN_CSV
-    bakery_reference_val_csv: str | Path = DEFAULT_BAKERY_REFERENCE_VAL_CSV
-    bakery_reference_test_csv: str | Path = DEFAULT_BAKERY_REFERENCE_TEST_CSV
 
 
 def build_evaluation_outputs(

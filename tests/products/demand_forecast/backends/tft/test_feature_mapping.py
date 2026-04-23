@@ -20,7 +20,7 @@ from praedixa.demand_forecast.backends.tft.feature_contract import (  # noqa: E4
 
 class TFTFeatureMappingTests(unittest.TestCase):
     def test_explicit_mapping_covers_gold_panel_and_runtime_helpers(self) -> None:
-        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 347)
+        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 239)
 
     def test_group_id_is_explicit_and_stable(self) -> None:
         self.assertEqual(TFT_GROUP_ID_COLUMNS, ("series_id",))
@@ -29,6 +29,10 @@ class TFTFeatureMappingTests(unittest.TestCase):
     def test_roles_cover_representative_columns(self) -> None:
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["location_id"], "static_categorical")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["history_available_days"], "time_varying_known_real")
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["data_quality_history_missing_count"],
+            "time_varying_known_real",
+        )
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["rolling_mean_7"], "time_varying_known_real")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["target_holiday_flag"], "time_varying_known_categorical")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["population_1km"], "static_real")
@@ -54,11 +58,22 @@ class TFTFeatureMappingTests(unittest.TestCase):
         self.assertEqual(layout["time_varying_unknown_reals"], [])
 
     def test_feature_contract_marks_known_features_as_available(self) -> None:
-        contract = build_feature_contract(["location_id", "rolling_mean_7", "target_holiday_flag"])
+        contract = build_feature_contract(
+            [
+                "location_id",
+                "rolling_mean_7",
+                "target_holiday_flag",
+                "data_quality_history_missing_count",
+            ]
+        )
 
         self.assertEqual(contract["location_id"]["role"], "static_categorical")
         self.assertTrue(contract["location_id"]["available_at_prediction"])
         self.assertEqual(contract["rolling_mean_7"]["source_system"], "operations")
+        self.assertEqual(
+            contract["data_quality_history_missing_count"]["source_system"],
+            "data_quality",
+        )
         self.assertTrue(contract["target_holiday_flag"]["available_at_prediction"])
 
     def test_validate_feature_contract_returns_contract_for_valid_mapping(self) -> None:
