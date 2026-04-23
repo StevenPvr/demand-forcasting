@@ -125,8 +125,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 192)
         self.assertEqual(config.stage_budget, "full")
-        self.assertEqual(config.train_sample_fraction, 1.0)
-        self.assertEqual(config.tuning_sample_fraction, 1.0)
+        self.assertEqual(config.train_sample_fraction, 0.20)
+        self.assertEqual(config.tuning_sample_fraction, 0.20)
 
     def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
         with (
