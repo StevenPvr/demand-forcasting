@@ -37,6 +37,9 @@ from praedixa.demand_forecast.backends.tft.model_common import (
     lazy_import_tft_dependencies,
     resolve_model_params,
 )
+from praedixa.demand_forecast.backends.tft.model_fit import (
+    calibrate_tft_learning_rate,
+)
 from praedixa.demand_forecast.backends.tft.model_utils import (
     DEFAULT_TFT_MODEL_PARAMS,
     fit_tft_model,
@@ -55,7 +58,9 @@ from praedixa.demand_forecast.backends.tft.training_dataset import (
 )
 from praedixa.demand_forecast.contracts.targets import TargetContract
 from praedixa.demand_forecast.feature_screening.pipeline import compute_wape
-from praedixa.demand_forecast.training.baselines import compute_equal_dataset_row_weights_from_values
+from praedixa.demand_forecast.training.baselines import (
+    compute_equal_dataset_row_weights_from_values,
+)
 from praedixa.demand_forecast.training.constants import (
     DEFAULT_DATE_COL,
     DEFAULT_DATASET_SOURCE_COL,
@@ -142,29 +147,74 @@ def _build_shared_tuning_context(
     feature_cols: list[str],
     target_contract: TargetContract,
     target_transform: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, dict[str, int], np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    np.ndarray,
+    dict[str, int],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+]:
     learning_target_col = target_contract.learning_target_col
     required_frame_cols: list[str] = []
-    for column in [GROUP_COL, TIME_IDX_COL, DEFAULT_DATE_COL, DEFAULT_DATASET_SOURCE_COL, *DEFAULT_IDENTIFIER_FEATURE_COLS, *feature_cols]:
+    for column in [
+        GROUP_COL,
+        TIME_IDX_COL,
+        DEFAULT_DATE_COL,
+        DEFAULT_DATASET_SOURCE_COL,
+        *DEFAULT_IDENTIFIER_FEATURE_COLS,
+        *feature_cols,
+    ]:
         if column in train_frame.columns and column not in required_frame_cols:
             required_frame_cols.append(column)
-    train_projected = train_frame.loc[:, [*required_frame_cols, learning_target_col]].copy()
-    tuning_projected = tuning_frame.loc[:, [*required_frame_cols, learning_target_col]].copy()
+    train_projected = train_frame.loc[
+        :, [*required_frame_cols, learning_target_col]
+    ].copy()
+    tuning_projected = tuning_frame.loc[
+        :, [*required_frame_cols, learning_target_col]
+    ].copy()
     if target_transform == "log1p":
-        if (train_projected[learning_target_col] < 0).any() or (tuning_projected[learning_target_col] < 0).any():
-            raise ValueError("Negative targets are incompatible with log1p target transformation.")
-        train_projected[learning_target_col] = np.log1p(train_projected[learning_target_col].astype(float))
-        tuning_projected[learning_target_col] = np.log1p(tuning_projected[learning_target_col].astype(float))
-    train_dataset_sources = train_frame[DEFAULT_DATASET_SOURCE_COL].reset_index(drop=True).to_numpy(copy=False)
+        if (train_projected[learning_target_col] < 0).any() or (
+            tuning_projected[learning_target_col] < 0
+        ).any():
+            raise ValueError(
+                "Negative targets are incompatible with log1p target transformation."
+            )
+        train_projected[learning_target_col] = np.log1p(
+            train_projected[learning_target_col].astype(float)
+        )
+        tuning_projected[learning_target_col] = np.log1p(
+            tuning_projected[learning_target_col].astype(float)
+        )
+    train_dataset_sources = (
+        train_frame[DEFAULT_DATASET_SOURCE_COL]
+        .reset_index(drop=True)
+        .to_numpy(copy=False)
+    )
     train_dataset_source_counts = {
         str(dataset_source): int(count)
-        for dataset_source, count in pd.Series(train_dataset_sources).value_counts(sort=False).items()
+        for dataset_source, count in pd.Series(train_dataset_sources)
+        .value_counts(sort=False)
+        .items()
     }
-    tuning_dataset_sources = tuning_frame[DEFAULT_DATASET_SOURCE_COL].reset_index(drop=True).to_numpy(copy=False)
-    tuning_absolute_target = tuning_frame[target_contract.absolute_target_col].reset_index(drop=True).to_numpy(dtype=np.float32, copy=False)
+    tuning_dataset_sources = (
+        tuning_frame[DEFAULT_DATASET_SOURCE_COL]
+        .reset_index(drop=True)
+        .to_numpy(copy=False)
+    )
+    tuning_absolute_target = (
+        tuning_frame[target_contract.absolute_target_col]
+        .reset_index(drop=True)
+        .to_numpy(dtype=np.float32, copy=False)
+    )
     tuning_reconstruction_anchor = None
     if target_contract.reconstruction_anchor_col is not None:
-        tuning_reconstruction_anchor = tuning_frame[target_contract.reconstruction_anchor_col].reset_index(drop=True).to_numpy(dtype=np.float32, copy=False)
+        tuning_reconstruction_anchor = (
+            tuning_frame[target_contract.reconstruction_anchor_col]
+            .reset_index(drop=True)
+            .to_numpy(dtype=np.float32, copy=False)
+        )
     return (
         train_projected,
         tuning_projected,
@@ -236,9 +286,13 @@ def _reconstruct_absolute_predictions(
     prediction_array = np.asarray(raw_predictions, dtype=np.float32)
     if target_contract.target_mode == "delta_log_wow":
         if shared_reconstruction_anchor is None:
-            raise ValueError("WoW delta reconstruction requires an anchor array in the scoring frame.")
+            raise ValueError(
+                "WoW delta reconstruction requires an anchor array in the scoring frame."
+            )
         anchor = shared_reconstruction_anchor[valid_indices]
-        absolute_predictions = np.expm1(prediction_array + np.log1p(np.clip(anchor, 0.0, None)))
+        absolute_predictions = np.expm1(
+            prediction_array + np.log1p(np.clip(anchor, 0.0, None))
+        )
     elif target_contract.target_mode == "log1p":
         absolute_predictions = np.expm1(prediction_array)
     else:
@@ -266,15 +320,38 @@ def _dataset_fold_results(
     )
     fold_results: list[dict[str, object]] = []
     if quantile_predictions is not None:
-        scored = pd.concat([scored.reset_index(drop=True), quantile_predictions.reset_index(drop=True)], axis=1)
-    for dataset_source, dataset_frame in scored.groupby(DEFAULT_DATASET_SOURCE_COL, sort=False):
+        scored = pd.concat(
+            [
+                scored.reset_index(drop=True),
+                quantile_predictions.reset_index(drop=True),
+            ],
+            axis=1,
+        )
+    for dataset_source, dataset_frame in scored.groupby(
+        DEFAULT_DATASET_SOURCE_COL, sort=False
+    ):
         fold_results.append(
             {
                 "dataset_source": str(dataset_source),
                 "fold": int(cast(Any, fold["fold"])),
-                "wape": float(compute_wape(dataset_frame[absolute_target_col], dataset_frame["prediction"])),
-                "bias": float((dataset_frame["prediction"] - dataset_frame[absolute_target_col]).mean()),
-                "abs_bias": float(abs((dataset_frame["prediction"] - dataset_frame[absolute_target_col]).mean())),
+                "wape": float(
+                    compute_wape(
+                        dataset_frame[absolute_target_col], dataset_frame["prediction"]
+                    )
+                ),
+                "bias": float(
+                    (
+                        dataset_frame["prediction"] - dataset_frame[absolute_target_col]
+                    ).mean()
+                ),
+                "abs_bias": float(
+                    abs(
+                        (
+                            dataset_frame["prediction"]
+                            - dataset_frame[absolute_target_col]
+                        ).mean()
+                    )
+                ),
                 "coverage_80": _interval_coverage(
                     dataset_frame,
                     actual_col=absolute_target_col,
@@ -309,7 +386,10 @@ def _interval_coverage(
     valid_mask = lower.notna() & upper.notna()
     if not valid_mask.any():
         return None
-    covered = ((actual[valid_mask] >= lower[valid_mask]) & (actual[valid_mask] <= upper[valid_mask])).mean()
+    covered = (
+        (actual[valid_mask] >= lower[valid_mask])
+        & (actual[valid_mask] <= upper[valid_mask])
+    ).mean()
     return float(covered)
 
 
@@ -343,28 +423,48 @@ def filter_predictable_validation_rows(
 ) -> tuple[pd.DataFrame, np.ndarray]:
     if train_group_counts is not None:
         if GROUP_COL in fold_valid_frame.columns:
-            valid_group_ids = fold_valid_frame[GROUP_COL].astype("string").fillna("<NA>")
+            valid_group_ids = (
+                fold_valid_frame[GROUP_COL].astype("string").fillna("<NA>")
+            )
         else:
             valid_group_cols = select_explicit_tft_group_id_columns(fold_valid_frame)
             valid_group_ids = build_group_identifier(fold_valid_frame, valid_group_cols)
         valid_group_sizes = valid_group_ids.map(train_group_counts).fillna(0)
         keep_mask = valid_group_sizes.to_numpy(dtype=np.int32) >= max_encoder_length
         if not keep_mask.any():
-            raise ValueError("No predictable validation rows remain after enforcing TFT encoder history requirements.")
+            raise ValueError(
+                "No predictable validation rows remain after enforcing TFT encoder history requirements."
+            )
         keep_index = np.flatnonzero(keep_mask).astype(np.int32)
         return _take_frame_rows(fold_valid_frame, keep_index), valid_indices[keep_index]
-    if fold_train_frame is not None and GROUP_COL in fold_train_frame.columns and GROUP_COL in fold_valid_frame.columns:
+    if (
+        fold_train_frame is not None
+        and GROUP_COL in fold_train_frame.columns
+        and GROUP_COL in fold_valid_frame.columns
+    ):
         train_group_sizes = (
-            fold_train_frame[GROUP_COL].astype("string").value_counts(sort=False).to_dict()
+            fold_train_frame[GROUP_COL]
+            .astype("string")
+            .value_counts(sort=False)
+            .to_dict()
         )
-        valid_group_sizes = fold_valid_frame[GROUP_COL].astype("string").map(train_group_sizes).fillna(0)
+        valid_group_sizes = (
+            fold_valid_frame[GROUP_COL]
+            .astype("string")
+            .map(train_group_sizes)
+            .fillna(0)
+        )
         keep_mask = valid_group_sizes.to_numpy(dtype=np.int32) >= max_encoder_length
         if not keep_mask.any():
-            raise ValueError("No predictable validation rows remain after enforcing TFT encoder history requirements.")
+            raise ValueError(
+                "No predictable validation rows remain after enforcing TFT encoder history requirements."
+            )
         keep_index = np.flatnonzero(keep_mask).astype(np.int32)
         return _take_frame_rows(fold_valid_frame, keep_index), valid_indices[keep_index]
     if fold_train_frame is None:
-        raise ValueError("fold_train_frame or train_group_counts is required to filter predictable validation rows.")
+        raise ValueError(
+            "fold_train_frame or train_group_counts is required to filter predictable validation rows."
+        )
     group_cols = select_explicit_tft_group_id_columns(fold_train_frame)
     history = fold_train_frame.loc[:, [*group_cols, DEFAULT_DATE_COL]].copy()
     history[DEFAULT_DATE_COL] = pd.to_datetime(history[DEFAULT_DATE_COL])
@@ -374,7 +474,9 @@ def filter_predictable_validation_rows(
     history_dates_by_group: dict[tuple[str, ...], np.ndarray] = {}
     for group_key, group_history in history.groupby(group_cols, sort=False):
         normalized_group_key = tuple(str(value) for value in group_key)
-        history_dates_by_group[normalized_group_key] = np.sort(group_history[DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]"))
+        history_dates_by_group[normalized_group_key] = np.sort(
+            group_history[DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]")
+        )
     keep_positions: list[int] = []
     for _, group_frame in valid_probe.groupby(group_cols, sort=False):
         group_key = tuple(str(group_frame.iloc[0][column]) for column in group_cols)
@@ -382,10 +484,15 @@ def filter_predictable_validation_rows(
         if history_dates is None or history_dates.size == 0:
             continue
         valid_dates = group_frame[DEFAULT_DATE_COL].to_numpy(dtype="datetime64[ns]")
-        eligible_rows = np.searchsorted(history_dates, valid_dates, side="left") >= max_encoder_length
+        eligible_rows = (
+            np.searchsorted(history_dates, valid_dates, side="left")
+            >= max_encoder_length
+        )
         keep_positions.extend(group_frame.loc[eligible_rows, "__row_pos__"].tolist())
     if not keep_positions:
-        raise ValueError("No predictable validation rows remain after enforcing TFT encoder history requirements.")
+        raise ValueError(
+            "No predictable validation rows remain after enforcing TFT encoder history requirements."
+        )
     keep_index = np.asarray(sorted(keep_positions), dtype=np.int32)
     return _take_frame_rows(fold_valid_frame, keep_index), valid_indices[keep_index]
 
@@ -438,10 +545,16 @@ def _dataset_weight_by_source(
 ) -> dict[str, float]:
     combined_counts = dict(train_dataset_source_counts)
     if train_extension_sources.size > 0:
-        for dataset_source, count in pd.Series(train_extension_sources).value_counts(sort=False).items():
-            combined_counts[str(dataset_source)] = combined_counts.get(str(dataset_source), 0) + int(count)
+        for dataset_source, count in (
+            pd.Series(train_extension_sources).value_counts(sort=False).items()
+        ):
+            combined_counts[str(dataset_source)] = combined_counts.get(
+                str(dataset_source), 0
+            ) + int(count)
     if not combined_counts:
-        raise ValueError("Cannot compute fold dataset weights without any dataset sources.")
+        raise ValueError(
+            "Cannot compute fold dataset weights without any dataset sources."
+        )
     dataset_total_weight = 1.0 / float(len(combined_counts))
     return {
         dataset_source: dataset_total_weight / float(row_count)
@@ -526,7 +639,9 @@ def _polars_split_frame(
     if weights is not None:
         if len(weights) != len(frame):
             raise ValueError("Sample weights length must match frame length.")
-        columns.append(pl.Series(name=WEIGHT_COL, values=np.asarray(weights, dtype=np.float64)))
+        columns.append(
+            pl.Series(name=WEIGHT_COL, values=np.asarray(weights, dtype=np.float64))
+        )
     return split_frame.with_columns(columns)
 
 
@@ -571,7 +686,9 @@ def _build_combined_frame_with_polars(
         prepared.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
     )
     categorical_cols = select_explicit_tft_categorical_columns(feature_cols)
-    return defragment_frame(cast_categorical_columns(prepared, [*categorical_cols, GROUP_COL]))
+    return defragment_frame(
+        cast_categorical_columns(prepared, [*categorical_cols, GROUP_COL])
+    )
 
 
 def _prepare_fold_frame(
@@ -721,13 +838,21 @@ def _build_cached_fold_core_artifacts(
     fold_train_idx = np.asarray(fold["train_idx"], dtype=np.int32)
     fold_valid_idx = np.asarray(fold["valid_idx"], dtype=np.int32)
     if fold_train_idx.size == 0 or fold_valid_idx.size == 0:
-        raise ValueError(f"Target contract `{target_contract.target_mode}` produced an empty grouped fold {fold['fold']}.")
+        raise ValueError(
+            f"Target contract `{target_contract.target_mode}` produced an empty grouped fold {fold['fold']}."
+        )
     ordered_train_extension_idx = np.sort(fold_train_idx)
     ordered_valid_candidate_idx = np.sort(fold_valid_idx)
     logger.info("TFT tuning fold frame slicing started: fold=%s", fold_number)
-    fold_train_extension_frame = _take_frame_rows(tuning_frame, ordered_train_extension_idx)
-    fold_valid_candidate_frame = _take_frame_rows(tuning_frame, ordered_valid_candidate_idx)
-    fold_train_frame = pd.concat([train_frame, fold_train_extension_frame], ignore_index=True)
+    fold_train_extension_frame = _take_frame_rows(
+        tuning_frame, ordered_train_extension_idx
+    )
+    fold_valid_candidate_frame = _take_frame_rows(
+        tuning_frame, ordered_valid_candidate_idx
+    )
+    fold_train_frame = pd.concat(
+        [train_frame, fold_train_extension_frame], ignore_index=True
+    )
     fold_valid_candidate_frame[PREDICTION_ROW_ID_COL] = np.arange(
         len(fold_valid_candidate_frame),
         dtype=np.int32,
@@ -739,7 +864,9 @@ def _build_cached_fold_core_artifacts(
     )
     dataset_weight_by_source = _dataset_weight_by_source(
         train_dataset_source_counts=train_dataset_source_counts,
-        train_extension_sources=fold_train_extension_frame[DEFAULT_DATASET_SOURCE_COL].to_numpy(copy=False),
+        train_extension_sources=fold_train_extension_frame[
+            DEFAULT_DATASET_SOURCE_COL
+        ].to_numpy(copy=False),
     )
     fold_train_weights = (
         pd.Series(fold_train_frame[DEFAULT_DATASET_SOURCE_COL], copy=False)
@@ -765,7 +892,10 @@ def _build_cached_fold_core_artifacts(
     train_row_count = int(len(training_frame))
     train_group_counts = {
         str(group_id): int(count)
-        for group_id, count in training_frame[GROUP_COL].astype("string").value_counts(sort=False).items()
+        for group_id, count in training_frame[GROUP_COL]
+        .astype("string")
+        .value_counts(sort=False)
+        .items()
     }
     del fold_train_extension_frame
     del fold_train_frame
@@ -824,7 +954,9 @@ def _dataset_artifacts_from_core(
         max_encoder_length=max_encoder_length,
         train_group_counts=cached_core.train_group_counts,
     )
-    fold_valid_weights = compute_equal_dataset_row_weights_from_values(shared_dataset_sources[valid_indices])
+    fold_valid_weights = compute_equal_dataset_row_weights_from_values(
+        shared_dataset_sources[valid_indices]
+    )
     training_slice = _history_tail_frame(
         cached_core.fit_reference_frame,
         max_encoder_length=max_encoder_length,
@@ -842,7 +974,9 @@ def _dataset_artifacts_from_core(
         fold_number=int(cast(Any, cached_core.fold["fold"])),
         fold_train_frame=history_train_frame,
         fold_valid_candidate_frame=fold_valid_frame,
-        fold_train_weights=np.asarray(history_train_weights, dtype=float) if history_train_weights is not None else None,
+        fold_train_weights=np.asarray(history_train_weights, dtype=float)
+        if history_train_weights is not None
+        else None,
         feature_cols=feature_cols,
         logger=logger,
     )
@@ -950,7 +1084,12 @@ def _cached_fold_artifacts(
     logger: logging.Logger,
 ) -> dict[int, CachedFoldArtifacts]:
     max_encoder_length = int(cast(Any, resolved_params["max_encoder_length"]))
-    core_max_encoder_length = int(cast(Any, resolved_params.get("dataset_core_max_encoder_length", max_encoder_length)))
+    core_max_encoder_length = int(
+        cast(
+            Any,
+            resolved_params.get("dataset_core_max_encoder_length", max_encoder_length),
+        )
+    )
     cached_cores = _cached_fold_cores(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
@@ -1010,6 +1149,21 @@ def _resolved_tft_tuning_inputs(
         default_params=DEFAULT_TFT_MODEL_PARAMS,
         default_max_iter=2000,
     )
+    if hpo_mode:
+        resolved_params.update(
+            {
+                "use_learning_rate_finder": False,
+                "enable_progress_bar": False,
+                "enable_csv_logger": False,
+                "enable_lr_monitor": False,
+                "enable_validation_metric_logging": False,
+                "enable_device_stats_monitor": False,
+                "log_every_n_steps": 50,
+                "tensorboard_logdir": None,
+            }
+        )
+        if str(cast(Any, resolved_params.get("accelerator", "cpu"))) == "gpu":
+            resolved_params["determinism_mode"] = "off"
     resolved_params.setdefault(
         "dataset_core_max_encoder_length",
         int(cast(Any, resolved_params["max_encoder_length"])),
@@ -1042,12 +1196,9 @@ def prewarm_tft_fold_cores_for_optuna(
     total_threads: int | None = None,
     target_transform: str = DEFAULT_TARGET_TRANSFORM,
 ) -> dict[str, object]:
-    if (
-        model_params is None
-        or (
-            "dataset_core_max_encoder_length" not in model_params
-            and "max_encoder_length" not in model_params
-        )
+    if model_params is None or (
+        "dataset_core_max_encoder_length" not in model_params
+        and "max_encoder_length" not in model_params
     ):
         logger.info(
             "Skipping TFT fold core prewarm before Optuna because encoder length is not fixed; "
@@ -1074,7 +1225,9 @@ def prewarm_tft_fold_cores_for_optuna(
         target_transform=target_transform,
         hpo_mode=True,
     )
-    core_max_encoder_length = int(cast(Any, resolved_params["dataset_core_max_encoder_length"]))
+    core_max_encoder_length = int(
+        cast(Any, resolved_params["dataset_core_max_encoder_length"])
+    )
     warmup_start = time.perf_counter()
     logger.info(
         "Prewarming TFT fold core cache before Optuna: folds=%s feature_count=%s core_encoder_length=%s train_rows=%s tuning_rows=%s",
@@ -1143,14 +1296,19 @@ def _fit_single_tuning_fold(
     logger.info("TFT tuning fold fit completed: fold=%s", fold_number)
     logger.info("TFT tuning fold point prediction started: fold=%s", fold_number)
     predictions = _reconstruct_absolute_predictions(
-        raw_predictions=cast(Any, predict_with_tft_model(model, cached_fold.fold_valid_frame, feature_cols)),
+        raw_predictions=cast(
+            Any,
+            predict_with_tft_model(model, cached_fold.fold_valid_frame, feature_cols),
+        ),
         valid_indices=cached_fold.valid_indices,
         target_contract=target_contract,
         shared_reconstruction_anchor=shared_reconstruction_anchor,
     )
     logger.info("TFT tuning fold quantile prediction started: fold=%s", fold_number)
     quantile_predictions = _reconstruct_absolute_quantiles(
-        quantile_predictions=predict_quantiles_with_tft_model(model, cached_fold.fold_valid_frame, feature_cols),
+        quantile_predictions=predict_quantiles_with_tft_model(
+            model, cached_fold.fold_valid_frame, feature_cols
+        ),
         valid_indices=cached_fold.valid_indices,
         target_contract=target_contract,
         shared_reconstruction_anchor=shared_reconstruction_anchor,
@@ -1212,14 +1370,25 @@ def _execute_tuning_folds(
             ): index
             for index, fold in enumerate(folds)
         }
-        results_by_index = {future_to_index[future]: future.result() for future in as_completed(future_to_index)}
+        results_by_index = {
+            future_to_index[future]: future.result()
+            for future in as_completed(future_to_index)
+        }
     return [results_by_index[index] for index in range(len(folds))]
 
 
-def _dataset_macro_scores_from_fold_results(fold_results: list[dict[str, object]]) -> dict[str, float]:
+def _dataset_macro_scores_from_fold_results(
+    fold_results: list[dict[str, object]],
+) -> dict[str, float]:
     dataset_mean_wape: dict[str, float] = {}
-    for dataset_source in sorted({str(result["dataset_source"]) for result in fold_results}):
-        dataset_scores = [float(cast(Any, result["wape"])) for result in fold_results if str(result["dataset_source"]) == dataset_source]
+    for dataset_source in sorted(
+        {str(result["dataset_source"]) for result in fold_results}
+    ):
+        dataset_scores = [
+            float(cast(Any, result["wape"]))
+            for result in fold_results
+            if str(result["dataset_source"]) == dataset_source
+        ]
         dataset_mean_wape[dataset_source] = float(np.mean(dataset_scores))
     return dataset_mean_wape
 
@@ -1245,14 +1414,49 @@ def _log_fold_completion(
     fold_number: int,
     total_folds: int,
     dataset_mean_wape: dict[str, float],
+    mean_abs_bias: float | None,
+    mean_coverage_80: float | None,
+    mean_coverage_95: float | None,
 ) -> None:
     macro_mean_wape = float(np.mean(list(dataset_mean_wape.values())))
     logger.info(
-        "TFT tuning fold completed: fold=%s/%s macro_mean_wape=%.6f dataset_mean_wape=%s",
+        "TFT tuning fold completed: fold=%s/%s business_macro_wape=%.6f business_mean_abs_bias=%s business_mean_coverage_80=%s business_mean_coverage_95=%s dataset_business_mean_wape=%s",
         fold_number,
         total_folds,
         macro_mean_wape,
+        "nan" if mean_abs_bias is None else f"{mean_abs_bias:.6f}",
+        "nan" if mean_coverage_80 is None else f"{mean_coverage_80:.6f}",
+        "nan" if mean_coverage_95 is None else f"{mean_coverage_95:.6f}",
         dataset_mean_wape,
+    )
+
+
+def _resolved_trial_learning_rate(
+    *,
+    folds: list[dict[str, object]],
+    cached_folds: dict[int, CachedFoldArtifacts],
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+) -> tuple[dict[str, object], float]:
+    current_learning_rate = float(cast(Any, resolved_params["learning_rate"]))
+    if not bool(cast(Any, resolved_params.get("use_learning_rate_finder", False))):
+        return resolved_params, current_learning_rate
+    first_fold = folds[0]
+    selected_learning_rate = calibrate_tft_learning_rate(
+        dataset_artifacts=cached_folds[id(first_fold)].dataset_artifacts,
+        resolved_params=resolved_params,
+    )
+    logger.info(
+        "Resolved TFT trial learning rate from first fold calibration: learning_rate=%s",
+        selected_learning_rate,
+    )
+    return (
+        {
+            **resolved_params,
+            "learning_rate": selected_learning_rate,
+            "use_learning_rate_finder": False,
+        },
+        selected_learning_rate,
     )
 
 
@@ -1282,21 +1486,37 @@ def _iterative_trial_scoring(
             resolved_params=resolved_params,
             logger=logger,
         )
-        fold_results.extend(cast(list[dict[str, object]], grouped_fold_result["dataset_results"]))
+        fold_results.extend(
+            cast(list[dict[str, object]], grouped_fold_result["dataset_results"])
+        )
         dataset_mean_wape = _dataset_macro_scores_from_fold_results(fold_results)
         interim_macro_mean_wape = float(np.mean(list(dataset_mean_wape.values())))
+        mean_abs_bias = _mean_optional_metric(fold_results, metric_key="abs_bias")
+        mean_coverage_80 = _mean_optional_metric(
+            fold_results,
+            metric_key="coverage_80",
+        )
+        mean_coverage_95 = _mean_optional_metric(
+            fold_results,
+            metric_key="coverage_95",
+        )
         _log_fold_completion(
             logger=logger,
             fold_number=folds_completed,
             total_folds=len(folds),
             dataset_mean_wape=dataset_mean_wape,
+            mean_abs_bias=mean_abs_bias,
+            mean_coverage_80=mean_coverage_80,
+            mean_coverage_95=mean_coverage_95,
         )
         trial.report(-interim_macro_mean_wape, step=folds_completed)
         if trial.should_prune():
             trial.set_user_attr("fold_results", fold_results)
             trial.set_user_attr("dataset_mean_wape", dataset_mean_wape)
             trial.set_user_attr("folds_completed", folds_completed)
-            raise optuna.TrialPruned(f"Trial pruned after fold {folds_completed} with interim_wape={interim_macro_mean_wape:.6f}")
+            raise optuna.TrialPruned(
+                f"Trial pruned after fold {folds_completed} with interim_wape={interim_macro_mean_wape:.6f}"
+            )
     return fold_results, folds_completed
 
 
@@ -1339,14 +1559,25 @@ def _score_all_folds(
         resolved_params=resolved_params,
         logger=logger,
     )
-    fold_results = [result for grouped in grouped_fold_results for result in cast(list[dict[str, object]], grouped["dataset_results"])]
+    fold_results = [
+        result
+        for grouped in grouped_fold_results
+        for result in cast(list[dict[str, object]], grouped["dataset_results"])
+    ]
     return fold_results, len(folds)
 
 
 def fit_and_score_tft_model_on_tuning(
-    train_frame: pd.DataFrame, tuning_frame: pd.DataFrame, folds: list[dict[str, object]], feature_cols: list[str],
-    target_contract: TargetContract, *, logger: logging.Logger, model_params: dict[str, object] | None = None,
-    total_threads: int | None = None, target_transform: str = DEFAULT_TARGET_TRANSFORM,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    *,
+    logger: logging.Logger,
+    model_params: dict[str, object] | None = None,
+    total_threads: int | None = None,
+    target_transform: str = DEFAULT_TARGET_TRANSFORM,
     trial: optuna.trial.Trial | None = None,
 ) -> dict[str, object]:
     resolved_params, execution_plan, shared_context = _resolved_tft_tuning_inputs(
@@ -1373,6 +1604,12 @@ def fit_and_score_tft_model_on_tuning(
         resolved_params=resolved_params,
         logger=logger,
     )
+    effective_params, selected_learning_rate = _resolved_trial_learning_rate(
+        folds=folds,
+        cached_folds=cached_folds,
+        resolved_params=resolved_params,
+        logger=logger,
+    )
     fold_results, folds_completed = _score_all_folds(
         folds=folds,
         cached_folds=cached_folds,
@@ -1383,7 +1620,7 @@ def fit_and_score_tft_model_on_tuning(
         shared_reconstruction_anchor=shared_context.tuning_reconstruction_anchor,
         feature_cols=feature_cols,
         target_contract=target_contract,
-        resolved_params=resolved_params,
+        resolved_params=effective_params,
         trial=trial,
     )
     dataset_mean_wape = _dataset_macro_scores_from_fold_results(fold_results)
@@ -1399,6 +1636,7 @@ def fit_and_score_tft_model_on_tuning(
         "mean_abs_bias": mean_abs_bias,
         "mean_coverage_80": mean_coverage_80,
         "mean_coverage_95": mean_coverage_95,
+        "selected_learning_rate": selected_learning_rate,
         "fold_results": fold_results,
         "folds_completed": folds_completed,
         "execution_policy": execution_plan,

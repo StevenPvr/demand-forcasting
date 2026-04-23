@@ -5,10 +5,15 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import optuna
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -23,6 +28,9 @@ from praedixa.demand_forecast.training.tuning import (  # noqa: E402
     fit_and_score_tft_model_on_tuning,
     optimize_tft_model_params,
     resolve_hpo_execution_policy,
+)
+from praedixa.demand_forecast.training.tuning_policy import (  # noqa: E402
+    resolved_trial_status_name,
 )
 import praedixa.demand_forecast.training.tuning_scoring as tuning_scoring_module  # noqa: E402
 from praedixa.demand_forecast.training.tuning_scoring import (  # noqa: E402
@@ -107,8 +115,23 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertEqual(plan["fold_workers"], 1)
         self.assertEqual(plan["threads_per_fold"], 6)
 
+    def test_resolved_trial_status_name_supports_live_trials(self) -> None:
+        study = optuna.create_study(direction="maximize")
+        trial = study.ask()
+
+        self.assertEqual(
+            resolved_trial_status_name(trial, default_status="PRUNED"), "PRUNED"
+        )
+
+        trial.set_user_attr("terminal_status", "REJECTED")
+        self.assertEqual(
+            resolved_trial_status_name(trial, default_status="PRUNED"), "REJECTED"
+        )
+
     def test_fold_preparation_workers_are_runtime_agnostic_before_fit(self) -> None:
-        prep_workers = cast(Any, tuning_scoring_module)._resolve_fold_preparation_workers(
+        prep_workers = cast(
+            Any, tuning_scoring_module
+        )._resolve_fold_preparation_workers(
             folds=[{"fold": 0}, {"fold": 1}],
             execution_plan={"total_threads": 8, "gpu_safe_mode": True},
         )
@@ -118,7 +141,9 @@ class TuningPolicyTests(unittest.TestCase):
     def test_hpo_resolved_inputs_apply_gpu_runtime_profile_defaults(self) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
 
-        resolved_params, execution_plan, _ = cast(Any, tuning_scoring_module)._resolved_tft_tuning_inputs(
+        resolved_params, execution_plan, _ = cast(
+            Any, tuning_scoring_module
+        )._resolved_tft_tuning_inputs(
             train_frame=train_frame,
             tuning_frame=tuning_frame,
             folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
@@ -137,7 +162,14 @@ class TuningPolicyTests(unittest.TestCase):
 
         self.assertEqual(resolved_params["runtime_profile"], "scaleway_l40s")
         self.assertEqual(resolved_params["accelerator"], "gpu")
-        self.assertEqual(resolved_params["determinism_mode"], "warn_only")
+        self.assertEqual(resolved_params["determinism_mode"], "off")
+        self.assertFalse(bool(resolved_params["use_learning_rate_finder"]))
+        self.assertFalse(bool(resolved_params["enable_progress_bar"]))
+        self.assertFalse(bool(resolved_params["enable_csv_logger"]))
+        self.assertFalse(bool(resolved_params["enable_lr_monitor"]))
+        self.assertFalse(bool(resolved_params["enable_validation_metric_logging"]))
+        self.assertFalse(bool(resolved_params["enable_device_stats_monitor"]))
+        self.assertEqual(int(cast(Any, resolved_params["log_every_n_steps"])), 50)
         self.assertEqual(resolved_params["dataset_core_max_encoder_length"], 14)
         self.assertEqual(execution_plan["fold_workers"], 1)
 
@@ -177,6 +209,7 @@ class TuningPolicyTests(unittest.TestCase):
                 "mean_abs_bias": 0.05,
                 "mean_coverage_80": 0.85,
                 "mean_coverage_95": 0.95,
+                "selected_learning_rate": 0.003,
                 "fold_results": [],
                 "folds_completed": len(cast(list[dict[str, object]], kwargs["folds"])),
             }
@@ -214,6 +247,9 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("mean_abs_bias", tuning_report.columns)
         self.assertIn("coverage_80", tuning_report.columns)
         self.assertIn("coverage_95", tuning_report.columns)
+        self.assertIn("selected_learning_rate", tuning_report.columns)
+        self.assertEqual(float(cast(Any, best_params["learning_rate"])), 0.003)
+        self.assertFalse(bool(best_params["use_learning_rate_finder"]))
         self.assertEqual(execution_policy["accelerator"], "gpu")
         self.assertEqual(execution_policy["fold_workers"], 1)
         self.assertEqual(pruner["type"], "MedianPruner")
@@ -221,7 +257,9 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("stage_b", stage_policy)
         mocked_prewarm.assert_called_once()
 
-    def test_optuna_hpo_uses_best_scored_pruned_trial_when_all_trials_are_rejected(self) -> None:
+    def test_optuna_hpo_uses_best_scored_rejected_trial_when_all_trials_are_rejected(
+        self,
+    ) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
 
         def _always_rejected(**_: object) -> dict[str, object]:
@@ -231,6 +269,7 @@ class TuningPolicyTests(unittest.TestCase):
                 "mean_abs_bias": 0.1,
                 "mean_coverage_80": 0.8,
                 "mean_coverage_95": 0.95,
+                "selected_learning_rate": 0.0025,
                 "fold_results": [],
                 "folds_completed": 1,
             }
@@ -259,10 +298,36 @@ class TuningPolicyTests(unittest.TestCase):
             )
 
         self.assertIn("random_state", best_params)
+        self.assertEqual(float(cast(Any, best_params["learning_rate"])), 0.0025)
+        self.assertFalse(bool(best_params["use_learning_rate_finder"]))
         self.assertEqual(len(tuning_report), 2)
-        self.assertTrue((tuning_report["trial_status"] == "PRUNED").all())
-        self.assertIn("trial_status_counts", cast(dict[str, Any], hpo_metadata))
+        self.assertTrue((tuning_report["trial_status"] == "REJECTED").all())
+        self.assertEqual(
+            cast(dict[str, Any], hpo_metadata)["trial_status_counts"],
+            {"REJECTED": 2},
+        )
         mocked_prewarm.assert_called_once()
+
+    def test_fold_completion_log_reports_business_metrics(self) -> None:
+        logger = __import__("logging").getLogger("praedixa.test.fold_metrics")
+
+        with self.assertLogs(logger, level="INFO") as captured:
+            cast(Any, tuning_scoring_module)._log_fold_completion(
+                logger=logger,
+                fold_number=1,
+                total_folds=2,
+                dataset_mean_wape={"source_a": 0.4, "source_b": 0.6},
+                mean_abs_bias=0.2,
+                mean_coverage_80=0.75,
+                mean_coverage_95=0.9,
+            )
+
+        joined_output = "\n".join(captured.output)
+        self.assertIn("business_macro_wape=0.500000", joined_output)
+        self.assertIn("business_mean_abs_bias=0.200000", joined_output)
+        self.assertIn("business_mean_coverage_80=0.750000", joined_output)
+        self.assertIn("business_mean_coverage_95=0.900000", joined_output)
+        self.assertIn("dataset_business_mean_wape=", joined_output)
 
     def test_fit_and_score_keeps_dt_and_series_id_for_tft_folds(self) -> None:
         train_frame = pd.DataFrame(
@@ -334,7 +399,11 @@ class TuningPolicyTests(unittest.TestCase):
                 feature_cols=["rolling_mean_7"],
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
-                model_params={"runtime_profile": "local_cpu", "n_jobs": 2, "max_encoder_length": 1},
+                model_params={
+                    "runtime_profile": "local_cpu",
+                    "n_jobs": 2,
+                    "max_encoder_length": 1,
+                },
             )
 
         self.assertEqual(result["folds_completed"], 1)
@@ -516,7 +585,11 @@ class TuningPolicyTests(unittest.TestCase):
                 feature_cols=["rolling_mean_7"],
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
-                model_params={"runtime_profile": "local_cpu", "n_jobs": 2, "dataset_core_max_encoder_length": 3},
+                model_params={
+                    "runtime_profile": "local_cpu",
+                    "n_jobs": 2,
+                    "dataset_core_max_encoder_length": 3,
+                },
             )
             fit_and_score_tft_model_on_tuning(
                 train_frame=train_frame,
@@ -536,7 +609,9 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertEqual(mocked_build_training_core.call_count, 1)
         self.assertEqual(mocked_build_validation_core.call_count, 1)
 
-    def test_prepare_fold_frame_recomputes_group_and_time_when_support_columns_are_mixed(self) -> None:
+    def test_prepare_fold_frame_recomputes_group_and_time_when_support_columns_are_mixed(
+        self,
+    ) -> None:
         train_frame = pd.DataFrame(
             {
                 "series_id": ["a", "a"],
@@ -568,7 +643,9 @@ class TuningPolicyTests(unittest.TestCase):
         )
 
         self.assertTrue(prepared[tuning_scoring_module.TIME_IDX_COL].notna().all())
-        self.assertEqual(str(prepared[tuning_scoring_module.TIME_IDX_COL].dtype), "int32")
+        self.assertEqual(
+            str(prepared[tuning_scoring_module.TIME_IDX_COL].dtype), "int32"
+        )
         np.testing.assert_array_equal(
             prepared[tuning_scoring_module.TIME_IDX_COL].to_numpy(),
             np.array([0, 1, 2, 3], dtype=np.int32),
@@ -577,7 +654,10 @@ class TuningPolicyTests(unittest.TestCase):
             prepared[tuning_scoring_module.GROUP_COL].astype("string").tolist(),
             ["a", "a", "a", "a"],
         )
-        self.assertEqual(prepared[tuning_scoring_module.SPLIT_COL].tolist(), ["train", "train", "valid", "valid"])
+        self.assertEqual(
+            prepared[tuning_scoring_module.SPLIT_COL].tolist(),
+            ["train", "train", "valid", "valid"],
+        )
 
     def test_prepare_fold_frame_raises_when_polars_contract_path_fails(self) -> None:
         train_frame = pd.DataFrame(
@@ -595,7 +675,9 @@ class TuningPolicyTests(unittest.TestCase):
             "praedixa.demand_forecast.training.tuning_scoring._build_combined_frame_with_polars",
             side_effect=RuntimeError("boom"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "Polars fold frame preparation failed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "Polars fold frame preparation failed"
+            ):
                 cast(Any, tuning_scoring_module)._prepare_fold_frame(
                     fold_number=1,
                     stage_name="training_core",
@@ -620,10 +702,9 @@ class TuningPolicyTests(unittest.TestCase):
                 "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0],
             }
         )
-        train_frame["target_delta_log_wow_d_plus_1"] = (
-            np.log1p(train_frame["target_demand_qty_d_plus_1"].astype(float))
-            - np.log1p(train_frame["target_lag_7"].astype(float))
-        )
+        train_frame["target_delta_log_wow_d_plus_1"] = np.log1p(
+            train_frame["target_demand_qty_d_plus_1"].astype(float)
+        ) - np.log1p(train_frame["target_lag_7"].astype(float))
         tuning_frame = pd.DataFrame(
             {
                 "series_id": ["a", "a", "a", "a"],
@@ -636,12 +717,13 @@ class TuningPolicyTests(unittest.TestCase):
                 "target_demand_qty_d_plus_1": [13.0, 14.0, 15.0, 16.0],
             }
         )
-        tuning_frame["target_delta_log_wow_d_plus_1"] = (
-            np.log1p(tuning_frame["target_demand_qty_d_plus_1"].astype(float))
-            - np.log1p(tuning_frame["target_lag_7"].astype(float))
-        )
+        tuning_frame["target_delta_log_wow_d_plus_1"] = np.log1p(
+            tuning_frame["target_demand_qty_d_plus_1"].astype(float)
+        ) - np.log1p(tuning_frame["target_lag_7"].astype(float))
         target_contract = resolve_target_contract(train_frame, tuning_frame)
-        valid_raw_predictions = tuning_frame.loc[[2, 3], "target_delta_log_wow_d_plus_1"].to_numpy(dtype=float)
+        valid_raw_predictions = tuning_frame.loc[
+            [2, 3], "target_delta_log_wow_d_plus_1"
+        ].to_numpy(dtype=float)
 
         with (
             patch(
@@ -672,15 +754,27 @@ class TuningPolicyTests(unittest.TestCase):
                 feature_cols=["rolling_mean_7"],
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
-                model_params={"runtime_profile": "local_cpu", "n_jobs": 2, "max_encoder_length": 1},
+                model_params={
+                    "runtime_profile": "local_cpu",
+                    "n_jobs": 2,
+                    "max_encoder_length": 1,
+                },
             )
 
         self.assertEqual(result["folds_completed"], 1)
-        self.assertAlmostEqual(float(cast(Any, result["macro_mean_wape"])), 0.0, places=8)
-        self.assertAlmostEqual(float(cast(Any, result["mean_coverage_80"])), 1.0, places=8)
-        self.assertAlmostEqual(float(cast(Any, result["mean_coverage_95"])), 1.0, places=8)
+        self.assertAlmostEqual(
+            float(cast(Any, result["macro_mean_wape"])), 0.0, places=8
+        )
+        self.assertAlmostEqual(
+            float(cast(Any, result["mean_coverage_80"])), 1.0, places=8
+        )
+        self.assertAlmostEqual(
+            float(cast(Any, result["mean_coverage_95"])), 1.0, places=8
+        )
 
-    def test_filter_predictable_validation_rows_drops_insufficient_history(self) -> None:
+    def test_filter_predictable_validation_rows_drops_insufficient_history(
+        self,
+    ) -> None:
         fold_train_frame = pd.DataFrame(
             {
                 "series_id": ["series_1"] * 7,
@@ -707,9 +801,13 @@ class TuningPolicyTests(unittest.TestCase):
 
         self.assertEqual(len(filtered_frame), 1)
         self.assertEqual(filtered_frame.iloc[0]["location_id"], "store_1")
-        np.testing.assert_array_equal(filtered_indices, np.asarray([10], dtype=np.int32))
+        np.testing.assert_array_equal(
+            filtered_indices, np.asarray([10], dtype=np.int32)
+        )
 
-    def test_filter_predictable_validation_rows_handles_multiple_groups_without_full_history_scan(self) -> None:
+    def test_filter_predictable_validation_rows_handles_multiple_groups_without_full_history_scan(
+        self,
+    ) -> None:
         fold_train_frame = pd.DataFrame(
             {
                 "series_id": ["series_1"] * 7 + ["series_2"] * 3,
@@ -748,7 +846,9 @@ class TuningPolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(filtered_frame["series_id"].tolist(), ["series_1", "series_1"])
-        np.testing.assert_array_equal(filtered_indices, np.asarray([20, 22], dtype=np.int32))
+        np.testing.assert_array_equal(
+            filtered_indices, np.asarray([20, 22], dtype=np.int32)
+        )
 
 
 if __name__ == "__main__":

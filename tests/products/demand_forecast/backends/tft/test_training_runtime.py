@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 from typing import Any, cast
 import unittest
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -67,6 +72,52 @@ class _FakeTorch:
 
     def get_num_interop_threads(self) -> int:
         return self.num_interop_threads
+
+
+class _FakeLRFinder:
+    def __init__(self, suggestion_value: float | None) -> None:
+        self._suggestion_value = suggestion_value
+
+    def suggestion(self) -> float | None:
+        return self._suggestion_value
+
+
+class _FakeLRFinderFromResults:
+    def __init__(self) -> None:
+        self.results: dict[str, list[float]] = {
+            "loss": [1.2, 0.7, 0.9],
+            "lr": [0.001, 0.004, 0.002],
+        }
+
+    def suggestion(self) -> None:
+        return None
+
+
+class _FakeSafeGlobalsContext:
+    def __init__(self, owner: "_FakeSafeGlobals") -> None:
+        self._owner = owner
+
+    def __enter__(self) -> None:
+        self._owner.entered += 1
+        return None
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        _ = exc_type
+        _ = exc
+        _ = traceback
+        self._owner.exited += 1
+        return False
+
+
+class _FakeSafeGlobals:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+        self.entered = 0
+        self.exited = 0
+
+    def __call__(self, values: list[object]) -> _FakeSafeGlobalsContext:
+        self.calls.append(tuple(values))
+        return _FakeSafeGlobalsContext(self)
 
 
 class TFTTrainingRuntimeTests(unittest.TestCase):
@@ -140,13 +191,222 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
         self.assertTrue(fake_torch.backends.cudnn.benchmark)
 
     def test_gpu_trainer_benchmark_is_enabled_in_warn_only_mode(self) -> None:
-        benchmark_enabled = cast(Any, training_runtime_module)._trainer_benchmark_enabled(
+        benchmark_enabled = cast(
+            Any, training_runtime_module
+        )._trainer_benchmark_enabled(
             {"accelerator": "gpu", "determinism_mode": "warn_only"}
         )
 
         self.assertTrue(benchmark_enabled)
 
-    def test_visible_validation_metrics_formats_wape_and_losses_for_logs(self) -> None:
+    def test_gpu_trainer_benchmark_is_enabled_when_determinism_is_off(self) -> None:
+        benchmark_enabled = cast(
+            Any, training_runtime_module
+        )._trainer_benchmark_enabled(
+            {"accelerator": "gpu", "determinism_mode": "off"}
+        )
+
+        self.assertTrue(benchmark_enabled)
+
+    def test_seed_tft_runtime_skips_deterministic_algorithms_when_off(self) -> None:
+        fake_torch = _FakeTorch()
+        seeded: list[tuple[int, bool]] = []
+
+        def _fake_seed_everything(seed: int, workers: bool) -> None:
+            seeded.append((int(seed), bool(workers)))
+
+        imports: dict[str, Any] = {
+            "torch": fake_torch,
+            "seed_everything": _fake_seed_everything,
+        }
+
+        seed_tft_runtime(
+            imports,
+            {
+                "accelerator": "gpu",
+                "random_state": 9,
+                "determinism_mode": "off",
+                "matmul_precision": "high",
+                "precision": "bf16-mixed",
+                "num_workers": 8,
+                "prefetch_factor": 4,
+                "pin_memory": True,
+            },
+        )
+
+        self.assertEqual(seeded, [(9, True)])
+        self.assertIsNone(fake_torch.warn_only)
+        self.assertTrue(fake_torch.backends.cudnn.benchmark)
+
+    def test_early_stopping_callbacks_monitor_wape_and_loss(self) -> None:
+        callbacks = cast(Any, training_runtime_module)._early_stopping_callbacks(
+            {
+                "EarlyStopping": lambda **kwargs: kwargs,
+            },
+            resolved_params={"patience": 8, "loss_patience": 6},
+        )
+
+        self.assertEqual(
+            [(callback["monitor"], callback["patience"]) for callback in callbacks],
+            [("val_wape", 8), ("val_loss", 6)],
+        )
+
+    def test_find_learning_rate_uses_tuner_suggestion_when_enabled(self) -> None:
+        tuner_calls: list[dict[str, object]] = []
+        trainer_calls: list[dict[str, object]] = []
+
+        class _FakeTuner:
+            def __init__(self, trainer: object) -> None:
+                _ = trainer
+
+            def lr_find(self, model: object, **kwargs: object) -> _FakeLRFinder:
+                _ = model
+                tuner_calls.append(dict(kwargs))
+                return _FakeLRFinder(0.0042)
+
+        learning_rate = training_runtime_module.find_learning_rate(
+            {
+                "Trainer": lambda **kwargs: trainer_calls.append(dict(kwargs))
+                or dict(kwargs),
+                "Tuner": _FakeTuner,
+            },
+            model=object(),
+            resolved_params={
+                "use_learning_rate_finder": True,
+                "learning_rate": 0.01,
+                "max_epochs": 2,
+                "lr_find_min_lr": 1e-5,
+                "lr_find_max_lr": 1.0,
+                "lr_find_num_training": 100,
+                "lr_find_early_stop_threshold": 10000.0,
+                "accelerator": "gpu",
+                "devices": 1,
+                "precision": "bf16-mixed",
+                "determinism_mode": "warn_only",
+                "gradient_clip_val": 0.1,
+            },
+            train_loader=object(),
+            valid_loader=object(),
+        )
+
+        self.assertAlmostEqual(learning_rate, 0.0042)
+        self.assertEqual(len(tuner_calls), 1)
+        self.assertEqual(len(trainer_calls), 1)
+        self.assertEqual(trainer_calls[0]["max_epochs"], 2)
+        self.assertEqual(tuner_calls[0]["min_lr"], 1e-5)
+        self.assertEqual(tuner_calls[0]["max_lr"], 1.0)
+
+    def test_find_learning_rate_falls_back_to_results_mapping(self) -> None:
+        class _FakeTuner:
+            def __init__(self, trainer: object) -> None:
+                _ = trainer
+
+            def lr_find(
+                self, model: object, **kwargs: object
+            ) -> _FakeLRFinderFromResults:
+                _ = model
+                _ = kwargs
+                return _FakeLRFinderFromResults()
+
+        learning_rate = training_runtime_module.find_learning_rate(
+            {
+                "Trainer": lambda **kwargs: dict(kwargs),
+                "Tuner": _FakeTuner,
+            },
+            model=object(),
+            resolved_params={
+                "use_learning_rate_finder": True,
+                "learning_rate": 0.01,
+                "max_epochs": 2,
+                "lr_find_min_lr": 1e-5,
+                "lr_find_max_lr": 1.0,
+                "lr_find_num_training": 100,
+                "lr_find_early_stop_threshold": 10000.0,
+                "accelerator": "cpu",
+                "devices": 1,
+                "precision": "32-true",
+                "determinism_mode": "strict",
+                "gradient_clip_val": 0.1,
+            },
+            train_loader=object(),
+            valid_loader=object(),
+        )
+
+        self.assertAlmostEqual(learning_rate, 0.004)
+
+    def test_find_learning_rate_uses_safe_globals_context_when_available(self) -> None:
+        safe_globals = _FakeSafeGlobals()
+
+        class _FakeTuner:
+            def __init__(self, trainer: object) -> None:
+                _ = trainer
+
+            def lr_find(self, model: object, **kwargs: object) -> _FakeLRFinder:
+                _ = model
+                _ = kwargs
+                return _FakeLRFinder(0.0042)
+
+        class _FakeGroupNormalizer:
+            pass
+
+        class _FakeNaNLabelEncoder:
+            pass
+
+        class _FakeQuantileLoss:
+            pass
+
+        class _FakeModuleList:
+            pass
+
+        class _FakeWAPEMetric:
+            pass
+
+        learning_rate = training_runtime_module.find_learning_rate(
+            {
+                "torch": SimpleNamespace(
+                    serialization=SimpleNamespace(safe_globals=safe_globals)
+                ),
+                "Trainer": lambda **kwargs: dict(kwargs),
+                "Tuner": _FakeTuner,
+                "GroupNormalizer": _FakeGroupNormalizer,
+                "NaNLabelEncoder": _FakeNaNLabelEncoder,
+                "QuantileLoss": _FakeQuantileLoss,
+                "ModuleList": _FakeModuleList,
+                "WAPEMetric": _FakeWAPEMetric,
+            },
+            model=object(),
+            resolved_params={
+                "use_learning_rate_finder": True,
+                "learning_rate": 0.01,
+                "max_epochs": 2,
+                "lr_find_min_lr": 1e-5,
+                "lr_find_max_lr": 1.0,
+                "lr_find_num_training": 100,
+                "lr_find_early_stop_threshold": 10000.0,
+                "accelerator": "cpu",
+                "devices": 1,
+                "precision": "32-true",
+                "determinism_mode": "strict",
+                "gradient_clip_val": 0.1,
+            },
+            train_loader=object(),
+            valid_loader=object(),
+        )
+
+        self.assertAlmostEqual(learning_rate, 0.0042)
+        self.assertEqual(len(safe_globals.calls), 1)
+        self.assertEqual(safe_globals.entered, 1)
+        self.assertEqual(safe_globals.exited, 1)
+        safe_global_names = {getattr(value, "__name__", type(value).__name__) for value in safe_globals.calls[0]}
+        self.assertIn("_FakeGroupNormalizer", safe_global_names)
+        self.assertIn("_FakeNaNLabelEncoder", safe_global_names)
+        self.assertIn("_FakeQuantileLoss", safe_global_names)
+        self.assertIn("_FakeModuleList", safe_global_names)
+        self.assertIn("_FakeWAPEMetric", safe_global_names)
+
+    def test_visible_validation_metrics_formats_model_target_metrics_for_logs(
+        self,
+    ) -> None:
         class _FakeScalar:
             def __init__(self, value: float) -> None:
                 self._value = value
@@ -154,22 +414,72 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
             def item(self) -> float:
                 return self._value
 
-        visible_metrics = cast(Any, training_runtime_module)._visible_validation_metrics(
+        visible_metrics = cast(
+            Any, training_runtime_module
+        )._visible_validation_metrics(
             {
                 "val_wape": _FakeScalar(0.123456789),
                 "val_loss": _FakeScalar(0.212345678),
                 "train_loss_epoch": _FakeScalar(0.000000865),
+                "train_loss_step": _FakeScalar(0.000000123),
             }
         )
 
         self.assertEqual(
             visible_metrics,
             {
-                "val_wape": "0.123457",
-                "val_loss": "0.212346",
-                "train_loss_epoch": "8.65e-07",
+                "model_target_val_wape": "0.123457",
+                "model_target_val_quantile_loss": "0.212346",
+                "model_target_train_quantile_loss": "8.65e-07",
             },
         )
+
+    def test_build_trainer_can_disable_batch_level_overhead_for_hpo(self) -> None:
+        trainer_calls: list[dict[str, object]] = []
+
+        trainer, checkpoint_callback, logger_paths = training_runtime_module.build_trainer(
+            {
+                "CSVLogger": lambda **kwargs: ("csv", kwargs),
+                "TensorBoardLogger": lambda **kwargs: ("tb", kwargs),
+                "LearningRateMonitor": lambda **kwargs: ("lr", kwargs),
+                "DeviceStatsMonitor": lambda: "device-stats",
+                "Callback": object,
+                "TQDMProgressBar": object,
+                "EarlyStopping": lambda **kwargs: ("es", kwargs),
+                "ModelCheckpoint": lambda **kwargs: SimpleNamespace(
+                    best_model_path="", **kwargs
+                ),
+                "Trainer": lambda **kwargs: trainer_calls.append(dict(kwargs))
+                or SimpleNamespace(**kwargs),
+            },
+            {
+                "accelerator": "gpu",
+                "devices": 1,
+                "precision": "bf16-mixed",
+                "max_epochs": 2,
+                "gradient_clip_val": 0.1,
+                "determinism_mode": "off",
+                "enable_progress_bar": False,
+                "enable_csv_logger": False,
+                "enable_lr_monitor": False,
+                "enable_validation_metric_logging": False,
+                "enable_device_stats_monitor": False,
+                "log_every_n_steps": 50,
+                "tensorboard_logdir": None,
+            },
+            checkpoint_dir=None,
+            has_validation=False,
+        )
+
+        _ = trainer
+        self.assertIsNone(checkpoint_callback)
+        self.assertEqual(logger_paths["csv_log_dir"], None)
+        self.assertEqual(logger_paths["tensorboard_log_dir"], None)
+        self.assertEqual(len(trainer_calls), 1)
+        self.assertFalse(bool(trainer_calls[0]["logger"]))
+        self.assertEqual(int(cast(Any, trainer_calls[0]["log_every_n_steps"])), 50)
+        self.assertFalse(bool(trainer_calls[0]["enable_progress_bar"]))
+        self.assertEqual(cast(list[object], trainer_calls[0]["callbacks"]), [])
 
 
 if __name__ == "__main__":
