@@ -53,6 +53,7 @@ def _fake_export_writers(
     captured_parquet_columns: list[list[str]],
     captured_csv_is_censored: list[bool],
     captured_parquet_is_censored: list[list[bool]],
+    captured_parquet_paths: list[str],
 ) -> tuple[Any, Any]:
     def fake_to_csv(dataset_self: Dataset, *args: object, **kwargs: object) -> None:
         del args, kwargs
@@ -60,7 +61,9 @@ def _fake_export_writers(
         captured_csv_is_censored.extend(bool(value) for value in _dataset_column_values(dataset_self, "is_censored"))
 
     def fake_to_parquet(dataset_self: Dataset, *args: object, **kwargs: object) -> None:
-        del args, kwargs
+        del kwargs
+        if args:
+            captured_parquet_paths.append(str(args[0]))
         captured_parquet_columns.append(dataset_self.column_names)
         captured_parquet_is_censored.append([bool(value) for value in _dataset_column_values(dataset_self, "is_censored")])
 
@@ -127,7 +130,7 @@ def _assert_csv_flattened_columns(captured_csv_columns: list[str]) -> None:
 
 def _assert_parquet_flattened_columns(captured_parquet_columns: list[list[str]]) -> None:
     expected_flattened_columns = _expected_flattened_columns()
-    assert len(captured_parquet_columns) == 2
+    assert len(captured_parquet_columns) == 4
     assert all(expected_flattened_columns <= set(columns) for columns in captured_parquet_columns)
     assert all("hours_sale" not in columns for columns in captured_parquet_columns)
     assert all("hours_stock_status" not in columns for columns in captured_parquet_columns)
@@ -138,7 +141,12 @@ def _assert_censoring_flags(
     captured_parquet_is_censored: list[list[bool]],
 ) -> None:
     assert captured_csv_is_censored == [False]
-    assert captured_parquet_is_censored == [[False, True, False, True], [False, True]]
+    assert captured_parquet_is_censored == [
+        [False, True, False, True],
+        [False, True, False, True],
+        [False, True],
+        [False, True],
+    ]
 
 
 class ExportFreshRetailNetTests(unittest.TestCase):
@@ -218,11 +226,13 @@ class ExportFreshRetailNetTests(unittest.TestCase):
         captured_parquet_columns: list[list[str]] = []
         captured_csv_is_censored: list[bool] = []
         captured_parquet_is_censored: list[list[bool]] = []
+        captured_parquet_paths: list[str] = []
         fake_to_csv, fake_to_parquet = _fake_export_writers(
             captured_csv_columns=captured_csv_columns,
             captured_parquet_columns=captured_parquet_columns,
             captured_csv_is_censored=captured_csv_is_censored,
             captured_parquet_is_censored=captured_parquet_is_censored,
+            captured_parquet_paths=captured_parquet_paths,
         )
 
         with mock.patch(
@@ -242,6 +252,14 @@ class ExportFreshRetailNetTests(unittest.TestCase):
             captured_parquet_columns=captured_parquet_columns,
             captured_csv_is_censored=captured_csv_is_censored,
             captured_parquet_is_censored=captured_parquet_is_censored,
+        )
+        self.assertIn(
+            str(PROJECT_ROOT / "var" / "sources" / "data_train.parquet"),
+            captured_parquet_paths,
+        )
+        self.assertIn(
+            str(PROJECT_ROOT / "var" / "sources" / "data_val.parquet"),
+            captured_parquet_paths,
         )
 
     def test_resolve_splits_reports_available_split_names(self) -> None:

@@ -131,6 +131,22 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertEqual(freshretail_lt_row["site_format"], "grocery")
         self.assertEqual(freshretail_lt_row["service_model"], "store_pick_pack")
 
+    def test_build_location_metadata_frame_returns_empty_contract_for_empty_input(
+        self,
+    ) -> None:
+        metadata = build_location_metadata_frame(
+            pd.DataFrame(columns=["dataset_source", "location_id", "region_code"]),
+            bakery_city_name="Paris",
+            bakery_school_zone=DEFAULT_BAKERY_SCHOOL_ZONE,
+            bakery_latitude=DEFAULT_BAKERY_LATITUDE,
+            bakery_longitude=DEFAULT_BAKERY_LONGITUDE,
+        )
+
+        self.assertTrue(metadata.empty)
+        self.assertIn("dataset_source", metadata.columns)
+        self.assertIn("location_id", metadata.columns)
+        self.assertIn("country_code", metadata.columns)
+
     def test_compute_country_years_includes_target_day_spillover(self) -> None:
         silver_locations = pd.DataFrame(
             [

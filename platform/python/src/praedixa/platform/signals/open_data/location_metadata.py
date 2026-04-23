@@ -15,6 +15,31 @@ SCHOOL_ZONE_COL = "school_zone"
 WEATHER_LOCATION_LABEL_COL = "weather_location_label"
 SITE_FORMAT_COL = "site_format"
 SERVICE_MODEL_COL = "service_model"
+LOCATION_METADATA_COLUMNS = [
+    DATASET_SOURCE_COL,
+    LOCATION_ID_COL,
+    COUNTRY_CODE_COL,
+    REGION_CODE_COL,
+    "city_name",
+    "latitude",
+    "longitude",
+    SCHOOL_ZONE_COL,
+    WEATHER_LOCATION_LABEL_COL,
+    ASSUMPTION_SOURCE_COL,
+    SITE_FORMAT_COL,
+    SERVICE_MODEL_COL,
+    "drive_through_flag",
+    "delivery_flag",
+    "pickup_flag",
+    "late_night_flag",
+    "trade_area_type",
+    "mall_flag",
+    "transit_hub_flag",
+    "tourism_flag",
+    "office_density_bucket",
+    "residential_density_bucket",
+    "competition_intensity_bucket",
+]
 
 
 def _is_missing_country_code(country_code: object) -> bool:
@@ -245,6 +270,9 @@ def build_location_metadata_frame(
         )
         if row is not None:
             rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=LOCATION_METADATA_COLUMNS)
 
     return pd.DataFrame(rows).sort_values(["dataset_source", "location_id"]).reset_index(drop=True)
 

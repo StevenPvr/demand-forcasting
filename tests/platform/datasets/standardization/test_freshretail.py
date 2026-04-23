@@ -47,10 +47,49 @@ class GlobalDatasetFreshRetailTests(unittest.TestCase):
         self.assertEqual(record["location_id"], "store_1")
         self.assertEqual(record["product_id"], "sku_1")
         self.assertEqual(record["observed_demand_qty"], 12.0)
+        self.assertEqual(record["target_semantics"], "observed_sales")
+        self.assertEqual(record["target_source"], "observed_sales")
+        self.assertEqual(record["label_quality_score"], 0.5)
+        self.assertFalse(record["usable_for_training_flag"])
+        self.assertTrue(record["censor_flag"])
         self.assertTrue(record["observed_stockout_flag"])
         self.assertTrue(record["observed_stockout_available"])
         self.assertAlmostEqual(record["observed_discount_amount"], 0.1, places=6)
         self.assertTrue(record["promo_flag"])
+
+    def test_standardize_freshretail_lazy_frame_derives_contract_without_is_censored(
+        self,
+    ) -> None:
+        frame = pl.DataFrame(
+            {
+                "city_id": ["city_a"],
+                "store_id": ["store_1"],
+                "management_group_id": ["mg_1"],
+                "first_category_id": ["cat_1"],
+                "second_category_id": ["dept_1"],
+                "third_category_id": ["family_1"],
+                "product_id": ["sku_1"],
+                "dt": [pd.Timestamp("2024-01-01")],
+                "sale_amount": [12.0],
+                "stock_hour6_22_cnt": [0],
+                "discount": [0.0],
+                "holiday_flag": [False],
+                "activity_flag": [True],
+                "precpt": [0.0],
+                "avg_temperature": [18.0],
+                "avg_humidity": [0.6],
+                "avg_wind_level": [4.0],
+            }
+        )
+
+        record = standardize_freshretail_lazy_frame(
+            frame.lazy(), source_partition="val"
+        ).collect().to_dicts()[0]
+
+        self.assertFalse(record["censor_flag"])
+        self.assertEqual(record["label_quality_score"], 1.0)
+        self.assertTrue(record["usable_for_training_flag"])
+        self.assertFalse(record["observed_stockout_flag"])
 
 
 if __name__ == "__main__":

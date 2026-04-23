@@ -239,6 +239,9 @@ def _export_resolved_splits(
         )
         parquet_path = output_path / f"{dataset_slug}_{split_name}.parquet"
         cast(Any, exported_split).to_parquet(str(parquet_path))
+        if split_name in {"train", "val"}:
+            canonical_parquet_path = output_path / f"data_{split_name}.parquet"
+            cast(Any, exported_split).to_parquet(str(canonical_parquet_path))
         parquet_paths[split_name] = str(parquet_path)
         split_row_counts[split_name] = exported_split.num_rows
     return parquet_paths, split_row_counts

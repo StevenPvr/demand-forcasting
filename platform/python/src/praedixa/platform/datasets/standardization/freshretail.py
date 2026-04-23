@@ -19,6 +19,7 @@ DEFAULT_SILVER_RUN_ID = "manual_local"
 
 def _freshretail_canonical_expressions(
     *,
+    stockout_flag_expr: pl.Expr,
     source_partition: str,
     source_run_id: str,
     silver_run_id: str,
@@ -33,13 +34,22 @@ def _freshretail_canonical_expressions(
         pl.col("second_category_id").cast(pl.Utf8).alias("category_level_2"),
         pl.col("third_category_id").cast(pl.Utf8).alias("category_level_3"),
         pl.col("sale_amount").cast(pl.Float32).alias("observed_demand_qty"),
+        pl.lit("observed_sales").alias("target_semantics"),
+        pl.coalesce([stockout_flag_expr, pl.lit(False)]).cast(pl.Boolean).alias("censor_flag"),
+        pl.lit("observed_sales").alias("target_source"),
+        pl.when(pl.coalesce([stockout_flag_expr, pl.lit(False)]))
+        .then(pl.lit(0.5))
+        .otherwise(pl.lit(1.0))
+        .cast(pl.Float32)
+        .alias("label_quality_score"),
+        (~pl.coalesce([stockout_flag_expr, pl.lit(False)])).alias("usable_for_training_flag"),
         pl.lit(None).cast(pl.Float32).alias("observed_revenue_net"),
         pl.col("discount").cast(pl.Float32).alias("observed_discount_amount"),
         pl.lit(None).cast(pl.Float32).alias("avg_selling_price"),
         freshretail_promo_flag_expr().alias("promo_flag"),
         pl.col("holiday_flag").cast(pl.Boolean).alias("holiday_flag"),
         pl.col("activity_flag").cast(pl.Boolean).alias("activity_flag"),
-        pl.col("is_censored").cast(pl.Boolean).alias("observed_stockout_flag"),
+        stockout_flag_expr.alias("observed_stockout_flag"),
         pl.lit(True).alias("observed_stockout_available"),
         pl.col("stock_hour6_22_cnt").cast(pl.Float32).alias("observed_stockout_intensity"),
         pl.lit(True).alias("location_open_flag"),
@@ -75,8 +85,15 @@ def standardize_freshretail_lazy_frame(
 ) -> pl.LazyFrame:
     """Map FreshRetail daily data into the canonical daily demand contract."""
 
+    available_columns = set(frame.collect_schema().names())
+    if "is_censored" in available_columns:
+        stockout_flag_expr = pl.col("is_censored").cast(pl.Boolean)
+    else:
+        stockout_flag_expr = (pl.col("stock_hour6_22_cnt").cast(pl.Float32) > 0)
+
     normalized = frame.with_columns(
         _freshretail_canonical_expressions(
+            stockout_flag_expr=stockout_flag_expr,
             source_partition=source_partition,
             source_run_id=source_run_id,
             silver_run_id=silver_run_id,
