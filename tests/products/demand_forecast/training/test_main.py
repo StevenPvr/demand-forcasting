@@ -28,12 +28,18 @@ from praedixa.demand_forecast.training.main import (  # noqa: E402
 from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR  # noqa: E402
 
 
-def _write_bundle_fixture(bundle_dir: Path, *, include_optimisation_projection: bool = False) -> None:
+def _write_bundle_fixture(
+    bundle_dir: Path, *, include_optimisation_projection: bool = False
+) -> None:
     (bundle_dir / "train.parquet").write_text("placeholder", encoding="utf-8")
     (bundle_dir / "tuning.parquet").write_text("placeholder", encoding="utf-8")
     if include_optimisation_projection:
-        (bundle_dir / "optimisation_train.parquet").write_text("placeholder", encoding="utf-8")
-        (bundle_dir / "optimisation_tuning.parquet").write_text("placeholder", encoding="utf-8")
+        (bundle_dir / "optimisation_train.parquet").write_text(
+            "placeholder", encoding="utf-8"
+        )
+        (bundle_dir / "optimisation_tuning.parquet").write_text(
+            "placeholder", encoding="utf-8"
+        )
     (bundle_dir / "bundle_manifest.json").write_text(
         json.dumps({"train_rows": 1, "tuning_rows": 1}),
         encoding="utf-8",
@@ -62,23 +68,27 @@ def _assert_bundle_request(
 class OptimisationMainTests(unittest.TestCase):
     def test_official_main_config_uses_official_defaults(self) -> None:
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
+        rebuilt = build_default_optimisation_main_config()
 
-        self.assertEqual(
-            config.runtime_profile,
-            build_default_optimisation_main_config().runtime_profile,
-        )
-        self.assertEqual(config.n_folds, 2)
-        self.assertEqual(config.max_trials, 2)
-        self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.05)
-        self.assertEqual(config.tuning_sample_fraction, 0.05)
+        self.assertEqual(config.runtime_profile, rebuilt.runtime_profile)
+        self.assertEqual(config.n_folds, rebuilt.n_folds)
+        self.assertEqual(config.max_trials, rebuilt.max_trials)
+        self.assertEqual(config.stage_budget, rebuilt.stage_budget)
+        self.assertEqual(config.train_sample_fraction, rebuilt.train_sample_fraction)
+        self.assertEqual(config.tuning_sample_fraction, rebuilt.tuning_sample_fraction)
         self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
 
-    def test_default_config_selects_scaleway_profile_when_cuda_is_available(self) -> None:
+    def test_default_config_selects_scaleway_profile_when_cuda_is_available(
+        self,
+    ) -> None:
         with (
             mock.patch(
                 "praedixa.demand_forecast.training.main._cuda_available",
                 return_value=True,
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_device_name",
+                return_value="NVIDIA L40S",
             ),
             mock.patch(
                 "praedixa.demand_forecast.training.main._mps_available",
@@ -88,12 +98,45 @@ class OptimisationMainTests(unittest.TestCase):
             config = build_default_optimisation_main_config()
 
         self.assertEqual(config.runtime_profile, "scaleway_l40s")
+        self.assertEqual(config.n_folds, 5)
+        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.stage_budget, "standard")
+
+    def test_default_config_selects_h100_profile_and_budget_when_h100_is_available(
+        self,
+    ) -> None:
+        with (
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_available",
+                return_value=True,
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_device_name",
+                return_value="NVIDIA H100 PCIe",
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._mps_available",
+                return_value=False,
+            ),
+        ):
+            config = build_default_optimisation_main_config()
+
+        self.assertEqual(config.runtime_profile, "nvidia_h100")
+        self.assertEqual(config.n_folds, 5)
+        self.assertEqual(config.max_trials, 192)
+        self.assertEqual(config.stage_budget, "full")
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
 
     def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
         with (
             mock.patch(
                 "praedixa.demand_forecast.training.main._cuda_available",
                 return_value=False,
+            ),
+            mock.patch(
+                "praedixa.demand_forecast.training.main._cuda_device_name",
+                return_value=None,
             ),
             mock.patch(
                 "praedixa.demand_forecast.training.main._mps_available",
@@ -103,6 +146,11 @@ class OptimisationMainTests(unittest.TestCase):
             config = build_default_optimisation_main_config()
 
         self.assertEqual(config.runtime_profile, "local_cpu")
+        self.assertEqual(config.n_folds, 5)
+        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.stage_budget, "standard")
+        self.assertEqual(config.train_sample_fraction, 0.20)
+        self.assertEqual(config.tuning_sample_fraction, 0.20)
 
     def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
         from praedixa.demand_forecast.backends.tft.backend import (
@@ -137,7 +185,9 @@ class OptimisationMainTests(unittest.TestCase):
             with (
                 mock.patch(
                     "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
-                    return_value={"best_params": bundle_dir / "best_optuna_params.json"},
+                    return_value={
+                        "best_params": bundle_dir / "best_optuna_params.json"
+                    },
                 ) as mocked_build,
                 mock.patch(
                     "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
@@ -173,7 +223,9 @@ class OptimisationMainTests(unittest.TestCase):
             with (
                 mock.patch(
                     "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
-                    return_value={"best_params": bundle_dir / "best_optuna_params.json"},
+                    return_value={
+                        "best_params": bundle_dir / "best_optuna_params.json"
+                    },
                 ) as mocked_build,
                 mock.patch(
                     "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
@@ -184,10 +236,16 @@ class OptimisationMainTests(unittest.TestCase):
 
         args, _ = mocked_build.call_args
         request = args[0]
-        self.assertEqual(request.train_input_path, bundle_dir / "optimisation_train.parquet")
-        self.assertEqual(request.tuning_input_path, bundle_dir / "optimisation_tuning.parquet")
+        self.assertEqual(
+            request.train_input_path, bundle_dir / "optimisation_train.parquet"
+        )
+        self.assertEqual(
+            request.tuning_input_path, bundle_dir / "optimisation_tuning.parquet"
+        )
 
-    def test_main_rejects_runtime_profile_mismatch_instead_of_falling_back(self) -> None:
+    def test_main_rejects_runtime_profile_mismatch_instead_of_falling_back(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             bundle_dir = Path(temp_dir)
             _write_bundle_fixture(bundle_dir)
@@ -206,7 +264,9 @@ class OptimisationMainTests(unittest.TestCase):
             with (
                 mock.patch(
                     "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
-                    return_value={"best_params": bundle_dir / "best_optuna_params.json"},
+                    return_value={
+                        "best_params": bundle_dir / "best_optuna_params.json"
+                    },
                 ),
                 mock.patch(
                     "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
@@ -220,7 +280,10 @@ class OptimisationMainTests(unittest.TestCase):
                     "praedixa.demand_forecast.training.main._mps_available",
                     return_value=False,
                 ),
-                self.assertRaisesRegex(RuntimeError, "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself.",
+                ),
             ):
                 optimisation_main()
 
