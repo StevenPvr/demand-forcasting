@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, cast
 
 import duckdb
@@ -54,7 +55,12 @@ def _relation_sampling_metadata_payload(
         strata_count,
     ) in sampled_counts:
         dataset_original_rows = int(cast(Any, original_rows))
-        dataset_sampled_rows = int(cast(Any, sampled_rows))
+        _ = sampled_rows
+        dataset_sampled_rows = _target_dataset_sample_size(
+            dataset_original_rows=dataset_original_rows,
+            sample_fraction=spec.sample_fraction,
+            min_samples_per_dataset=spec.min_samples_per_dataset,
+        )
         datasets[str(dataset_source)] = _relation_sampling_dataset_metadata(
             dataset_original_rows=dataset_original_rows,
             dataset_sampled_rows=dataset_sampled_rows,
@@ -74,6 +80,10 @@ def _relation_sampling_metadata_payload(
         "sample_store_col": spec.sample_store_col,
         "original_rows": total_original_rows,
         "sampled_rows": total_sampled_rows,
+        "effective_sample_fraction": _effective_sample_fraction(
+            sampled_rows=total_sampled_rows,
+            original_rows=total_original_rows,
+        ),
         "datasets": datasets,
     }
 
@@ -105,6 +115,10 @@ def _relation_sampling_dataset_metadata(
         "sampled_rows": dataset_sampled_rows,
         "primary_sampled_rows": primary_rows,
         "sample_fraction": float(sample_fraction),
+        "effective_sample_fraction": _effective_sample_fraction(
+            sampled_rows=dataset_sampled_rows,
+            original_rows=dataset_original_rows,
+        ),
         "min_samples_per_dataset": int(min_samples_per_dataset),
         "store_count": int(cast(Any, store_count)),
         "unique_dates": int(cast(Any, unique_dates)),
@@ -161,6 +175,29 @@ def _relation_sampling_counts(
         order by 1
         """
     ).fetchall()
+
+
+def _target_dataset_sample_size(
+    *,
+    dataset_original_rows: int,
+    sample_fraction: float,
+    min_samples_per_dataset: int,
+) -> int:
+    return int(
+        min(
+            dataset_original_rows,
+            max(
+                int(math.ceil(dataset_original_rows * sample_fraction)),
+                min_samples_per_dataset,
+            ),
+        )
+    )
+
+
+def _effective_sample_fraction(*, sampled_rows: int, original_rows: int) -> float:
+    if original_rows <= 0:
+        return 0.0
+    return float(sampled_rows) / float(original_rows)
 
 
 def resolve_gold_projection_columns(
@@ -233,6 +270,10 @@ def _gold_sampling_metadata_payload(
             "original_rows": dataset_original_rows,
             "sampled_rows": dataset_sampled_rows,
             "sample_fraction": float(spec.sample_fraction),
+            "effective_sample_fraction": _effective_sample_fraction(
+                sampled_rows=dataset_sampled_rows,
+                original_rows=dataset_original_rows,
+            ),
             "store_count": int(cast(Any, store_count)),
             "unique_dates": int(cast(Any, unique_dates)),
             "strata_count": int(cast(Any, strata_count)),
@@ -245,6 +286,10 @@ def _gold_sampling_metadata_payload(
         "sample_store_col": spec.sample_store_col,
         "original_rows": total_original_rows,
         "sampled_rows": total_sampled_rows,
+        "effective_sample_fraction": _effective_sample_fraction(
+            sampled_rows=total_sampled_rows,
+            original_rows=total_original_rows,
+        ),
         "datasets": datasets,
     }
 
@@ -268,6 +313,10 @@ def refresh_sampling_metadata_from_sampled_frame(
     refreshed_datasets = cast(dict[str, dict[str, object]], refreshed["datasets"])
     sampled_counts = sampled_frame[dataset_source_col].value_counts(dropna=False).sort_index()
     refreshed["sampled_rows"] = int(len(sampled_frame))
+    refreshed["effective_sample_fraction"] = _effective_sample_fraction(
+        sampled_rows=int(len(sampled_frame)),
+        original_rows=int(cast(Any, metadata["original_rows"])),
+    )
     for dataset_source, sampled_rows in sampled_counts.items():
         dataset_key = str(dataset_source)
         refreshed_datasets[dataset_key] = _refreshed_dataset_metadata(
@@ -298,6 +347,7 @@ def _refreshed_dataset_metadata(
         return {
             "original_rows": sampled_rows,
             "sample_fraction": float(cast(Any, metadata["sample_fraction"])),
+            "effective_sample_fraction": 1.0,
             "store_count": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source, sample_store_col].nunique()),
             "unique_dates": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source, date_col].nunique()),
             "strata_count": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source].groupby([date_col, sample_store_col], sort=False).ngroups),
@@ -305,6 +355,10 @@ def _refreshed_dataset_metadata(
         }
     updated = dict(existing)
     updated["sampled_rows"] = sampled_rows
+    updated["effective_sample_fraction"] = _effective_sample_fraction(
+        sampled_rows=sampled_rows,
+        original_rows=int(cast(Any, updated["original_rows"])),
+    )
     return updated
 
 

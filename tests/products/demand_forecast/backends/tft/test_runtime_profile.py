@@ -5,7 +5,11 @@ import sys
 import unittest
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -37,7 +41,9 @@ class TFTRuntimeProfileTests(unittest.TestCase):
         self.assertFalse(profile["torch_compile"])
 
     def test_resolve_runtime_profile_returns_scaleway_l40s_defaults(self) -> None:
-        profile = resolve_runtime_profile("scaleway_l40s", bf16_supported=True, cpu_count=16)
+        profile = resolve_runtime_profile(
+            "scaleway_l40s", bf16_supported=True, cpu_count=16
+        )
 
         self.assertEqual(profile["accelerator"], "gpu")
         self.assertEqual(profile["devices"], 1)
@@ -46,6 +52,22 @@ class TFTRuntimeProfileTests(unittest.TestCase):
         self.assertTrue(profile["pin_memory"])
         self.assertTrue(profile["persistent_workers"])
         self.assertEqual(profile["prefetch_factor"], 4)
+        self.assertEqual(profile["compile_mode"], "off")
+        self.assertEqual(profile["determinism_mode"], "warn_only")
+        self.assertEqual(profile["matmul_precision"], "high")
+
+    def test_resolve_runtime_profile_returns_h100_defaults(self) -> None:
+        profile = resolve_runtime_profile(
+            "nvidia_h100", bf16_supported=True, cpu_count=32
+        )
+
+        self.assertEqual(profile["accelerator"], "gpu")
+        self.assertEqual(profile["devices"], 1)
+        self.assertEqual(profile["precision"], "bf16-mixed")
+        self.assertEqual(profile["num_workers"], 12)
+        self.assertTrue(profile["pin_memory"])
+        self.assertTrue(profile["persistent_workers"])
+        self.assertEqual(profile["prefetch_factor"], 6)
         self.assertEqual(profile["compile_mode"], "off")
         self.assertEqual(profile["determinism_mode"], "warn_only")
         self.assertEqual(profile["matmul_precision"], "high")

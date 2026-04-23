@@ -33,8 +33,15 @@ def _bootstrap_import_paths() -> None:
 _bootstrap_import_paths()
 
 
-def _load_optimisation_main_defaults() -> tuple[str, str, int, int, str, float, float]:
+def _load_optimisation_main_defaults() -> tuple[
+    str, str, int, int, str, float, float, int, int, str, float, float
+]:
     from praedixa.demand_forecast.training.constants import (
+        DEFAULT_H100_OPTIMISATION_MAIN_MAX_TRIALS,
+        DEFAULT_H100_OPTIMISATION_MAIN_N_FOLDS,
+        DEFAULT_H100_OPTIMISATION_MAIN_STAGE_BUDGET,
+        DEFAULT_H100_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
+        DEFAULT_H100_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
         DEFAULT_OPTIMISATION_MAIN_MAX_TRIALS,
         DEFAULT_OPTIMISATION_MAIN_N_FOLDS,
         DEFAULT_OPTIMISATION_MAIN_RUNTIME_PROFILE,
@@ -52,6 +59,11 @@ def _load_optimisation_main_defaults() -> tuple[str, str, int, int, str, float, 
         DEFAULT_OPTIMISATION_MAIN_STAGE_BUDGET,
         DEFAULT_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
         DEFAULT_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
+        DEFAULT_H100_OPTIMISATION_MAIN_N_FOLDS,
+        DEFAULT_H100_OPTIMISATION_MAIN_MAX_TRIALS,
+        DEFAULT_H100_OPTIMISATION_MAIN_STAGE_BUDGET,
+        DEFAULT_H100_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
+        DEFAULT_H100_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
     )
 
 
@@ -63,6 +75,11 @@ def _load_optimisation_main_defaults() -> tuple[str, str, int, int, str, float, 
     DEFAULT_STAGE_BUDGET,
     DEFAULT_TRAIN_SAMPLE_FRACTION,
     DEFAULT_TUNING_SAMPLE_FRACTION,
+    DEFAULT_H100_N_FOLDS,
+    DEFAULT_H100_MAX_TRIALS,
+    DEFAULT_H100_STAGE_BUDGET,
+    DEFAULT_H100_TRAIN_SAMPLE_FRACTION,
+    DEFAULT_H100_TUNING_SAMPLE_FRACTION,
 ) = _load_optimisation_main_defaults()
 
 DEFAULT_TENSORBOARD_LOGDIR: Path | None = None
@@ -74,6 +91,19 @@ def _cuda_available() -> bool:
     except ImportError:
         return False
     return bool(torch.cuda.is_available())
+
+
+def _cuda_device_name() -> str | None:
+    try:
+        import torch
+    except ImportError:
+        return None
+    if not torch.cuda.is_available():
+        return None
+    try:
+        return str(torch.cuda.get_device_name(0))
+    except RuntimeError:
+        return None
 
 
 def _mps_available() -> bool:
@@ -98,11 +128,11 @@ def _validate_runtime_profile(requested_profile: str) -> None:
             "The official optimisation run is configured with `mac_metal`, but MPS is unavailable on this machine. "
             "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
         )
-    if requested_profile == "scaleway_l40s":
+    if requested_profile in {"scaleway_l40s", "nvidia_h100"}:
         if _cuda_available():
             return
         raise RuntimeError(
-            "The official optimisation run is configured with `scaleway_l40s`, but CUDA is unavailable on this machine. "
+            f"The official optimisation run is configured with `{requested_profile}`, but CUDA is unavailable on this machine. "
             "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
         )
     raise RuntimeError(
@@ -117,10 +147,37 @@ def _default_output_dir() -> Path:
     return OPTIMISATION_DIR
 
 
+def _is_h100_cuda_device() -> bool:
+    device_name = _cuda_device_name()
+    return device_name is not None and "H100" in device_name.upper()
+
+
 def _default_runtime_profile() -> str:
+    if _is_h100_cuda_device():
+        return "nvidia_h100"
     if _cuda_available():
         return "scaleway_l40s"
     return DEFAULT_RUNTIME_PROFILE
+
+
+def _default_budget_for_runtime(
+    runtime_profile: str,
+) -> tuple[int, int, str, float, float]:
+    if runtime_profile == "nvidia_h100":
+        return (
+            DEFAULT_H100_N_FOLDS,
+            DEFAULT_H100_MAX_TRIALS,
+            DEFAULT_H100_STAGE_BUDGET,
+            DEFAULT_H100_TRAIN_SAMPLE_FRACTION,
+            DEFAULT_H100_TUNING_SAMPLE_FRACTION,
+        )
+    return (
+        DEFAULT_N_FOLDS,
+        DEFAULT_MAX_TRIALS,
+        DEFAULT_STAGE_BUDGET,
+        DEFAULT_TRAIN_SAMPLE_FRACTION,
+        DEFAULT_TUNING_SAMPLE_FRACTION,
+    )
 
 
 @dataclass(frozen=True)
@@ -137,7 +194,22 @@ class OptimisationMainConfig:
 
 
 def build_default_optimisation_main_config() -> OptimisationMainConfig:
-    return OptimisationMainConfig()
+    runtime_profile = _default_runtime_profile()
+    (
+        n_folds,
+        max_trials,
+        stage_budget,
+        train_sample_fraction,
+        tuning_sample_fraction,
+    ) = _default_budget_for_runtime(runtime_profile)
+    return OptimisationMainConfig(
+        runtime_profile=runtime_profile,
+        n_folds=n_folds,
+        max_trials=max_trials,
+        stage_budget=stage_budget,
+        train_sample_fraction=train_sample_fraction,
+        tuning_sample_fraction=tuning_sample_fraction,
+    )
 
 
 OFFICIAL_OPTIMISATION_MAIN_CONFIG = build_default_optimisation_main_config()
@@ -146,7 +218,10 @@ OFFICIAL_OPTIMISATION_MAIN_CONFIG = build_default_optimisation_main_config()
 def _validate_bundle_dir(bundle_dir: Path) -> tuple[Path, Path, Path]:
     optimisation_train_input_path = bundle_dir / "optimisation_train.parquet"
     optimisation_tuning_input_path = bundle_dir / "optimisation_tuning.parquet"
-    if optimisation_train_input_path.exists() and optimisation_tuning_input_path.exists():
+    if (
+        optimisation_train_input_path.exists()
+        and optimisation_tuning_input_path.exists()
+    ):
         return optimisation_train_input_path, optimisation_tuning_input_path, bundle_dir
     train_input_path = bundle_dir / "train.parquet"
     tuning_input_path = bundle_dir / "tuning.parquet"
@@ -179,7 +254,9 @@ def main() -> None:
         _cuda_available(),
         _mps_available(),
     )
-    train_input_path, tuning_input_path, resolved_bundle_dir = _resolve_official_bundle_inputs(config.bundle_dir)
+    train_input_path, tuning_input_path, resolved_bundle_dir = (
+        _resolve_official_bundle_inputs(config.bundle_dir)
+    )
     _validate_runtime_profile(config.runtime_profile)
     model_params: dict[str, object] = {
         "n_jobs": os.cpu_count() or 1,

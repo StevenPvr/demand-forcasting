@@ -28,6 +28,7 @@ from praedixa.demand_forecast.backends.tft.training_dataset import (
     build_training_dataset_artifacts,
 )
 from praedixa.demand_forecast.backends.tft.training_runtime import (
+    find_learning_rate,
     fit_trainer_model,
     seed_tft_runtime,
 )
@@ -46,12 +47,16 @@ def _build_model(
         hidden_size=int(cast(Any, resolved_params["hidden_size"])),
         attention_head_size=int(cast(Any, resolved_params["attention_head_size"])),
         dropout=float(cast(Any, resolved_params["dropout"])),
-        hidden_continuous_size=int(cast(Any, resolved_params["hidden_continuous_size"])),
+        hidden_continuous_size=int(
+            cast(Any, resolved_params["hidden_continuous_size"])
+        ),
         lstm_layers=int(cast(Any, resolved_params["lstm_layers"])),
         loss=quantile_loss,
         output_size=len(cast(list[float], resolved_params["quantiles"])),
         log_interval=-1,
-        reduce_on_plateau_patience=int(cast(Any, resolved_params["patience"])),
+        reduce_on_plateau_patience=int(
+            cast(Any, resolved_params["reduce_on_plateau_patience"])
+        ),
         optimizer="adam",
         weight_decay=float(cast(Any, resolved_params["weight_decay"])),
         logging_metrics=logging_metrics,
@@ -88,11 +93,17 @@ def _training_loaders(
         persistent_workers=bool(cast(Any, resolved_params["persistent_workers"])),
         prefetch_factor=cast(int | None, resolved_params.get("prefetch_factor")),
     )
-    train_loader = training_dataset.to_dataloader(train=True, batch_size=batch_size, **dataloader_kwargs)
-    valid_loader = None if validation_dataset is None else validation_dataset.to_dataloader(
-        train=False,
-        batch_size=batch_size,
-        **dataloader_kwargs,
+    train_loader = training_dataset.to_dataloader(
+        train=True, batch_size=batch_size, **dataloader_kwargs
+    )
+    valid_loader = (
+        None
+        if validation_dataset is None
+        else validation_dataset.to_dataloader(
+            train=False,
+            batch_size=batch_size,
+            **dataloader_kwargs,
+        )
     )
     return train_loader, valid_loader
 
@@ -171,6 +182,34 @@ def _fit_resolved_model(
         valid_loader=valid_loader,
     )
     return fitted_model, valid_loader, best_iteration, runtime_metrics
+
+
+def calibrate_tft_learning_rate(
+    *,
+    dataset_artifacts: TrainingDatasetArtifacts,
+    resolved_params: dict[str, object],
+) -> float:
+    imports = lazy_import_tft_dependencies()
+    with suppress_tft_runtime_noise():
+        seed_tft_runtime(imports, resolved_params)
+        train_loader, valid_loader = _training_loaders(
+            training_dataset=dataset_artifacts.training_dataset,
+            validation_dataset=dataset_artifacts.validation_dataset,
+            batch_size=int(cast(Any, resolved_params["batch_size"])),
+            resolved_params=resolved_params,
+        )
+        model = _build_model(
+            imports,
+            dataset_artifacts.training_dataset,
+            resolved_params,
+        )
+        return find_learning_rate(
+            imports,
+            model=model,
+            resolved_params=resolved_params,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+        )
 
 
 def fit_tft_model(

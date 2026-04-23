@@ -10,7 +10,10 @@ import pandas as pd
 
 from praedixa.demand_forecast.backends.tft.artifacts import FittedTFTModel
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
-from praedixa.demand_forecast.backends.tft.frame_utils import WEIGHT_COL, defragment_frame
+from praedixa.demand_forecast.backends.tft.frame_utils import (
+    WEIGHT_COL,
+    defragment_frame,
+)
 
 _SUPPRESSED_TFT_WARNING_PATTERNS: tuple[str, ...] = (
     r"Attribute 'loss' is an instance of `nn\.Module` and is already saved during checkpointing\.",
@@ -41,7 +44,11 @@ def _lazy_import_tft_dependencies() -> dict[str, Any]:
 @contextmanager
 def _suppress_tft_runtime_noise() -> Any:
     logger_states = [
-        (logger_name, logging.getLogger(logger_name), logging.getLogger(logger_name).level)
+        (
+            logger_name,
+            logging.getLogger(logger_name),
+            logging.getLogger(logger_name).level,
+        )
         for logger_name in _SUPPRESSED_TFT_LOGGERS
     ]
     with warnings.catch_warnings():
@@ -56,14 +63,22 @@ def _suppress_tft_runtime_noise() -> Any:
                 logger.setLevel(previous_level)
 
 
-def _seed_tft_runtime(imports: dict[str, Any], model_hyperparameters: dict[str, Any]) -> None:
+def _seed_tft_runtime(
+    imports: dict[str, Any], model_hyperparameters: dict[str, Any]
+) -> None:
     random_state = int(model_hyperparameters.get("random_state", 7))
     imports["seed_everything"](random_state, workers=True)
-    warn_only = str(model_hyperparameters.get("determinism_mode", "strict")) == "warn_only"
+    warn_only = (
+        str(model_hyperparameters.get("determinism_mode", "strict")) == "warn_only"
+    )
     imports["torch"].use_deterministic_algorithms(True, warn_only=warn_only)
-    set_matmul_precision = getattr(imports["torch"], "set_float32_matmul_precision", None)
+    set_matmul_precision = getattr(
+        imports["torch"], "set_float32_matmul_precision", None
+    )
     if callable(set_matmul_precision):
-        set_matmul_precision(str(model_hyperparameters.get("matmul_precision", "highest")))
+        set_matmul_precision(
+            str(model_hyperparameters.get("matmul_precision", "highest"))
+        )
 
 
 def _build_model(
@@ -71,7 +86,9 @@ def _build_model(
     training_dataset: Any,
     model_hyperparameters: dict[str, Any],
 ) -> Any:
-    quantile_loss = imports["QuantileLoss"](quantiles=model_hyperparameters["quantiles"])
+    quantile_loss = imports["QuantileLoss"](
+        quantiles=model_hyperparameters["quantiles"]
+    )
     return imports["TemporalFusionTransformer"].from_dataset(
         training_dataset,
         learning_rate=float(model_hyperparameters["learning_rate"]),
@@ -83,7 +100,12 @@ def _build_model(
         loss=quantile_loss,
         output_size=len(cast(list[float], model_hyperparameters["quantiles"])),
         log_interval=-1,
-        reduce_on_plateau_patience=int(model_hyperparameters["patience"]),
+        reduce_on_plateau_patience=int(
+            model_hyperparameters.get(
+                "reduce_on_plateau_patience",
+                model_hyperparameters["patience"],
+            )
+        ),
         optimizer="adam",
         weight_decay=float(model_hyperparameters.get("weight_decay", 0.0)),
     )
@@ -145,14 +167,28 @@ def _rebuild_model_from_payload(payload: dict[str, Any]) -> Any:
     history_frame = cast(pd.DataFrame, payload["history_frame"])
     resolved_params = cast(dict[str, Any], payload["model_hyperparameters"])
     if "scalers" not in dataset_parameters and "feature_scalers" in payload:
-        dataset_parameters = {**dataset_parameters, "scalers": payload["feature_scalers"]}
+        dataset_parameters = {
+            **dataset_parameters,
+            "scalers": payload["feature_scalers"],
+        }
     reconstruction_frame = history_frame.copy()
-    future_rows = reconstruction_frame.groupby(str(payload["group_col"]), sort=False).tail(1).copy()
-    future_rows[str(payload["time_idx_col"])] = future_rows[str(payload["time_idx_col"])].astype(int) + 1
+    future_rows = (
+        reconstruction_frame.groupby(str(payload["group_col"]), sort=False)
+        .tail(1)
+        .copy()
+    )
+    future_rows[str(payload["time_idx_col"])] = (
+        future_rows[str(payload["time_idx_col"])].astype(int) + 1
+    )
     future_rows[str(payload["target_col"])] = 0.0
-    if dataset_parameters.get("weight") is not None and WEIGHT_COL not in future_rows.columns:
+    if (
+        dataset_parameters.get("weight") is not None
+        and WEIGHT_COL not in future_rows.columns
+    ):
         future_rows[WEIGHT_COL] = 1.0
-    reconstruction_frame = defragment_frame(pd.concat([reconstruction_frame, future_rows], ignore_index=True))
+    reconstruction_frame = defragment_frame(
+        pd.concat([reconstruction_frame, future_rows], ignore_index=True)
+    )
     with _suppress_tft_runtime_noise():
         _seed_tft_runtime(imports, resolved_params)
         training_dataset = imports["TimeSeriesDataSet"].from_parameters(
@@ -197,6 +233,10 @@ def load_tft_checkpoint_bundle(input_path: str | Path) -> FittedTFTModel:
         bundle_manifest=cast(dict[str, Any] | None, payload.get("bundle_manifest")),
         data_hashes=cast(dict[str, str], payload.get("data_hashes", {})),
         normalization_strategy=_normalization_strategy_from_payload(payload),
-        interpretability_payload=cast(dict[str, Any] | None, payload.get("interpretability_payload")),
-        artifact_bundle_version=int(payload.get("artifact_bundle_version", payload.get("payload_version", 1))),
+        interpretability_payload=cast(
+            dict[str, Any] | None, payload.get("interpretability_payload")
+        ),
+        artifact_bundle_version=int(
+            payload.get("artifact_bundle_version", payload.get("payload_version", 1))
+        ),
     )

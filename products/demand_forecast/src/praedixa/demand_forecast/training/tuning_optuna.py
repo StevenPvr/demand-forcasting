@@ -26,6 +26,7 @@ from praedixa.demand_forecast.training.tuning_policy import (
     best_completed_trial_params,
     build_hpo_runtime_metadata,
     create_optuna_study,
+    resolved_trial_status_name,
     resolve_fold_execution_plan,
     resolve_stage_policy,
     sample_optuna_params,
@@ -91,14 +92,20 @@ def _log_trial_completion(
     improvement_pct: float,
     folds_completed: int,
     dataset_mean_wape: dict[str, float],
+    mean_abs_bias: float | None,
+    mean_coverage_80: float | None,
+    mean_coverage_95: float | None,
 ) -> None:
     logger.info(
-        "[HPO trial %s/%s | %s] completed mean_wape=%.6f improvement_pct=%.6f folds_completed=%s dataset_mean_wape=%s",
+        "[HPO trial %s/%s | %s] completed business_mean_wape=%.6f improvement_pct=%.6f business_mean_abs_bias=%s business_mean_coverage_80=%s business_mean_coverage_95=%s folds_completed=%s dataset_business_mean_wape=%s",
         trial_number + 1,
         tuning_trials,
         stage_name,
         mean_wape,
         improvement_pct,
+        "nan" if mean_abs_bias is None else f"{mean_abs_bias:.6f}",
+        "nan" if mean_coverage_80 is None else f"{mean_coverage_80:.6f}",
+        "nan" if mean_coverage_95 is None else f"{mean_coverage_95:.6f}",
         folds_completed,
         dataset_mean_wape,
     )
@@ -138,12 +145,84 @@ def _log_trial_pruned(
     )
 
 
-def _tuning_result_summary(tuning_result: dict[str, object]) -> tuple[float, dict[str, float], int]:
+def _log_trial_rejected(
+    *,
+    logger: logging.Logger,
+    trial_number: int,
+    tuning_trials: int,
+    stage_name: str,
+    error: Exception,
+) -> None:
+    logger.info(
+        "[HPO trial %s/%s | %s] rejected reason=%s",
+        trial_number + 1,
+        tuning_trials,
+        stage_name,
+        error,
+    )
+
+
+def _tuning_result_summary(
+    tuning_result: dict[str, object],
+) -> tuple[float, dict[str, float], int, float | None, float | None, float | None]:
     return (
         float(cast(Any, tuning_result["macro_mean_wape"])),
         cast(dict[str, float], tuning_result["dataset_mean_wape"]),
         int(cast(Any, tuning_result["folds_completed"])),
+        float(cast(Any, tuning_result["mean_abs_bias"]))
+        if tuning_result.get("mean_abs_bias") is not None
+        else None,
+        float(cast(Any, tuning_result["mean_coverage_80"]))
+        if tuning_result.get("mean_coverage_80") is not None
+        else None,
+        float(cast(Any, tuning_result["mean_coverage_95"]))
+        if tuning_result.get("mean_coverage_95") is not None
+        else None,
     )
+
+
+def _trial_duration_seconds(trial: optuna.trial.FrozenTrial) -> float:
+    if trial.duration is None:
+        return float("nan")
+    return float(trial.duration.total_seconds())
+
+
+def _trial_user_attr_float(
+    trial: optuna.trial.FrozenTrial, key: str
+) -> float:
+    value = trial.user_attrs.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float("nan")
+    return float(value)
+
+
+def _trial_epochs_completed(trial: optuna.trial.FrozenTrial) -> int:
+    return int(trial.user_attrs.get("epochs_completed", trial.params.get("max_epochs", 0)))
+
+
+def _tuning_report_row(trial: optuna.trial.FrozenTrial) -> dict[str, object]:
+    return {
+        "trial": trial.number,
+        "stage_name": str(trial.user_attrs.get("stage_name", "unknown")),
+        "trial_status": resolved_trial_status_name(trial),
+        "trial_duration_seconds": _trial_duration_seconds(trial),
+        "epochs_completed": _trial_epochs_completed(trial),
+        "folds_completed": int(trial.user_attrs.get("folds_completed", 0)),
+        "mean_wape": _trial_user_attr_float(trial, "mean_wape"),
+        "mean_abs_bias": _trial_user_attr_float(trial, "mean_abs_bias"),
+        "coverage_80": _trial_user_attr_float(trial, "mean_coverage_80"),
+        "coverage_95": _trial_user_attr_float(trial, "mean_coverage_95"),
+        "selected_learning_rate": _trial_user_attr_float(
+            trial, "selected_learning_rate"
+        ),
+        "failure_reason": str(trial.user_attrs.get("failure_reason", "")),
+        "baseline_wape_improvement_pct": float(trial.value)
+        if trial.value is not None
+        else float("nan"),
+        "fold_wape_scores": trial.user_attrs.get("fold_wape_scores", []),
+        "dataset_mean_wape": trial.user_attrs.get("dataset_mean_wape", {}),
+        **trial.params,
+    }
 
 
 def _guardrail_failure_reason(
@@ -192,10 +271,14 @@ def _build_trial_params(
     model_params: dict[str, object] | None,
     stage_policy: dict[str, dict[str, object]],
 ) -> dict[str, object]:
-    anchor_params = best_completed_trial_params(study) if stage_name == "stage_b" else None
+    anchor_params = (
+        best_completed_trial_params(study) if stage_name == "stage_b" else None
+    )
     stage_config = stage_policy[stage_name]
     runtime_profile_name = str(
-        (model_params or {}).get("runtime_profile", DEFAULT_TFT_MODEL_PARAMS["runtime_profile"])
+        (model_params or {}).get(
+            "runtime_profile", DEFAULT_TFT_MODEL_PARAMS["runtime_profile"]
+        )
     )
     return {
         **(model_params or {}),
@@ -205,7 +288,9 @@ def _build_trial_params(
             runtime_profile_name=runtime_profile_name,
             stage_name=stage_name,
             anchor_params=anchor_params,
-            epoch_range=cast(tuple[int, int], tuple(cast(list[int], stage_config["epoch_range"]))),
+            epoch_range=cast(
+                tuple[int, int], tuple(cast(list[int], stage_config["epoch_range"]))
+            ),
         ),
     }
 
@@ -219,13 +304,20 @@ def _log_optuna_progress(
     stage_name: str,
     improvement_pct: float,
 ) -> None:
-    if completed == 1 or completed % DEFAULT_TUNING_PROGRESS_LOG_EVERY == 0 or completed == tuning_trials:
+    if (
+        completed == 1
+        or completed % DEFAULT_TUNING_PROGRESS_LOG_EVERY == 0
+        or completed == tuning_trials
+    ):
         logger.info(
             "Final optimisation progress: trial=%s/%s stage=%s current_best_improvement_pct=%.6f",
             completed,
             tuning_trials,
             stage_name,
-            max((trial.value for trial in study.trials if trial.value is not None), default=improvement_pct),
+            max(
+                (trial.value for trial in study.trials if trial.value is not None),
+                default=improvement_pct,
+            ),
         )
 
 
@@ -247,7 +339,9 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             model_params=context.model_params,
             stage_policy=context.stage_policy,
         )
-        trial.set_user_attr("epochs_completed", int(cast(Any, trial_params["max_epochs"])))
+        trial.set_user_attr(
+            "epochs_completed", int(cast(Any, trial_params["max_epochs"]))
+        )
         _log_trial_start(
             logger=context.logger,
             trial_number=trial.number,
@@ -268,14 +362,33 @@ def build_objective(*, context: ObjectiveContext) -> Any:
                 target_transform=context.target_transform,
                 trial=trial,
             )
-            mean_wape, dataset_mean_wape, folds_completed = _tuning_result_summary(tuning_result)
-            improvement_pct = compute_wape_improvement_pct(context.baseline_wape, mean_wape)
+            (
+                mean_wape,
+                dataset_mean_wape,
+                folds_completed,
+                mean_abs_bias,
+                mean_coverage_80,
+                mean_coverage_95,
+            ) = _tuning_result_summary(tuning_result)
+            improvement_pct = compute_wape_improvement_pct(
+                context.baseline_wape, mean_wape
+            )
             trial.set_user_attr("mean_wape", mean_wape)
             trial.set_user_attr("dataset_mean_wape", dataset_mean_wape)
             trial.set_user_attr("mean_abs_bias", tuning_result.get("mean_abs_bias"))
-            trial.set_user_attr("mean_coverage_80", tuning_result.get("mean_coverage_80"))
-            trial.set_user_attr("mean_coverage_95", tuning_result.get("mean_coverage_95"))
-            trial.set_user_attr("fold_wape_scores", cast(Any, tuning_result["fold_results"]))
+            trial.set_user_attr(
+                "mean_coverage_80", tuning_result.get("mean_coverage_80")
+            )
+            trial.set_user_attr(
+                "mean_coverage_95", tuning_result.get("mean_coverage_95")
+            )
+            trial.set_user_attr(
+                "selected_learning_rate",
+                tuning_result.get("selected_learning_rate"),
+            )
+            trial.set_user_attr(
+                "fold_wape_scores", cast(Any, tuning_result["fold_results"])
+            )
             trial.set_user_attr("folds_completed", folds_completed)
             failure_reason = _guardrail_failure_reason(
                 tuning_result=tuning_result,
@@ -283,6 +396,7 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             )
             if failure_reason is not None:
                 trial.set_user_attr("failure_reason", failure_reason)
+                trial.set_user_attr("terminal_status", "REJECTED")
                 raise optuna.TrialPruned(f"Guardrail rejected trial: {failure_reason}")
             trial_counter["completed"] += 1
             _log_trial_completion(
@@ -294,6 +408,9 @@ def build_objective(*, context: ObjectiveContext) -> Any:
                 improvement_pct=improvement_pct,
                 folds_completed=folds_completed,
                 dataset_mean_wape=dataset_mean_wape,
+                mean_abs_bias=mean_abs_bias,
+                mean_coverage_80=mean_coverage_80,
+                mean_coverage_95=mean_coverage_95,
             )
             _log_optuna_progress(
                 study=context.study,
@@ -305,14 +422,27 @@ def build_objective(*, context: ObjectiveContext) -> Any:
             )
             return improvement_pct
         except optuna.TrialPruned as exc:
-            trial.set_user_attr("failure_reason", str(exc))
-            _log_trial_pruned(
-                logger=context.logger,
-                trial_number=trial.number,
-                tuning_trials=context.tuning_trials,
-                stage_name=stage_name,
-                error=exc,
+            if "failure_reason" not in trial.user_attrs:
+                trial.set_user_attr("failure_reason", str(exc))
+            trial_status = resolved_trial_status_name(
+                trial, default_status="PRUNED"
             )
+            if trial_status == "REJECTED":
+                _log_trial_rejected(
+                    logger=context.logger,
+                    trial_number=trial.number,
+                    tuning_trials=context.tuning_trials,
+                    stage_name=stage_name,
+                    error=exc,
+                )
+            else:
+                _log_trial_pruned(
+                    logger=context.logger,
+                    trial_number=trial.number,
+                    tuning_trials=context.tuning_trials,
+                    stage_name=stage_name,
+                    error=exc,
+                )
             raise
         except Exception as exc:
             trial.set_user_attr("failure_reason", str(exc))
@@ -329,28 +459,12 @@ def build_objective(*, context: ObjectiveContext) -> Any:
 
 
 def _build_tuning_report(study: optuna.study.Study) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    for trial in study.trials:
-        rows.append(
-            {
-                "trial": trial.number,
-                "stage_name": str(trial.user_attrs.get("stage_name", "unknown")),
-                "trial_status": trial.state.name,
-                "trial_duration_seconds": float(trial.duration.total_seconds()) if trial.duration else float("nan"),
-                "epochs_completed": int(trial.user_attrs.get("epochs_completed", trial.params.get("max_epochs", 0))),
-                "folds_completed": int(trial.user_attrs.get("folds_completed", 0)),
-                "mean_wape": float(trial.user_attrs["mean_wape"]) if "mean_wape" in trial.user_attrs else float("nan"),
-                "mean_abs_bias": float(trial.user_attrs["mean_abs_bias"]) if "mean_abs_bias" in trial.user_attrs else float("nan"),
-                "coverage_80": float(trial.user_attrs["mean_coverage_80"]) if "mean_coverage_80" in trial.user_attrs else float("nan"),
-                "coverage_95": float(trial.user_attrs["mean_coverage_95"]) if "mean_coverage_95" in trial.user_attrs else float("nan"),
-                "failure_reason": str(trial.user_attrs.get("failure_reason", "")),
-                "baseline_wape_improvement_pct": float(trial.value) if trial.value is not None else float("nan"),
-                "fold_wape_scores": trial.user_attrs.get("fold_wape_scores", []),
-                "dataset_mean_wape": trial.user_attrs.get("dataset_mean_wape", {}),
-                **trial.params,
-            }
-        )
-    return pd.DataFrame(rows).sort_values(by="baseline_wape_improvement_pct", ascending=False).reset_index(drop=True)
+    rows = [_tuning_report_row(trial) for trial in study.trials]
+    return (
+        pd.DataFrame(rows)
+        .sort_values(by="baseline_wape_improvement_pct", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def _finalize_best_params(
@@ -361,6 +475,10 @@ def _finalize_best_params(
     total_threads: int,
 ) -> dict[str, object]:
     best_params = {**(model_params or {}), **best_trial.params}
+    selected_learning_rate = best_trial.user_attrs.get("selected_learning_rate")
+    if isinstance(selected_learning_rate, (int, float)):
+        best_params["learning_rate"] = float(selected_learning_rate)
+        best_params["use_learning_rate_finder"] = False
     best_params["random_state"] = random_seed + best_trial.number + 1
     best_params["n_jobs"] = total_threads
     best_params.pop("max_parallel_fold_workers", None)
@@ -374,7 +492,9 @@ def _optuna_search_context(
     tuning_trials: int,
     model_params: dict[str, object] | None,
 ) -> tuple[int, str, dict[str, dict[str, object]], dict[str, object]]:
-    total_threads = int(cast(Any, (model_params or {}).get("n_jobs", os.cpu_count() or 1)))
+    total_threads = int(
+        cast(Any, (model_params or {}).get("n_jobs", os.cpu_count() or 1))
+    )
     stage_budget = str((model_params or {}).get("stage_budget", "standard"))
     execution_policy = resolve_fold_execution_plan(
         folds=folds,
@@ -382,7 +502,12 @@ def _optuna_search_context(
         total_threads=total_threads,
         logger=logger,
     )
-    return total_threads, stage_budget, resolve_stage_policy(tuning_trials, stage_budget=stage_budget), execution_policy
+    return (
+        total_threads,
+        stage_budget,
+        resolve_stage_policy(tuning_trials, stage_budget=stage_budget),
+        execution_policy,
+    )
 
 
 def _objective_for_search(*, context: ObjectiveContext) -> Any:
@@ -401,7 +526,12 @@ def _finalize_search_outputs(
     total_threads: int,
 ) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
     return (
-        _finalize_best_params(best_trial=best_trial, model_params=model_params, random_seed=random_seed, total_threads=total_threads),
+        _finalize_best_params(
+            best_trial=best_trial,
+            model_params=model_params,
+            random_seed=random_seed,
+            total_threads=total_threads,
+        ),
         _build_tuning_report(study),
         build_hpo_runtime_metadata(
             study=study,
@@ -416,11 +546,7 @@ def _finalize_search_outputs(
 def _best_observed_trial(
     study: optuna.study.Study,
 ) -> optuna.trial.FrozenTrial:
-    candidates = [
-        trial
-        for trial in study.trials
-        if "mean_wape" in trial.user_attrs
-    ]
+    candidates = [trial for trial in study.trials if "mean_wape" in trial.user_attrs]
     if not candidates:
         failure_reasons = [
             str(trial.user_attrs.get("failure_reason", trial.state.name))
@@ -442,15 +568,18 @@ def _resolve_best_trial(
     logger: logging.Logger,
 ) -> optuna.trial.FrozenTrial:
     completed_trials = [
-        trial for trial in study.trials
+        trial
+        for trial in study.trials
         if trial.state == optuna.trial.TrialState.COMPLETE and trial.value is not None
     ]
     if completed_trials:
         return study.best_trial
     best_trial = _best_observed_trial(study)
+    best_trial_status = resolved_trial_status_name(best_trial).lower()
     logger.info(
-        "Optuna search completed without guardrail-approved trials; using best scored pruned trial: "
+        "Optuna search completed without guardrail-approved trials; using best scored %s trial: "
         "trial=%s mean_wape=%.6f failure_reason=%s",
+        best_trial_status,
         best_trial.number,
         float(best_trial.user_attrs["mean_wape"]),
         str(best_trial.user_attrs.get("failure_reason", best_trial.state.name)),
@@ -459,18 +588,28 @@ def _resolve_best_trial(
 
 
 def run_optuna_search(
-    *, score_fn: ScoreFn, train_frame: pd.DataFrame, tuning_frame: pd.DataFrame, folds: list[dict[str, object]],
-    feature_cols: list[str], baseline_wape: float, target_contract: TargetContract, logger: logging.Logger,
+    *,
+    score_fn: ScoreFn,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    baseline_wape: float,
+    target_contract: TargetContract,
+    logger: logging.Logger,
     tuning_trials: int = DEFAULT_TUNING_TRIALS,
     random_seed: int = DEFAULT_TUNING_RANDOM_SEED,
-    model_params: dict[str, object] | None = None, target_transform: str,
+    model_params: dict[str, object] | None = None,
+    target_transform: str,
     prewarm_fn: PrewarmFn | None = None,
 ) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
-    total_threads, stage_budget, stage_policy, execution_policy = _optuna_search_context(
-        folds=folds,
-        logger=logger,
-        tuning_trials=tuning_trials,
-        model_params=model_params,
+    total_threads, stage_budget, stage_policy, execution_policy = (
+        _optuna_search_context(
+            folds=folds,
+            logger=logger,
+            tuning_trials=tuning_trials,
+            model_params=model_params,
+        )
     )
     if prewarm_fn is not None:
         prewarm_fn(

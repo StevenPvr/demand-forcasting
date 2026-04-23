@@ -23,22 +23,28 @@ def log_sampling_summary(
     logger: logging.Logger,
 ) -> None:
     logger.info(
-        "%s sampling summary: sampled_rows=%s original_rows=%s sample_fraction=%.4f strategy=%s sample_store_col=%s",
+        "%s sampling summary: sampled_rows=%s original_rows=%s requested_sample_fraction=%.4f effective_sample_fraction=%.4f strategy=%s sample_store_col=%s",
         label,
         metadata["sampled_rows"],
         metadata["original_rows"],
         metadata["sample_fraction"],
+        metadata.get("effective_sample_fraction", metadata["sample_fraction"]),
         metadata["sample_strategy"],
         metadata["sample_store_col"],
     )
     datasets = cast(dict[str, dict[str, object]], metadata["datasets"])
     for dataset_source, dataset_metadata in datasets.items():
         logger.info(
-            "%s retained rows: dataset=%s sampled_rows=%s original_rows=%s stores=%s unique_dates=%s strata=%s",
+            "%s retained rows: dataset=%s sampled_rows=%s original_rows=%s requested_sample_fraction=%.4f effective_sample_fraction=%.4f stores=%s unique_dates=%s strata=%s",
             label,
             dataset_source,
             dataset_metadata["sampled_rows"],
             dataset_metadata["original_rows"],
+            dataset_metadata.get("sample_fraction", metadata["sample_fraction"]),
+            dataset_metadata.get(
+                "effective_sample_fraction",
+                dataset_metadata.get("sample_fraction", metadata["sample_fraction"]),
+            ),
             dataset_metadata["store_count"],
             dataset_metadata["unique_dates"],
             dataset_metadata["strata_count"],
