@@ -18,7 +18,7 @@ from praedixa.demand_forecast.backends.tft.feature_mapping import select_explici
 from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
 from praedixa.demand_forecast.backends.tft.model_utils import select_tft_feature_columns
 from praedixa.demand_forecast.contracts.targets import (
-    DEFAULT_VARIATION_TARGET_COL,
+    DEFAULT_ABSOLUTE_TARGET_COL,
     TargetContract,
     build_target_contract_metadata,
     ensure_learning_target_column,
@@ -750,7 +750,7 @@ def build_training_bundle(
     smoke_min_train_rows: int = DEFAULT_SMOKE_MIN_TRAIN_ROWS,
     smoke_min_tuning_rows: int = DEFAULT_SMOKE_MIN_TUNING_ROWS,
     smoke_min_valid_rows: int = DEFAULT_SMOKE_MIN_VALID_ROWS,
-    target_col: str = DEFAULT_VARIATION_TARGET_COL,
+    target_col: str = DEFAULT_ABSOLUTE_TARGET_COL,
 ) -> dict[str, Path]:
     resolved_output_dir = Path(output_dir)
     resolved_output_dir.mkdir(parents=True, exist_ok=True)

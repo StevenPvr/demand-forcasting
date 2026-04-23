@@ -6,9 +6,10 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_ABSOLUTE_TARGET_COL = "target_demand_qty_d_plus_1"
 DEFAULT_VARIATION_TARGET_COL = "target_delta_log_wow_d_plus_1"
 DEFAULT_ABSOLUTE_TARGET_CANDIDATES = (
-    "target_demand_qty_d_plus_1",
+    DEFAULT_ABSOLUTE_TARGET_COL,
     "target",
     "sale_amount",
 )
@@ -72,20 +73,11 @@ def _learning_target_column(
     return absolute_target_col
 
 
-def _target_transform_mode(
-    train_frame: pd.DataFrame,
-    *,
-    learning_target_col: str,
-) -> str:
-    train_min = float(train_frame[learning_target_col].min())
-    return "log1p" if train_min >= 0.0 else "identity"
-
-
 def resolve_target_contract(
     train_frame: pd.DataFrame,
     tuning_frame: pd.DataFrame,
     *,
-    requested_target_col: str = DEFAULT_VARIATION_TARGET_COL,
+    requested_target_col: str = DEFAULT_ABSOLUTE_TARGET_COL,
 ) -> TargetContract:
     """Resolve the shared learning/scoring target contract across two frames."""
 
@@ -95,28 +87,26 @@ def resolve_target_contract(
         tuning_frame,
         DEFAULT_WOW_ANCHOR_CANDIDATES,
     )
-    if requested_target_col == DEFAULT_VARIATION_TARGET_COL and wow_anchor_col is not None:
-        return TargetContract(
-            learning_target_col=DEFAULT_VARIATION_TARGET_COL,
-            absolute_target_col=absolute_target_col,
-            target_mode="delta_log_wow",
-            reconstruction_anchor_col=wow_anchor_col,
-        )
-
     learning_target_col = _learning_target_column(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
         requested_target_col=requested_target_col,
         absolute_target_col=absolute_target_col,
     )
-    target_mode = _target_transform_mode(
-        train_frame,
-        learning_target_col=learning_target_col,
-    )
+    if (
+        learning_target_col == DEFAULT_VARIATION_TARGET_COL
+        and wow_anchor_col is not None
+    ):
+        return TargetContract(
+            learning_target_col=DEFAULT_VARIATION_TARGET_COL,
+            absolute_target_col=absolute_target_col,
+            target_mode="delta_log_wow",
+            reconstruction_anchor_col=wow_anchor_col,
+        )
     return TargetContract(
-        learning_target_col=learning_target_col,
+        learning_target_col=absolute_target_col,
         absolute_target_col=absolute_target_col,
-        target_mode=target_mode,
+        target_mode="identity",
         reconstruction_anchor_col=None,
     )
 
@@ -125,27 +115,13 @@ def ensure_learning_target_column(
     frame: pd.DataFrame,
     target_contract: TargetContract,
 ) -> pd.DataFrame:
-    """Return a frame with the learning target materialized when it can be derived safely."""
+    """Return a frame with the resolved learning target column available."""
 
     if target_contract.learning_target_col in frame.columns:
         return frame
-    if target_contract.target_mode != "delta_log_wow":
-        raise ValueError(
-            f"Frame is missing learning target column `{target_contract.learning_target_col}`."
-        )
-    anchor_col = target_contract.reconstruction_anchor_col
-    if anchor_col is None or anchor_col not in frame.columns:
-        raise ValueError("WoW delta target requires a reconstruction anchor column.")
-
-    derived = frame.copy()
-    absolute_target = derived[target_contract.absolute_target_col].astype(float)
-    anchor = derived[anchor_col].astype(float)
-    valid_mask = absolute_target.notna() & anchor.notna() & (absolute_target >= 0.0) & (anchor >= 0.0)
-    derived[target_contract.learning_target_col] = np.nan
-    derived.loc[valid_mask, target_contract.learning_target_col] = (
-        np.log1p(absolute_target.loc[valid_mask]) - np.log1p(anchor.loc[valid_mask])
+    raise ValueError(
+        f"Frame is missing learning target column `{target_contract.learning_target_col}`."
     )
-    return derived
 
 
 def reconstruct_absolute_predictions(

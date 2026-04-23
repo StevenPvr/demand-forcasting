@@ -174,19 +174,7 @@ def _build_shared_tuning_context(
     tuning_projected = tuning_frame.loc[
         :, [*required_frame_cols, learning_target_col]
     ].copy()
-    if target_transform == "log1p":
-        if (train_projected[learning_target_col] < 0).any() or (
-            tuning_projected[learning_target_col] < 0
-        ).any():
-            raise ValueError(
-                "Negative targets are incompatible with log1p target transformation."
-            )
-        train_projected[learning_target_col] = np.log1p(
-            train_projected[learning_target_col].astype(float)
-        )
-        tuning_projected[learning_target_col] = np.log1p(
-            tuning_projected[learning_target_col].astype(float)
-        )
+    _ = target_transform
     train_dataset_sources = (
         train_frame[DEFAULT_DATASET_SOURCE_COL]
         .reset_index(drop=True)

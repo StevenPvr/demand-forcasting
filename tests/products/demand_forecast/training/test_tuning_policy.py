@@ -52,20 +52,20 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertEqual(batch_size_choices, DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES)
         self.assertEqual(batch_size_choices, DEFAULT_TUNING_BATCH_SIZE_CHOICES)
 
-    def test_stage_a_gpu_sampling_samples_learning_rate_for_large_batch(
+    def test_stage_a_gpu_sampling_samples_learning_rate_for_standard_batch(
         self,
     ) -> None:
         trial = optuna.trial.FixedTrial(
             {
                 "max_epochs": 6,
-                "batch_size": 2048,
+                "batch_size": 64,
                 "max_encoder_length": 14,
                 "gradient_clip_val": 0.1,
                 "hidden_size": 32,
                 "hidden_continuous_size": 16,
                 "attention_head_size": 2,
                 "lstm_layers": 2,
-                "learning_rate": 0.01,
+                "learning_rate": 0.0015,
                 "dropout": 0.15,
                 "weight_decay": 1e-4,
             }
@@ -78,10 +78,10 @@ class TuningPolicyTests(unittest.TestCase):
             stage_name="stage_a",
         )
 
-        self.assertEqual(sampled["batch_size"], 2048)
+        self.assertEqual(sampled["batch_size"], 64)
         self.assertEqual(sampled["max_epochs"], 6)
         self.assertFalse(bool(sampled["use_learning_rate_finder"]))
-        self.assertEqual(float(cast(Any, sampled["learning_rate"])), 0.01)
+        self.assertEqual(float(cast(Any, sampled["learning_rate"])), 0.0015)
 
     def test_stage_policy_uses_real_training_budgets_for_standard_runs(self) -> None:
         stage_policy = resolve_stage_policy(4, stage_budget="standard")
@@ -101,14 +101,14 @@ class TuningPolicyTests(unittest.TestCase):
         trial = optuna.trial.FixedTrial(
             {
                 "max_epochs": 20,
-                "batch_size": 4096,
+                "batch_size": 128,
                 "max_encoder_length": 28,
                 "gradient_clip_val": 0.1,
                 "hidden_size": 64,
                 "hidden_continuous_size": 32,
                 "attention_head_size": 4,
                 "lstm_layers": 2,
-                "learning_rate": 0.02,
+                "learning_rate": 0.002,
                 "dropout": 0.18,
                 "weight_decay": 1e-4,
             }
@@ -123,13 +123,13 @@ class TuningPolicyTests(unittest.TestCase):
         )
 
         self.assertFalse(bool(sampled["use_learning_rate_finder"]))
-        self.assertEqual(sampled["batch_size"], 4096)
-        self.assertEqual(float(cast(Any, sampled["learning_rate"])), 0.02)
+        self.assertEqual(sampled["batch_size"], 128)
+        self.assertEqual(float(cast(Any, sampled["learning_rate"])), 0.002)
 
-    def test_batch_scaled_learning_rate_bounds_expand_for_large_batches(self) -> None:
+    def test_batch_scaled_learning_rate_bounds_match_reference_batch(self) -> None:
         low, high = cast(
             Any, tuning_policy_module
-        )._batch_scaled_learning_rate_bounds(4096)
+        )._batch_scaled_learning_rate_bounds(64)
 
         expected_scale = DEFAULT_TUNING_MAX_BATCH_SCALED_LEARNING_RATE_SCALE
         self.assertEqual(low, DEFAULT_TUNING_LEARNING_RATE_LOW * expected_scale)

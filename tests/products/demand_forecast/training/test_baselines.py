@@ -53,6 +53,37 @@ class OptimisationBaselinesTests(unittest.TestCase):
             )
         )
 
+    def test_evaluate_statistical_baselines_macro_derives_seasonal_naive_lag_7_without_python_fallback(
+        self,
+    ) -> None:
+        tuning_frame = pd.DataFrame(
+            {
+                "dataset_source": ["a"] * 14,
+                "series_id": ["store_1__sku_1"] * 14,
+                "dt": pd.date_range("2024-06-01", periods=14, freq="D"),
+                "target": np.arange(10.0, 24.0, dtype=float),
+                "lag_1": np.arange(9.0, 23.0, dtype=float),
+                "rolling_mean_7": np.arange(8.0, 22.0, dtype=float),
+                "rolling_mean_28": np.arange(7.0, 21.0, dtype=float),
+                "same_dow_mean_4w": np.arange(6.0, 20.0, dtype=float),
+            }
+        )
+
+        folds = build_tuning_walk_forward_folds_by_dataset(tuning_frame, n_folds=2)
+        baseline_rows, _ = evaluate_statistical_baselines_macro(
+            tuning_frame,
+            folds,
+            absolute_target_col="target",
+        )
+
+        seasonal_row = next(
+            row
+            for row in baseline_rows
+            if row["baseline_name"] == "seasonal_naive_lag_7"
+        )
+        self.assertTrue(
+            bool(np.isfinite(float(cast(Any, seasonal_row["mean_wape"])))))
+
 
 if __name__ == "__main__":
     unittest.main()

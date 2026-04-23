@@ -11,6 +11,11 @@ import pandas as pd
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
+PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
+for path in (PLATFORM_SRC, PRODUCT_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.evaluation.reference import build_bakery_reference_feature_frame  # noqa: E402
 
@@ -122,7 +127,7 @@ class EvaluationReferenceTests(unittest.TestCase):
 
         self.assertEqual(len(feature_frame), 2)
         self.assertIn("target_same_dow_mean_4w", feature_frame.columns)
-        self.assertIn("target_delta_log_wow_d_plus_1", feature_frame.columns)
+        self.assertNotIn("target_delta_log_wow_d_plus_1", feature_frame.columns)
 
 
 if __name__ == "__main__":

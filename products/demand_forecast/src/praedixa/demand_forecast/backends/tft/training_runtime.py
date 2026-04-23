@@ -17,20 +17,27 @@ LOGGER = logging.getLogger(__name__)
 _CPU_INTEROP_THREADS_LOCK = Lock()
 _cpu_interop_threads_configured = False
 _VISIBLE_VALIDATION_METRIC_ORDER: tuple[str, ...] = (
+    "business_val_wape",
+    "business_val_abs_bias",
     "val_wape",
     "val_loss",
     "train_loss_epoch",
 )
 _VISIBLE_VALIDATION_METRIC_LABELS: dict[str, str] = {
-    "val_wape": "model_target_val_wape",
-    "val_loss": "model_target_val_quantile_loss",
-    "train_loss_epoch": "model_target_train_quantile_loss",
+    "business_val_wape": "last_business_val_wape",
+    "business_val_abs_bias": "last_business_val_abs_bias",
+    "val_wape": "last_model_space_val_wape",
+    "val_loss": "last_model_space_val_quantile_loss",
+    "train_loss_epoch": "last_model_space_train_quantile_loss",
 }
+_LIVE_PROGRESS_METRIC_CANDIDATES: tuple[str, ...] = ("train_loss_step", "loss")
+_LIVE_PROGRESS_METRIC_LABEL = "live_model_space_train_quantile_loss"
 _HIDDEN_PROGRESS_BAR_METRICS: tuple[str, ...] = (
     "val_wape",
     "val_loss",
     "train_loss_epoch",
     "train_loss_step",
+    "loss",
 )
 
 
@@ -165,10 +172,19 @@ def _visible_validation_metrics(metrics: Mapping[str, object]) -> dict[str, str]
             continue
         formatted[_VISIBLE_VALIDATION_METRIC_LABELS[metric_name]] = (
             f"{metric_value:.6f}"
-            if metric_name == "val_wape"
+            if metric_name in {"business_val_wape", "business_val_abs_bias", "val_wape"}
             else f"{metric_value:.6g}"
         )
     return formatted
+
+
+def _live_progress_metrics(metrics: Mapping[str, object]) -> dict[str, str]:
+    for metric_name in _LIVE_PROGRESS_METRIC_CANDIDATES:
+        metric_value = _metric_float_value(metrics.get(metric_name))
+        if metric_value is None:
+            continue
+        return {_LIVE_PROGRESS_METRIC_LABEL: f"{metric_value:.6g}"}
+    return {}
 
 
 def _build_loggers(
@@ -214,7 +230,7 @@ def _validation_metrics_logging_callback(imports: dict[str, Any]) -> Any:
                 for metric_name, metric_value in visible_metrics.items()
             )
             LOGGER.info(
-                "TFT validation metrics (model-target space): epoch=%s %s",
+                "TFT validation metrics: epoch=%s %s",
                 int(getattr(trainer, "current_epoch", 0)),
                 metrics_summary,
             )
@@ -232,13 +248,16 @@ def _progress_bar_callback(
     class _VisibleMetricsProgressBar(progress_bar_base):
         def get_metrics(self, trainer: Any, model: Any) -> dict[str, object]:
             progress_bar_super: Any = super()
-            metrics = dict(
+            raw_metrics = dict(
                 cast(
                     Mapping[str, object], progress_bar_super.get_metrics(trainer, model)
                 )
             )
+            metrics = dict(raw_metrics)
             for hidden_metric in _HIDDEN_PROGRESS_BAR_METRICS:
                 metrics.pop(hidden_metric, None)
+            for metric_name, metric_value in _live_progress_metrics(raw_metrics).items():
+                metrics[metric_name] = metric_value
             for metric_name, metric_value in _visible_validation_metrics(
                 cast(Mapping[str, object], getattr(trainer, "callback_metrics", {}))
             ).items():
@@ -504,9 +523,10 @@ def build_trainer(
     *,
     checkpoint_dir: str | None,
     has_validation: bool,
+    extra_callbacks: list[Any] | None = None,
 ) -> tuple[Any, Any | None, dict[str, str | None]]:
     loggers, logger_paths = _build_loggers(imports, resolved_params)
-    callbacks: list[Any] = []
+    callbacks: list[Any] = list(extra_callbacks or [])
     if bool(cast(Any, resolved_params.get("enable_lr_monitor", True))):
         callbacks.append(
             imports["LearningRateMonitor"](
@@ -578,6 +598,7 @@ def _fit_compiled_model(
     resolved_params: dict[str, object],
     train_loader: Any,
     valid_loader: Any,
+    extra_callbacks: list[Any] | None = None,
 ) -> tuple[Any, int, dict[str, str | None]]:
     with TemporaryDirectory(prefix="tft-backend-") as checkpoint_dir:
         trainer, checkpoint_callback, logger_paths = build_trainer(
@@ -585,6 +606,7 @@ def _fit_compiled_model(
             resolved_params,
             checkpoint_dir=checkpoint_dir,
             has_validation=valid_loader is not None,
+            extra_callbacks=extra_callbacks,
         )
         trainer.fit(compiled_model, train_loader, valid_loader)
         final_model = unwrap_compiled_model(compiled_model)
@@ -640,6 +662,7 @@ def fit_trainer_model(
     resolved_params: dict[str, object],
     train_loader: Any,
     valid_loader: Any,
+    extra_callbacks: list[Any] | None = None,
 ) -> tuple[Any, int, dict[str, float | int | str | None]]:
     torch = imports["torch"]
     compiled_model, compile_applied = maybe_compile_model(
@@ -654,6 +677,7 @@ def fit_trainer_model(
         resolved_params=resolved_params,
         train_loader=train_loader,
         valid_loader=valid_loader,
+        extra_callbacks=extra_callbacks,
     )
     fit_duration_seconds = max(0.0, time.perf_counter() - fit_start)
     rows_seen = len(train_loader.dataset) * max(1, best_iteration + 1)

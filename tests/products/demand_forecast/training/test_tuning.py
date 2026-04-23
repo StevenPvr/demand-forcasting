@@ -156,7 +156,7 @@ class TuningPolicyTests(unittest.TestCase):
                 "max_encoder_length": 14,
             },
             total_threads=8,
-            target_transform="log1p",
+            target_transform="identity",
             hpo_mode=True,
         )
 
@@ -689,7 +689,7 @@ class TuningPolicyTests(unittest.TestCase):
                     logger=__import__("logging").getLogger(__name__),
                 )
 
-    def test_fit_and_score_reconstructs_wow_quantiles_from_shared_anchor(self) -> None:
+    def test_fit_and_score_uses_absolute_target_quantiles_without_reconstruction(self) -> None:
         train_frame = pd.DataFrame(
             {
                 "series_id": ["a", "a", "a"],
@@ -698,13 +698,9 @@ class TuningPolicyTests(unittest.TestCase):
                 "dataset_source": ["source_a"] * 3,
                 "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
                 "rolling_mean_7": [1.0, 2.0, 3.0],
-                "target_lag_7": [9.0, 10.0, 11.0],
                 "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0],
             }
         )
-        train_frame["target_delta_log_wow_d_plus_1"] = np.log1p(
-            train_frame["target_demand_qty_d_plus_1"].astype(float)
-        ) - np.log1p(train_frame["target_lag_7"].astype(float))
         tuning_frame = pd.DataFrame(
             {
                 "series_id": ["a", "a", "a", "a"],
@@ -713,16 +709,16 @@ class TuningPolicyTests(unittest.TestCase):
                 "dataset_source": ["source_a"] * 4,
                 "dt": pd.date_range("2024-01-04", periods=4, freq="D"),
                 "rolling_mean_7": [4.0, 5.0, 6.0, 7.0],
-                "target_lag_7": [12.0, 13.0, 14.0, 15.0],
                 "target_demand_qty_d_plus_1": [13.0, 14.0, 15.0, 16.0],
             }
         )
-        tuning_frame["target_delta_log_wow_d_plus_1"] = np.log1p(
-            tuning_frame["target_demand_qty_d_plus_1"].astype(float)
-        ) - np.log1p(tuning_frame["target_lag_7"].astype(float))
-        target_contract = resolve_target_contract(train_frame, tuning_frame)
+        target_contract = resolve_target_contract(
+            train_frame,
+            tuning_frame,
+            requested_target_col="target_demand_qty_d_plus_1",
+        )
         valid_raw_predictions = tuning_frame.loc[
-            [2, 3], "target_delta_log_wow_d_plus_1"
+            [2, 3], "target_demand_qty_d_plus_1"
         ].to_numpy(dtype=float)
 
         with (

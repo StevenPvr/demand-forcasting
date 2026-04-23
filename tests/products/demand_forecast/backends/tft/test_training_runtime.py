@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import sys
 from typing import Any, cast
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = next(
@@ -404,7 +405,7 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
         self.assertIn("_FakeModuleList", safe_global_names)
         self.assertIn("_FakeWAPEMetric", safe_global_names)
 
-    def test_visible_validation_metrics_formats_model_target_metrics_for_logs(
+    def test_visible_validation_metrics_formats_last_validation_metrics_for_logs(
         self,
     ) -> None:
         class _FakeScalar:
@@ -418,6 +419,8 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
             Any, training_runtime_module
         )._visible_validation_metrics(
             {
+                "business_val_wape": _FakeScalar(0.083333333),
+                "business_val_abs_bias": _FakeScalar(2.0),
                 "val_wape": _FakeScalar(0.123456789),
                 "val_loss": _FakeScalar(0.212345678),
                 "train_loss_epoch": _FakeScalar(0.000000865),
@@ -428,11 +431,78 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(
             visible_metrics,
             {
-                "model_target_val_wape": "0.123457",
-                "model_target_val_quantile_loss": "0.212346",
-                "model_target_train_quantile_loss": "8.65e-07",
+                "last_business_val_wape": "0.083333",
+                "last_business_val_abs_bias": "2.000000",
+                "last_model_space_val_wape": "0.123457",
+                "last_model_space_val_quantile_loss": "0.212346",
+                "last_model_space_train_quantile_loss": "8.65e-07",
             },
         )
+
+    def test_live_progress_metrics_formats_batch_level_train_loss(self) -> None:
+        class _FakeScalar:
+            def __init__(self, value: float) -> None:
+                self._value = value
+
+            def item(self) -> float:
+                return self._value
+
+        live_metrics = cast(Any, training_runtime_module)._live_progress_metrics(
+            {"train_loss_step": _FakeScalar(0.004321)}
+        )
+
+        self.assertEqual(
+            live_metrics,
+            {"live_model_space_train_quantile_loss": "0.004321"},
+        )
+
+    def test_fit_trainer_model_forwards_extra_callbacks_to_compiled_fit(self) -> None:
+        forwarded_callbacks: list[list[object] | None] = []
+
+        def _fake_fit_compiled_model(
+            imports: dict[str, Any],
+            *,
+            compiled_model: object,
+            resolved_params: dict[str, object],
+            train_loader: object,
+            valid_loader: object,
+            extra_callbacks: list[object] | None = None,
+        ) -> tuple[object, int, dict[str, str | None]]:
+            _ = imports
+            _ = compiled_model
+            _ = resolved_params
+            _ = train_loader
+            _ = valid_loader
+            forwarded_callbacks.append(extra_callbacks)
+            return object(), 1, {"csv_log_dir": None, "tensorboard_log_dir": None}
+
+        extra_callbacks: list[object] = [object()]
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(
+                is_available=lambda: False,
+                reset_peak_memory_stats=lambda: None,
+                max_memory_allocated=lambda: 0,
+            )
+        )
+
+        with patch.object(
+            training_runtime_module,
+            "_fit_compiled_model",
+            side_effect=_fake_fit_compiled_model,
+        ):
+            _ = training_runtime_module.fit_trainer_model(
+                {"torch": fake_torch},
+                model=object(),
+                resolved_params={
+                    "compile_mode": "off",
+                    "num_workers": 0,
+                },
+                train_loader=SimpleNamespace(dataset=[1, 2, 3]),
+                valid_loader=None,
+                extra_callbacks=extra_callbacks,
+            )
+
+        self.assertEqual(forwarded_callbacks, [extra_callbacks])
 
     def test_build_trainer_can_disable_batch_level_overhead_for_hpo(self) -> None:
         trainer_calls: list[dict[str, object]] = []

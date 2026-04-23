@@ -14,6 +14,7 @@ from praedixa.platform.utils.memory import downcast_pandas_frame
 REFERENCE_DATE_COL = "date"
 REFERENCE_PRODUCT_COL = "product"
 REFERENCE_TARGET_COL = "quantity"
+_FLOAT_COMPARISON_EPSILON = 1e-8
 
 
 def load_reference_split(csv_path: str | Path) -> pd.DataFrame:
@@ -46,7 +47,7 @@ def rmse_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -
     max_abs_diff = float(np.max(np.abs(diff)))
     if not np.isfinite(max_abs_diff):
         return float(max_abs_diff)
-    if max_abs_diff == 0.0:
+    if abs(max_abs_diff) <= _FLOAT_COMPARISON_EPSILON:
         return 0.0
     scaled_diff = diff / max_abs_diff
     return float(max_abs_diff * np.sqrt(np.mean(np.square(scaled_diff))))
@@ -76,7 +77,7 @@ def mase_score(
         return math.inf
     naive_errors = np.abs(insample_values[resolved_period:] - insample_values[:-resolved_period])
     denominator = float(np.mean(naive_errors))
-    if denominator == 0.0:
+    if abs(denominator) <= _FLOAT_COMPARISON_EPSILON:
         return math.inf
     return mae_score(y_true, y_pred) / denominator
 

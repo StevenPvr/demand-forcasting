@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
@@ -13,6 +14,12 @@ from praedixa.platform.runtime.warehouse import WarehouseRuntimeConfig  # noqa: 
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_default_dbt_threads_uses_all_detected_cores(self) -> None:
+        with mock.patch("praedixa.platform.runtime.warehouse.os.cpu_count", return_value=12):
+            config = WarehouseRuntimeConfig()
+
+        self.assertEqual(config.dbt_threads, 12)
+
     def test_to_env_exposes_local_defaults(self) -> None:
         config = WarehouseRuntimeConfig()
 

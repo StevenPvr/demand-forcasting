@@ -125,8 +125,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 192)
         self.assertEqual(config.stage_budget, "full")
-        self.assertEqual(config.train_sample_fraction, 0.10)
-        self.assertEqual(config.tuning_sample_fraction, 0.10)
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
 
     def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
         with (
@@ -149,8 +149,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 100)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.10)
-        self.assertEqual(config.tuning_sample_fraction, 0.10)
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
 
     def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
         from praedixa.demand_forecast.backends.tft.backend import (

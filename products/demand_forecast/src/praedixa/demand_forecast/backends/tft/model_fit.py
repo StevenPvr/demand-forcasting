@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 import numpy as np
@@ -14,14 +15,22 @@ from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_r
 from praedixa.demand_forecast.backends.tft.dataloader_profile import (
     build_tft_dataloader_kwargs,
 )
-from praedixa.demand_forecast.backends.tft.frame_utils import build_combined_frame
 from praedixa.demand_forecast.backends.tft.frame_utils import (
+    GROUP_COL,
+    PREDICTION_ROW_ID_COL,
+    TIME_IDX_COL,
     attach_group_and_time_columns,
+    build_combined_frame,
 )
 from praedixa.demand_forecast.backends.tft.model_common import (
     lazy_import_tft_dependencies,
     resolve_model_params,
     suppress_tft_runtime_noise,
+)
+from praedixa.demand_forecast.backends.tft.model_predict import predict_with_tft_model
+from praedixa.demand_forecast.contracts.targets import (
+    reconstruct_absolute_predictions,
+    resolve_target_contract,
 )
 from praedixa.demand_forecast.backends.tft.training_dataset import (
     TrainingDatasetArtifacts,
@@ -32,6 +41,16 @@ from praedixa.demand_forecast.backends.tft.training_runtime import (
     fit_trainer_model,
     seed_tft_runtime,
 )
+
+LOGGER = logging.getLogger(__name__)
+_FLOAT_COMPARISON_EPSILON = 1e-8
+
+
+def _compute_wape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    denominator = float(np.abs(y_true).sum())
+    if abs(denominator) <= _FLOAT_COMPARISON_EPSILON:
+        return float("inf")
+    return float(np.abs(y_true - y_pred).sum() / denominator)
 
 
 def _build_model(
@@ -166,6 +185,7 @@ def _fit_resolved_model(
     imports: dict[str, Any],
     dataset_artifacts: TrainingDatasetArtifacts,
     resolved_params: dict[str, object],
+    extra_callbacks: list[Any] | None = None,
 ) -> tuple[Any, Any, int, dict[str, float | int | str | None]]:
     train_loader, valid_loader = _training_loaders(
         training_dataset=dataset_artifacts.training_dataset,
@@ -180,8 +200,147 @@ def _fit_resolved_model(
         resolved_params=resolved_params,
         train_loader=train_loader,
         valid_loader=valid_loader,
+        extra_callbacks=extra_callbacks,
     )
     return fitted_model, valid_loader, best_iteration, runtime_metrics
+
+
+def _temporary_fitted_model(
+    *,
+    model: Any,
+    dataset_artifacts: TrainingDatasetArtifacts,
+    target_col: str,
+    resolved_params: dict[str, object],
+) -> FittedTFTModel:
+    lightweight_inference_params = dict(resolved_params)
+    lightweight_inference_params.update(
+        {
+            "num_workers": 0,
+            "persistent_workers": False,
+            "prefetch_factor": None,
+            "pin_memory": False,
+        }
+    )
+    return FittedTFTModel(
+        model=model,
+        dataset_parameters=cast(
+            dict[str, Any], dataset_artifacts.training_dataset.get_parameters()
+        ),
+        history_frame=dataset_artifacts.training_slice,
+        group_col=GROUP_COL,
+        time_idx_col=TIME_IDX_COL,
+        target_col=target_col,
+        prediction_row_id_col=PREDICTION_ROW_ID_COL,
+        batch_size=int(cast(Any, resolved_params["batch_size"])),
+        quantiles=list(cast(Any, resolved_params["quantiles"])),
+        best_iteration=0,
+        model_hyperparameters=lightweight_inference_params,
+        feature_scalers=dataset_artifacts.feature_scalers,
+        target_scaler=None,
+        runtime_profile=str(
+            cast(Any, resolved_params.get("runtime_profile", "local_cpu"))
+        ),
+        system_info={},
+        runtime_metrics={},
+        git_sha=None,
+        bundle_manifest=None,
+        data_hashes={},
+        normalization_strategy=dataset_artifacts.normalization_strategy,
+        interpretability_payload=None,
+        artifact_bundle_version=2,
+    )
+
+
+def _business_validation_metrics_payload(
+    *,
+    valid_frame: pd.DataFrame,
+    raw_predictions: np.ndarray,
+    target_col: str,
+    train_frame: pd.DataFrame,
+) -> dict[str, float]:
+    target_contract = resolve_target_contract(
+        train_frame,
+        valid_frame,
+        requested_target_col=target_col,
+    )
+    absolute_predictions = reconstruct_absolute_predictions(
+        raw_predictions,
+        valid_frame,
+        target_contract,
+    )
+    absolute_target = valid_frame[target_contract.absolute_target_col].to_numpy(
+        dtype=float,
+        copy=False,
+    )
+    valid_mask = np.isfinite(absolute_target) & np.isfinite(absolute_predictions)
+    if not valid_mask.any():
+        return {}
+    filtered_target = absolute_target[valid_mask]
+    filtered_predictions = absolute_predictions[valid_mask]
+    return {
+        "business_val_wape": _compute_wape(filtered_target, filtered_predictions),
+        "business_val_abs_bias": float(
+            np.mean(np.abs(filtered_predictions - filtered_target))
+        ),
+    }
+
+
+def _business_validation_logging_callback(
+    imports: dict[str, Any],
+    *,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame | None,
+    feature_cols: list[str],
+    target_col: str,
+    dataset_artifacts: TrainingDatasetArtifacts,
+    resolved_params: dict[str, object],
+) -> Any | None:
+    if valid_frame is None or valid_frame.empty:
+        return None
+    callback_base: type[Any] = cast(type[Any], imports["Callback"])
+
+    def _update_trainer_callback_metrics(
+        trainer: Any, metrics_payload: dict[str, float]
+    ) -> None:
+        callback_metrics = getattr(trainer, "callback_metrics", None)
+        if callback_metrics is None:
+            return
+        try:
+            for metric_name, metric_value in metrics_payload.items():
+                callback_metrics[metric_name] = metric_value
+        except (TypeError, KeyError, AttributeError):
+            return
+
+    class _BusinessValidationLoggingCallback(callback_base):
+        def on_validation_epoch_end(self, trainer: Any, pl_module: Any) -> None:
+            transient_model = _temporary_fitted_model(
+                model=pl_module,
+                dataset_artifacts=dataset_artifacts,
+                target_col=target_col,
+                resolved_params=resolved_params,
+            )
+            raw_predictions = predict_with_tft_model(
+                transient_model,
+                valid_frame,
+                feature_cols,
+            )
+            business_metrics = _business_validation_metrics_payload(
+                valid_frame=valid_frame,
+                raw_predictions=raw_predictions,
+                target_col=target_col,
+                train_frame=train_frame,
+            )
+            if not business_metrics:
+                return
+            _update_trainer_callback_metrics(trainer, business_metrics)
+            LOGGER.info(
+                "TFT business validation metrics: epoch=%s business_val_wape=%.6f business_val_abs_bias=%.6f",
+                int(getattr(trainer, "current_epoch", 0)),
+                float(business_metrics["business_val_wape"]),
+                float(business_metrics["business_val_abs_bias"]),
+            )
+
+    return _BusinessValidationLoggingCallback()
 
 
 def calibrate_tft_learning_rate(
@@ -245,10 +404,31 @@ def fit_tft_model(
             train_weights=train_weights,
             valid_weights=valid_weights,
         )
+        business_metrics_callback = None
+        if bool(
+            cast(
+                Any,
+                resolved_params.get("enable_validation_metric_logging", True),
+            )
+        ):
+            business_metrics_callback = _business_validation_logging_callback(
+                imports,
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                feature_cols=feature_cols,
+                target_col=target_col,
+                dataset_artifacts=resolved_dataset_artifacts,
+                resolved_params=resolved_params,
+            )
         model, valid_loader, best_iteration, runtime_metrics = _fit_resolved_model(
             imports=imports,
             dataset_artifacts=resolved_dataset_artifacts,
             resolved_params=resolved_params,
+            extra_callbacks=(
+                []
+                if business_metrics_callback is None
+                else [business_metrics_callback]
+            ),
         )
         interpretability_payload = extract_interpretability_payload(
             model=model,

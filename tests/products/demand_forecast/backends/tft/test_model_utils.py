@@ -1,8 +1,11 @@
 from pathlib import Path
+from contextlib import nullcontext
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
 from typing import Any, cast
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -27,12 +30,96 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (  # noqa: E402
     attach_group_and_time_columns,
     resolve_layout,
 )
+import praedixa.demand_forecast.backends.tft.model_fit as model_fit_module  # noqa: E402
 
 
 class TFTModelUtilsTests(unittest.TestCase):
     def test_default_tft_model_params_enable_native_progress_bar(self) -> None:
         self.assertTrue(bool(DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
         self.assertEqual(int(cast(Any, DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"])), 1)
+
+    def test_business_validation_metrics_payload_scores_absolute_target_directly(
+        self,
+    ) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "target_demand_qty_d_plus_1": [10.0, 11.0],
+            }
+        )
+        valid_frame = pd.DataFrame(
+            {
+                "target_demand_qty_d_plus_1": [12.0, 15.0],
+            }
+        )
+        raw_predictions = np.asarray([11.0, 14.0], dtype=float)
+
+        payload = cast(Any, model_fit_module)._business_validation_metrics_payload(
+            valid_frame=valid_frame,
+            raw_predictions=raw_predictions,
+            target_col="target_demand_qty_d_plus_1",
+            train_frame=train_frame,
+        )
+
+        self.assertAlmostEqual(float(cast(Any, payload["business_val_wape"])), 2.0 / 27.0)
+        self.assertAlmostEqual(float(cast(Any, payload["business_val_abs_bias"])), 1.0)
+
+    def test_fit_tft_model_skips_business_callback_when_validation_metric_logging_disabled(
+        self,
+    ) -> None:
+        train_frame = pd.DataFrame({"target": [1.0]})
+        sentinel_model = object()
+        mocked_callback_builder = object()
+        dataset_artifacts = cast(
+            Any,
+            SimpleNamespace(
+                layout={},
+                training_dataset=SimpleNamespace(),
+                training_slice=pd.DataFrame(),
+                feature_scalers={},
+                normalization_strategy={},
+            ),
+        )
+
+        with (
+            patch.object(
+                model_fit_module,
+                "_resolve_fit_request",
+                return_value=(
+                    train_frame,
+                    ["feature_a"],
+                    {"Callback": object},
+                    {
+                        "enable_validation_metric_logging": False,
+                        "batch_size": 8,
+                        "quantiles": [0.1, 0.5, 0.9],
+                        "runtime_profile": "local_cpu",
+                    },
+                ),
+            ),
+            patch.object(model_fit_module, "suppress_tft_runtime_noise", return_value=nullcontext()),
+            patch.object(model_fit_module, "seed_tft_runtime"),
+            patch.object(model_fit_module, "_resolved_dataset_artifacts", return_value=dataset_artifacts),
+            patch.object(
+                model_fit_module,
+                "_business_validation_logging_callback",
+                side_effect=AssertionError("business callback should be skipped"),
+            ),
+            patch.object(
+                model_fit_module,
+                "_fit_resolved_model",
+                return_value=(sentinel_model, None, 0, {}),
+            ) as mocked_fit,
+            patch.object(model_fit_module, "extract_interpretability_payload", return_value=None),
+            patch.object(model_fit_module, "build_fitted_tft_model", return_value=mocked_callback_builder),
+        ):
+            result = model_fit_module.fit_tft_model(
+                train_frame=train_frame,
+                feature_cols=["feature_a"],
+                target_col="target",
+            )
+
+        self.assertIs(result, mocked_callback_builder)
+        self.assertEqual(mocked_fit.call_args.kwargs["extra_callbacks"], [])
 
     def _build_training_frame(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         dates = pd.date_range("2024-01-01", periods=32, freq="D")
@@ -119,7 +206,10 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertTrue(np.isfinite(predictions).all())
         self.assertGreaterEqual(model.best_iteration, 0)
         self.assertGreater(model.runtime_metrics["rows_per_second"], 0.0)
-        self.assertEqual(model.runtime_metrics["loader_worker_count"], 0)
+        self.assertEqual(
+            int(cast(Any, model.runtime_metrics["loader_worker_count"])),
+            int(cast(Any, model.model_hyperparameters["num_workers"])),
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "foundation_tft_final_model.pt"

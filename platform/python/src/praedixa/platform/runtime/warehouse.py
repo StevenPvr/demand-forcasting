@@ -22,7 +22,7 @@ def _bool_to_env(value: bool) -> str:
 
 
 def _default_dbt_threads() -> int:
-    return min(8, os.cpu_count() or 1)
+    return os.cpu_count() or 1
 
 
 @dataclass(frozen=True)

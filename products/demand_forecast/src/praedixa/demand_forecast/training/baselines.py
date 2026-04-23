@@ -28,6 +28,7 @@ BASELINE_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
 }
 
 _DEFAULT_BASELINE_DATE_COL = "dt"
+_DEFAULT_BASELINE_GROUP_COL = "series_id"
 
 
 def _safe_last(history: list[float]) -> float:
@@ -268,6 +269,29 @@ def resolve_baseline_prediction(
     raise ValueError(f"Unsupported baseline `{baseline_name}`.")
 
 
+def _derived_vectorized_baseline_column(
+    frame: pd.DataFrame,
+    *,
+    baseline_name: str,
+    absolute_target_col: str,
+    date_col: str = _DEFAULT_BASELINE_DATE_COL,
+    group_col: str = _DEFAULT_BASELINE_GROUP_COL,
+) -> pd.Series | None:
+    if baseline_name != "seasonal_naive_lag_7":
+        return None
+    if absolute_target_col not in frame.columns:
+        return None
+    if date_col not in frame.columns or group_col not in frame.columns:
+        return None
+    ordered = frame.sort_values([group_col, date_col]).copy()
+    derived = (
+        ordered.groupby(group_col, sort=False)[absolute_target_col]
+        .shift(7)
+        .astype(float)
+    )
+    return derived.reindex(frame.index)
+
+
 def _fold_frame(
     *,
     frame: pd.DataFrame,
@@ -384,6 +408,18 @@ def evaluate_statistical_baselines_macro(
     threaded_baselines: list[str] = []
     for baseline_name in baseline_names:
         baseline_column_name = baseline_column_names[baseline_name]
+        if baseline_column_name is None:
+            derived_predictions = _derived_vectorized_baseline_column(
+                frame,
+                baseline_name=baseline_name,
+                absolute_target_col=absolute_target_col,
+            )
+            if derived_predictions is not None:
+                derived_column_name = f"__derived_{baseline_name}"
+                frame = frame.copy()
+                frame[derived_column_name] = derived_predictions
+                baseline_column_name = derived_column_name
+                baseline_column_names[baseline_name] = derived_column_name
         if baseline_column_name is not None:
             polars_baseline_row = evaluate_polars_baseline_macro(
                 frame=frame,

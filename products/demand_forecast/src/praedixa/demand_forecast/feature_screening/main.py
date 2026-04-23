@@ -5,7 +5,7 @@ import logging
 
 from praedixa.demand_forecast.feature_screening.pipeline import build_lag_selection_outputs
 from praedixa.platform.runtime.paths import FEATURE_SELECTION_DIR
-from praedixa.demand_forecast.contracts.targets import DEFAULT_VARIATION_TARGET_COL
+from praedixa.demand_forecast.contracts.targets import DEFAULT_ABSOLUTE_TARGET_COL
 
 
 DEFAULT_OUTPUT_DIR = FEATURE_SELECTION_DIR
@@ -19,7 +19,7 @@ def main() -> None:
     )
     outputs = build_lag_selection_outputs(
         output_dir=DEFAULT_OUTPUT_DIR,
-        target_col=DEFAULT_VARIATION_TARGET_COL,
+        target_col=DEFAULT_ABSOLUTE_TARGET_COL,
         correlation_only=True,
         max_selected_lag_features=50,
     )

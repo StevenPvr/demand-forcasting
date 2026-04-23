@@ -234,10 +234,6 @@ def _target_rows_from_reference(merged: pl.DataFrame, reference_test: pl.DataFra
                 pl.col(REFERENCE_PRODUCT_COL).cast(pl.Utf8, strict=False).alias("product_id"),
                 pl.col(REFERENCE_DATE_COL).cast(pl.Datetime, strict=False).alias("target_dt"),
                 pl.col(REFERENCE_TARGET_COL).cast(pl.Float64, strict=False).alias("target_demand_qty_d_plus_1"),
-                pl.when(pl.col("target_lag_7").is_not_null() & (pl.col("target_lag_7") >= 0.0))
-                .then(pl.col("target_demand_qty_d_plus_1").log1p() - pl.col("target_lag_7").log1p())
-                .otherwise(None)
-                .alias("target_delta_log_wow_d_plus_1"),
             ]
         )
         .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])

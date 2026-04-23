@@ -86,9 +86,6 @@ def fit_evaluation_model(
     valid_weights = compute_equal_dataset_row_weights(valid_frame, dataset_source_col=DEFAULT_DATASET_SOURCE_COL)
     train_for_model = train_frame.copy()
     valid_for_model = valid_frame.copy()
-    if target_contract.target_mode == "log1p":
-        train_for_model[learning_target_col] = np.log1p(train_for_model[learning_target_col].astype(float))
-        valid_for_model[learning_target_col] = np.log1p(valid_for_model[learning_target_col].astype(float))
     model = fit_tft_model(
         train_for_model,
         feature_cols,
@@ -146,8 +143,6 @@ def fit_final_model(
     learning_target_col = target_contract.learning_target_col
     fit_weights = compute_equal_dataset_row_weights(fit_frame, dataset_source_col=DEFAULT_DATASET_SOURCE_COL)
     fit_for_model = fit_frame.copy()
-    if target_contract.target_mode == "log1p":
-        fit_for_model[learning_target_col] = np.log1p(fit_for_model[learning_target_col].astype(float))
     return fit_tft_model(
         fit_for_model,
         feature_cols,
