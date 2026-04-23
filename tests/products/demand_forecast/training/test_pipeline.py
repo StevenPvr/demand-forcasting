@@ -147,6 +147,12 @@ class OptimisationPipelineTests(unittest.TestCase):
     def test_training_defaults_to_model_facing_gold_panel(self) -> None:
         self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_daily_product_forecast_panel_d1")
 
+    def test_optimisation_request_defaults_to_10pct_sampling(self) -> None:
+        request = OptimisationBuildRequest()
+
+        self.assertEqual(request.train_sample_fraction, 0.10)
+        self.assertEqual(request.tuning_sample_fraction, 0.10)
+
     def test_constant_metadata_features_are_kept_for_tft_training(self) -> None:
         frame = pd.DataFrame(
             {
@@ -318,6 +324,8 @@ class OptimisationPipelineTests(unittest.TestCase):
                         gold_table="gold.gold_daily_product_forecast_panel_d1",
                         n_folds=1,
                         tuning_trials=2,
+                        train_sample_fraction=1.0,
+                        tuning_sample_fraction=1.0,
                         model_params={"n_jobs": 1},
                     )
                 )

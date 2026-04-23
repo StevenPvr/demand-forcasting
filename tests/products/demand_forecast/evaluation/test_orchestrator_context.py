@@ -58,8 +58,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "series_id": ["bakery_store_1__croissant"] * 4,
             "client_id": ["public_bakery_sales"] * 4,
             "avg_selling_price": [2.0, 2.0, 2.1, 2.1],
+            "observed_discount_amount": [1.0, 2.0, 3.0, 4.0],
             "weather_humidity": [40.0, 42.0, 41.0, 43.0],
-            "event_count_local": [1.0, 2.0, 3.0, 4.0],
             "target_demand_qty_d_plus_1": train_targets,
             "target_lag_7": train_lags,
             DEFAULT_VARIATION_TARGET_COL: _delta_log_wow(train_targets, train_lags),
@@ -74,8 +74,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "series_id": ["bakery_store_1__croissant"] * 2,
             "client_id": ["public_bakery_sales"] * 2,
             "avg_selling_price": [2.2, 2.2],
+            "observed_discount_amount": [5.0, 6.0],
             "weather_humidity": [44.0, 45.0],
-            "event_count_local": [5.0, 6.0],
             "target_demand_qty_d_plus_1": valid_targets,
             "target_lag_7": valid_lags,
             DEFAULT_VARIATION_TARGET_COL: _delta_log_wow(valid_targets, valid_lags),
@@ -90,8 +90,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "series_id": ["bakery_store_1__croissant"] * 2,
             "client_id": ["public_bakery_sales"] * 2,
             "avg_selling_price": [2.3, 2.4],
+            "observed_discount_amount": [np.nan, 7.0],
             "weather_humidity": [np.nan, np.nan],
-            "event_count_local": [np.nan, 7.0],
             "target_demand_qty_d_plus_1": test_targets,
             "target_lag_7": test_lags,
             DEFAULT_VARIATION_TARGET_COL: _delta_log_wow(test_targets, test_lags),
@@ -200,8 +200,8 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         self.assertIn("avg_selling_price", context.feature_cols)
         self.assertIn("weather_humidity", context.missing_in_test_feature_cols)
         self.assertNotIn("weather_humidity", context.feature_cols)
-        self.assertIn("event_count_local", context.feature_cols)
-        self.assertEqual(context.test_frame["event_count_local"].tolist(), [2.5, 7.0])
+        self.assertIn("observed_discount_amount", context.feature_cols)
+        self.assertEqual(context.test_frame["observed_discount_amount"].tolist(), [2.5, 7.0])
         self.assertIsNotNone(context.overlap_metadata)
         assert context.overlap_metadata is not None
         self.assertEqual(context.overlap_metadata["scorable_test_rows"], 2)

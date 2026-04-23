@@ -80,13 +80,8 @@ def _reference_gold_base_signal_payload() -> dict[str, list[object]]:
         "weather_precipitation": [0.0] * 8,
         "weather_humidity": [0.5] * 8,
         "weather_wind_level": [1.0] * 8,
-        "gdp_growth_latest": [1.0] * 8,
-        "gdp_current_usd_latest": [1.0] * 8,
         "lending_interest_rate_latest": [1.0] * 8,
-        "government_debt_pct_gdp_latest": [1.0] * 8,
         "price_available": [True] * 8,
-        "weather_available": [True] * 8,
-        "macro_available": [True] * 8,
     }
 
 

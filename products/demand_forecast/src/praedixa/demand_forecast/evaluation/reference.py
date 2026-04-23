@@ -135,29 +135,6 @@ def _optional_float_expr(frame: pl.DataFrame, column: str) -> pl.Expr:
         return pl.col(column).cast(pl.Float64, strict=False)
     return pl.lit(None, dtype=pl.Float64)
 
-
-def _weather_available_expr() -> pl.Expr:
-    return pl.any_horizontal(
-        [
-            pl.col("weather_temperature").is_not_null(),
-            pl.col("weather_precipitation").is_not_null(),
-            pl.col("weather_humidity").is_not_null(),
-            pl.col("weather_wind_level").is_not_null(),
-        ]
-    ).alias("weather_available")
-
-
-def _macro_available_expr() -> pl.Expr:
-    return pl.any_horizontal(
-        [
-            pl.col("gdp_growth_latest").is_not_null(),
-            pl.col("gdp_current_usd_latest").is_not_null(),
-            pl.col("lending_interest_rate_latest").is_not_null(),
-            pl.col("government_debt_pct_gdp_latest").is_not_null(),
-        ]
-    ).alias("macro_available")
-
-
 def _apply_reference_defaults(merged: pl.DataFrame, *, price_template: pl.DataFrame) -> pl.DataFrame:
     base = merged.join(price_template, how="left", on="product_id").with_columns(
         [
@@ -200,8 +177,6 @@ def _apply_reference_defaults(merged: pl.DataFrame, *, price_template: pl.DataFr
                     "observed_revenue_net"
                 ),
                 pl.col("avg_selling_price").is_not_null().alias("price_available"),
-                _weather_available_expr(),
-                _macro_available_expr(),
             ]
         )
         .drop("avg_selling_price_template")
@@ -242,22 +217,6 @@ def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
             .rolling_mean(window_size=4, min_samples=1)
             .over(["product_id", "__target_dow"])
             .alias("target_same_dow_mean_4w"),
-            (
-                pl.col("gdp_growth_latest")
-                - pl.col("gdp_growth_latest").shift(28).over("product_id")
-            ).alias("gdp_growth_latest_delta_28"),
-            (
-                pl.col("gdp_current_usd_latest")
-                - pl.col("gdp_current_usd_latest").shift(28).over("product_id")
-            ).alias("gdp_current_usd_latest_delta_28"),
-            (
-                pl.col("lending_interest_rate_latest")
-                - pl.col("lending_interest_rate_latest").shift(28).over("product_id")
-            ).alias("lending_interest_rate_latest_delta_28"),
-            (
-                pl.col("government_debt_pct_gdp_latest")
-                - pl.col("government_debt_pct_gdp_latest").shift(28).over("product_id")
-            ).alias("government_debt_pct_gdp_latest_delta_28"),
         ]
     ).drop("__target_dow")
 
@@ -319,10 +278,7 @@ _DATE_TEMPLATE_FILL_COLUMNS = [
     "weather_temperature",
     "weather_humidity",
     "weather_wind_level",
-    "gdp_growth_latest",
-    "gdp_current_usd_latest",
     "lending_interest_rate_latest",
-    "government_debt_pct_gdp_latest",
     "client_id",
     "vertical_level_1",
     "vertical_level_2",

@@ -20,7 +20,7 @@ from praedixa.demand_forecast.backends.tft.feature_contract import (  # noqa: E4
 
 class TFTFeatureMappingTests(unittest.TestCase):
     def test_explicit_mapping_covers_gold_panel_and_runtime_helpers(self) -> None:
-        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 239)
+        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 177)
 
     def test_group_id_is_explicit_and_stable(self) -> None:
         self.assertEqual(TFT_GROUP_ID_COLUMNS, ("series_id",))
@@ -35,7 +35,7 @@ class TFTFeatureMappingTests(unittest.TestCase):
         )
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["rolling_mean_7"], "time_varying_known_real")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["target_holiday_flag"], "time_varying_known_categorical")
-        self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["population_1km"], "static_real")
+        self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["site_format"], "static_categorical")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["target_demand_qty_d_plus_1"], "target")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["lag_1"], "exclude")
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["split_bucket"], "exclude")
@@ -44,14 +44,14 @@ class TFTFeatureMappingTests(unittest.TestCase):
         layout = resolve_explicit_tft_layout(
             [
                 "location_id",
-                "population_1km",
+                "site_format",
                 "target_holiday_flag",
                 "rolling_mean_7",
             ]
         )
 
-        self.assertEqual(layout["static_categoricals"], ["location_id"])
-        self.assertEqual(layout["static_reals"], ["population_1km"])
+        self.assertEqual(layout["static_categoricals"], ["location_id", "site_format"])
+        self.assertEqual(layout["static_reals"], [])
         self.assertEqual(layout["time_varying_known_categoricals"], ["target_holiday_flag"])
         self.assertEqual(layout["time_varying_known_reals"], ["rolling_mean_7"])
         self.assertEqual(layout["time_varying_unknown_categoricals"], [])
@@ -77,9 +77,9 @@ class TFTFeatureMappingTests(unittest.TestCase):
         self.assertTrue(contract["target_holiday_flag"]["available_at_prediction"])
 
     def test_validate_feature_contract_returns_contract_for_valid_mapping(self) -> None:
-        contract = validate_feature_contract(["location_id", "population_1km", "target_holiday_flag"])
+        contract = validate_feature_contract(["location_id", "site_format", "target_holiday_flag"])
 
-        self.assertEqual(sorted(contract.keys()), ["location_id", "population_1km", "target_holiday_flag"])
+        self.assertEqual(sorted(contract.keys()), ["location_id", "site_format", "target_holiday_flag"])
 
 
 if __name__ == "__main__":

@@ -1153,7 +1153,6 @@ def _resolved_tft_tuning_inputs(
         resolved_params.update(
             {
                 "use_learning_rate_finder": False,
-                "enable_progress_bar": False,
                 "enable_csv_logger": False,
                 "enable_lr_monitor": False,
                 "enable_validation_metric_logging": False,

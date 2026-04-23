@@ -164,7 +164,7 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertEqual(resolved_params["accelerator"], "gpu")
         self.assertEqual(resolved_params["determinism_mode"], "off")
         self.assertFalse(bool(resolved_params["use_learning_rate_finder"]))
-        self.assertFalse(bool(resolved_params["enable_progress_bar"]))
+        self.assertTrue(bool(resolved_params["enable_progress_bar"]))
         self.assertFalse(bool(resolved_params["enable_csv_logger"]))
         self.assertFalse(bool(resolved_params["enable_lr_monitor"]))
         self.assertFalse(bool(resolved_params["enable_validation_metric_logging"]))
