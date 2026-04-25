@@ -1,8 +1,8 @@
-from __future__ import annotations
-
 """Hyperparameter optimisation helpers for selected demand forecasting features."""
 
-from praedixa.demand_forecast.training.pipeline import (
+from __future__ import annotations
+
+from praedixa.demand_forecast.training.orchestration.pipeline import (
     build_optimisation_outputs,
     build_tuning_walk_forward_folds,
 )

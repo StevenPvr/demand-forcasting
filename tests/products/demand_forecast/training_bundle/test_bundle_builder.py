@@ -95,9 +95,9 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             bundled_tuning = pd.read_parquet(artifacts["tuning"])
             bundled_valid = pd.read_parquet(artifacts["valid"])
 
-            self.assertEqual(sorted(bundled_train["series_id"].unique().tolist()), ["store_1__sku_1"])
-            self.assertEqual(sorted(bundled_tuning["series_id"].unique().tolist()), ["store_1__sku_1"])
-            self.assertEqual(sorted(bundled_valid["series_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(sorted(bundled_train["client_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(sorted(bundled_tuning["client_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(sorted(bundled_valid["client_id"].unique().tolist()), ["store_1__sku_1"])
             self.assertEqual(len(bundled_train), 4)
             self.assertEqual(len(bundled_tuning), 2)
             self.assertEqual(len(bundled_valid), 1)
@@ -114,8 +114,9 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         return pd.DataFrame(
             {
                 "dt": pd.date_range(start_date, periods=periods, freq="D"),
-                "dataset_source": ["bakery"] * periods,
+                "dataset_source": ["freshretail"] * periods,
                 "series_id": ["store_1__sku_1"] * periods,
+                "client_id": ["old_public_dataset_id"] * periods,
                 "location_id": ["store_1"] * periods,
                 "product_id": ["sku_1"] * periods,
                 "target_demand_qty_d_plus_1": target_values,
@@ -141,16 +142,32 @@ class TrainingBundleBuilderTests(unittest.TestCase):
     def _gold_frame(self) -> pd.DataFrame:
         return pd.DataFrame(
             {
-                "dt": pd.date_range("2024-01-01", periods=6, freq="D"),
-                "dataset_source": ["bakery"] * 6,
-                "split_bucket": ["train", "train", "train", "val", "val", "test"],
-                "series_id": ["store_1__sku_1"] * 6,
-                "location_id": ["store_1"] * 6,
-                "product_id": ["sku_1"] * 6,
-                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
-                "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0],
-                "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
-                "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+                "dt": pd.date_range("2024-01-01", periods=7, freq="D"),
+                "dataset_source": ["freshretail"] * 6 + ["bakery"],
+                "split_bucket": [
+                    "train",
+                    "train",
+                    "train",
+                    "val",
+                    "val",
+                    "test",
+                    "test",
+                ],
+                "client_id": ["store_1__sku_1"] * 6 + ["bakery_store__sku_1"],
+                "location_id": ["store_1"] * 6 + ["bakery_store"],
+                "product_id": ["sku_1"] * 7,
+                "target_demand_qty_d_plus_1": [
+                    10.0,
+                    11.0,
+                    12.0,
+                    13.0,
+                    14.0,
+                    15.0,
+                    16.0,
+                ],
+                "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+                "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0],
+                "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
             }
         )
 
@@ -172,7 +189,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
                     "val",
                     "test",
                 ],
-                "series_id": [
+                "client_id": [
                     "store_1__sku_1",
                     "store_1__sku_1",
                     "store_1__sku_1",
@@ -252,24 +269,32 @@ class TrainingBundleBuilderTests(unittest.TestCase):
 
     def _assert_feature_manifest(self, artifacts: dict[str, Path]) -> None:
         feature_manifest = json.loads(artifacts["feature_manifest"].read_text(encoding="utf-8"))
-        self.assertEqual(feature_manifest["feature_columns"], ["dataset_source", "location_id", "product_id", "rolling_mean_7"])
-        self.assertEqual(feature_manifest["group_id_columns"], ["series_id"])
+        self.assertEqual(feature_manifest["feature_columns"], ["dataset_source", "rolling_mean_7"])
+        self.assertEqual(feature_manifest["group_id_columns"], ["client_id"])
         self.assertIn("lag_1", feature_manifest["projection_columns"])
+        self.assertIn("location_id", feature_manifest["projection_columns"])
+        self.assertIn("product_id", feature_manifest["projection_columns"])
         self.assertEqual(feature_manifest["projection_dtypes"]["lag_1"], "float32")
         self.assertEqual(feature_manifest["projection_dtypes"]["rolling_mean_7"], "float32")
         self.assertEqual(feature_manifest["projection_dtypes"]["target_demand_qty_d_plus_1"], "float32")
         self.assertTrue(feature_manifest["feature_contract"]["rolling_mean_7"]["available_at_prediction"])
         self.assertNotIn("lag_1", feature_manifest["feature_columns"])
         self.assertNotIn("current_day_demand_qty", feature_manifest["feature_columns"])
+        self.assertNotIn("series_id", feature_manifest["projection_columns"])
+        self.assertNotIn("location_id", feature_manifest["feature_columns"])
+        self.assertNotIn("product_id", feature_manifest["feature_columns"])
 
         feature_roles = json.loads(artifacts["feature_roles"].read_text(encoding="utf-8"))
         self.assertEqual(feature_roles["rolling_mean_7"]["role"], "time_varying_known_real")
-        self.assertEqual(feature_roles["location_id"]["source_system"], "operations")
+        self.assertEqual(feature_roles["dataset_source"]["source_system"], "metadata")
 
     def _assert_bundled_train(self, artifacts: dict[str, Path]) -> None:
         bundled_train = pd.read_parquet(artifacts["train"])
         optimisation_train = pd.read_parquet(artifacts["optimisation_train"])
-        self.assertIn("series_id", bundled_train.columns)
+        self.assertIn("client_id", bundled_train.columns)
+        self.assertIn("location_id", bundled_train.columns)
+        self.assertIn("product_id", bundled_train.columns)
+        self.assertNotIn("series_id", bundled_train.columns)
         self.assertEqual(str(bundled_train["rolling_mean_7"].dtype), "float32")
         self.assertEqual(str(bundled_train["target_demand_qty_d_plus_1"].dtype), "float32")
         self.assertIn("__tft_group_id", optimisation_train.columns)
@@ -288,7 +313,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertEqual(bundle_manifest["train_rows"], 4)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
         self.assertEqual(bundle_manifest["valid_rows"], 2)
-        self.assertEqual(bundle_manifest["feature_count"], 4)
+        self.assertEqual(bundle_manifest["feature_count"], 2)
         self.assertTrue(bundle_manifest["feature_roles_path"].endswith("feature_roles.json"))
         self.assertTrue(bundle_manifest["split_manifest_path"].endswith("split_manifest.json"))
         self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
@@ -307,12 +332,17 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
         self.assertEqual(bundle_manifest["train_rows"], 3)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
-        self.assertEqual(bundle_manifest["valid_rows"], 1)
+        self.assertEqual(bundle_manifest["valid_rows"], 2)
         self.assertIn("_cache/train.parquet", bundle_manifest["train_input_path"])
         self.assertIn("_cache/val.parquet", bundle_manifest["tuning_input_path"])
         self.assertIn("_cache/test.parquet", bundle_manifest["valid_input_path"])
         bundled_train = pd.read_parquet(artifacts["train"])
+        bundled_tuning = pd.read_parquet(artifacts["tuning"])
+        bundled_valid = pd.read_parquet(artifacts["valid"])
         optimisation_train = pd.read_parquet(artifacts["optimisation_train"])
+        self.assertEqual(set(bundled_train["dataset_source"]), {"freshretail"})
+        self.assertEqual(set(bundled_tuning["dataset_source"]), {"freshretail"})
+        self.assertIn("bakery", set(bundled_valid["dataset_source"]))
         self.assertNotIn("split_bucket", bundled_train.columns)
         self.assertIn("lag_1", bundled_train.columns)
         self.assertIn("rolling_mean_7", bundled_train.columns)

@@ -79,7 +79,7 @@ def _addon_report_fixture() -> pd.DataFrame:
 
 class FeatureSelectionLagPipelineTests(unittest.TestCase):
     def test_feature_screening_defaults_to_model_facing_gold_panel(self) -> None:
-        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_daily_product_forecast_panel_d1")
+        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_model_training_panel_d1")
 
     def test_get_lag_candidate_columns_keeps_only_temporal_candidates(self) -> None:
         frame = pd.DataFrame(

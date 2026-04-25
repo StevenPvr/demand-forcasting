@@ -93,7 +93,7 @@ class RunLocalSilverTests(unittest.TestCase):
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
             mock.patch("praedixa.platform.warehouse.local_silver.dbt_packages_installed", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_silver.run_subprocess") as run_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.run_dbt_command") as run_dbt_command_mock,
         ):
             result = run_local_silver(config)
 
@@ -101,16 +101,13 @@ class RunLocalSilverTests(unittest.TestCase):
         specs_mock.assert_called_once()
         load_mock.assert_called_once_with(specs=["active_specs"])
         inline_load_mock.assert_called_once()
-        self.assertEqual(run_mock.call_count, 3)
-        seed_command = run_mock.call_args_list[0].args[0]
-        first_command = run_mock.call_args_list[1].args[0]
-        second_command = run_mock.call_args_list[2].args[0]
-        self.assertEqual(seed_command[:2], [".venv/bin/dbt", "seed"])
-        self.assertEqual(first_command[:2], [".venv/bin/dbt", "run"])
-        self.assertEqual(second_command[:2], [".venv/bin/dbt", "test"])
-        self.assertEqual(first_command[-1], "+tag:silver")
-        self.assertEqual(second_command[second_command.index("--select") + 1], "tag:silver")
-        self.assertEqual(second_command[second_command.index("--exclude") + 1], "tag:gold")
+        self.assertEqual(run_dbt_command_mock.call_count, 3)
+        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "seed")
+        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "run")
+        self.assertEqual(run_dbt_command_mock.call_args_list[1].kwargs["select"], "+tag:silver")
+        self.assertEqual(run_dbt_command_mock.call_args_list[2].args[1], "test")
+        self.assertEqual(run_dbt_command_mock.call_args_list[2].kwargs["select"], "tag:silver")
+        self.assertEqual(run_dbt_command_mock.call_args_list[2].kwargs["exclude"], "tag:gold")
         self.assertTrue(result["dbt_run"])
         self.assertTrue(result["dbt_test"])
 
@@ -129,16 +126,16 @@ class RunLocalSilverTests(unittest.TestCase):
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
             mock.patch("praedixa.platform.warehouse.local_silver.dbt_packages_installed", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_silver.run_subprocess") as run_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.run_dbt_command") as run_dbt_command_mock,
         ):
             result = run_local_silver(config)
 
         supplemental_corpus_mock.assert_not_called()
         inline_load_mock.assert_not_called()
         load_mock.assert_not_called()
-        self.assertEqual(run_mock.call_count, 2)
-        self.assertEqual(run_mock.call_args_list[0].args[0][:2], [".venv/bin/dbt", "seed"])
-        self.assertEqual(run_mock.call_args_list[1].args[0][:2], [".venv/bin/dbt", "run"])
+        self.assertEqual(run_dbt_command_mock.call_count, 2)
+        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "seed")
+        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "run")
         self.assertTrue(result["dbt_run"])
         self.assertFalse(result["dbt_test"])
 
@@ -172,17 +169,17 @@ class RunLocalSilverTests(unittest.TestCase):
             mock.patch("praedixa.platform.warehouse.local_silver.resolve_dbt_executable", return_value=".venv/bin/dbt"),
             mock.patch("praedixa.platform.warehouse.local_silver.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
             mock.patch("praedixa.platform.warehouse.local_silver.dbt_packages_installed", return_value=False),
-            mock.patch("praedixa.platform.warehouse.local_silver.run_subprocess") as run_mock,
+            mock.patch("praedixa.platform.warehouse.local_silver.run_dbt_command") as run_dbt_command_mock,
         ):
             run_local_silver(config)
 
         supplemental_corpus_mock.assert_not_called()
         inline_load_mock.assert_not_called()
-        self.assertEqual(run_mock.call_count, 3)
-        self.assertEqual(run_mock.call_args_list[0].args[0][:2], [".venv/bin/dbt", "deps"])
-        self.assertEqual(run_mock.call_args_list[1].args[0][:2], [".venv/bin/dbt", "seed"])
-        self.assertEqual(run_mock.call_args_list[2].args[0][:2], [".venv/bin/dbt", "run"])
-        self.assertEqual(run_mock.call_args_list[2].args[0][-1], "+tag:silver")
+        self.assertEqual(run_dbt_command_mock.call_count, 3)
+        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "deps")
+        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "seed")
+        self.assertEqual(run_dbt_command_mock.call_args_list[2].args[1], "run")
+        self.assertEqual(run_dbt_command_mock.call_args_list[2].kwargs["select"], "+tag:silver")
 
 
 if __name__ == "__main__":

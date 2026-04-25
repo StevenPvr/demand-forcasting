@@ -5,7 +5,6 @@ models:
     columns:
       - name: dataset_source
         tests:
-          - not_null
           - accepted_values:
               arguments:
                 values:
@@ -16,29 +15,46 @@ models:
                     "first_party_daily",
                   ]
       - name: dt
-        tests:
-          - not_null
       - name: split_bucket
         tests:
-          - not_null
           - accepted_values:
               arguments:
                 values: ["train", "val", "test"]
       - name: location_id
-        tests:
-          - not_null
       - name: product_id
-        tests:
-          - not_null
-      - name: series_id
-        tests:
-          - not_null
+      - name: client_id
       - name: target_demand_qty_d_plus_1
+      - name: target_semantics
         tests:
-          - not_null
+          - accepted_values:
+              arguments:
+                values: ["observed_sales", "latent_demand_estimated"]
+      - name: censor_flag
+      - name: target_source
+      - name: label_quality_score
+      - name: usable_for_training_flag
+      - name: decision_timestamp
+      - name: feature_availability_profile
       - name: target_delta_log_wow_d_plus_1
 
     tests:
+      - praedixa_required_columns_not_null:
+          arguments:
+            required_columns:
+              - dataset_source
+              - dt
+              - split_bucket
+              - location_id
+              - product_id
+              - client_id
+              - target_demand_qty_d_plus_1
+              - target_semantics
+              - censor_flag
+              - target_source
+              - label_quality_score
+              - usable_for_training_flag
+              - decision_timestamp
+              - feature_availability_profile
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:
@@ -50,18 +66,65 @@ models:
   - name: gold_daily_product_forecast_panel_d1
     columns:
       - name: dataset_source
-        tests:
-          - not_null
       - name: dt
-        tests:
-          - not_null
       - name: target_dt
-        tests:
-          - not_null
       - name: split_bucket
-        tests:
-          - not_null
       - name: target_demand_qty_d_plus_1
-        tests:
-          - not_null
+      - name: target_semantics
+      - name: censor_flag
+      - name: target_source
+      - name: label_quality_score
+      - name: usable_for_training_flag
+      - name: decision_timestamp
+      - name: feature_availability_profile
       - name: target_delta_log_wow_d_plus_1
+
+    tests:
+      - praedixa_required_columns_not_null:
+          arguments:
+            required_columns:
+              - dataset_source
+              - dt
+              - target_dt
+              - split_bucket
+              - target_demand_qty_d_plus_1
+              - target_semantics
+              - censor_flag
+              - target_source
+              - label_quality_score
+              - usable_for_training_flag
+              - decision_timestamp
+              - feature_availability_profile
+
+  - name: gold_model_training_panel_d1
+    columns:
+      - name: dataset_source
+      - name: dt
+      - name: target_dt
+      - name: split_bucket
+      - name: target_demand_qty_d_plus_1
+      - name: target_semantics
+      - name: censor_flag
+      - name: target_source
+      - name: label_quality_score
+      - name: usable_for_training_flag
+      - name: decision_timestamp
+      - name: feature_availability_profile
+      - name: target_delta_log_wow_d_plus_1
+
+    tests:
+      - praedixa_required_columns_not_null:
+          arguments:
+            required_columns:
+              - dataset_source
+              - dt
+              - target_dt
+              - split_bucket
+              - target_demand_qty_d_plus_1
+              - target_semantics
+              - censor_flag
+              - target_source
+              - label_quality_score
+              - usable_for_training_flag
+              - decision_timestamp
+              - feature_availability_profile

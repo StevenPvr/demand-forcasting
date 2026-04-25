@@ -24,7 +24,6 @@ def _build_catchment_metadata() -> pd.DataFrame:
             {
                 "dataset_source": "bakery",
                 "location_id": "bakery_store_1",
-                "site_format": "bakery",
                 "latitude": 48.8566,
                 "longitude": 2.3522,
             }

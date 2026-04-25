@@ -4,5 +4,5 @@
     ref("gold_base_panel_d1"),
     "dataset_source = 'bakery'",
     "dataset_source = 'bakery'",
-    "bakery_test_only"
+    "pilot_ready_chrono_60_20_20"
 ) }}

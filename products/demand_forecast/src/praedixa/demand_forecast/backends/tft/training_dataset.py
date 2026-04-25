@@ -253,7 +253,13 @@ def build_training_dataset_artifacts(
     target_col: str,
     resolved_params: dict[str, object],
 ) -> TrainingDatasetArtifacts:
-    validate_feature_contract(feature_cols)
+    validate_feature_contract(
+        feature_cols,
+        decision_profile=cast(
+            Any,
+            resolved_params.get("decision_profile", "post_close_d_plus_1"),
+        ),
+    )
     max_encoder_length = int(cast(Any, resolved_params["max_encoder_length"]))
     prepared_frame = filter_groups_with_sufficient_history(
         prepared_frame,

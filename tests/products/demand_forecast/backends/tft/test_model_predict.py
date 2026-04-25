@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -60,10 +64,12 @@ def _fitted_model() -> FittedTFTModel:
 
 
 class TFTModelPredictTests(unittest.TestCase):
-    def test_predict_with_tft_model_falls_back_to_baseline_column(self) -> None:
+    def test_predict_with_tft_model_raises_by_default_when_contract_breaks(
+        self,
+    ) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["store_1__sku_1", "store_1__sku_1"],
+                "client_id": ["store_1__sku_1", "store_1__sku_1"],
                 "location_id": ["store_1", "store_1"],
                 "product_id": ["sku_1", "sku_1"],
                 "dt": pd.to_datetime(["2024-02-01", "2024-02-02"]),
@@ -75,14 +81,45 @@ class TFTModelPredictTests(unittest.TestCase):
             "praedixa.demand_forecast.backends.tft.model_predict._prediction_dataset",
             side_effect=RuntimeError("broken contract"),
         ):
-            predictions = predict_with_tft_model(_fitted_model(), frame, ["location_id", "product_id"])
+            with self.assertRaises(RuntimeError):
+                predict_with_tft_model(
+                    _fitted_model(), frame, ["location_id", "product_id"]
+                )
 
-        self.assertEqual(predictions.tolist(), [11.0, 13.0])
-
-    def test_predict_quantiles_with_tft_model_falls_back_to_point_baseline(self) -> None:
+    def test_predict_with_tft_model_falls_back_when_policy_allows_it(self) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["store_1__sku_1"],
+                "client_id": ["store_1__sku_1", "store_1__sku_1"],
+                "location_id": ["store_1", "store_1"],
+                "product_id": ["sku_1", "sku_1"],
+                "dt": pd.to_datetime(["2024-02-01", "2024-02-02"]),
+                "target_lag_7": [11.0, 13.0],
+            }
+        )
+        fitted_model = _fitted_model()
+
+        with patch(
+            "praedixa.demand_forecast.backends.tft.model_predict._prediction_dataset",
+            side_effect=RuntimeError("broken contract"),
+        ):
+            predictions = predict_with_tft_model(
+                fitted_model,
+                frame,
+                ["location_id", "product_id"],
+                fallback_policy="baseline",
+            )
+
+        self.assertEqual(predictions.tolist(), [11.0, 13.0])
+        self.assertTrue(
+            fitted_model.runtime_metrics["last_prediction_diagnostics"]["used_fallback"]
+        )
+
+    def test_predict_quantiles_with_tft_model_falls_back_when_policy_allows_it(
+        self,
+    ) -> None:
+        frame = pd.DataFrame(
+            {
+                "client_id": ["store_1__sku_1"],
                 "location_id": ["store_1"],
                 "product_id": ["sku_1"],
                 "dt": pd.to_datetime(["2024-02-01"]),
@@ -98,15 +135,21 @@ class TFTModelPredictTests(unittest.TestCase):
                 _fitted_model(),
                 frame,
                 ["location_id", "product_id"],
+                fallback_policy="baseline",
             )
 
-        self.assertEqual(list(quantiles.columns), ["prediction_p10", "prediction_p50", "prediction_p90"])
+        self.assertEqual(
+            list(quantiles.columns),
+            ["prediction_p10", "prediction_p50", "prediction_p90"],
+        )
         self.assertEqual(quantiles.iloc[0].tolist(), [9.0, 9.0, 9.0])
 
-    def test_predict_with_tft_model_partially_falls_back_for_unsupported_groups(self) -> None:
+    def test_predict_with_tft_model_partially_falls_back_for_unsupported_groups(
+        self,
+    ) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["series_1", "series_2"],
+                "client_id": ["series_1", "series_2"],
                 "location_id": ["store_1", "store_2"],
                 "product_id": ["sku_1", "sku_2"],
                 "dt": pd.to_datetime(["2024-02-01", "2024-02-01"]),
@@ -128,7 +171,9 @@ class TFTModelPredictTests(unittest.TestCase):
             fitted_model: FittedTFTModel,
             prepared_future: pd.DataFrame,
         ) -> object:
-            self.assertEqual(prepared_future[fitted_model.group_col].tolist(), ["series_1"])
+            self.assertEqual(
+                prepared_future[fitted_model.group_col].tolist(), ["series_1"]
+            )
             return object()
 
         with (
@@ -162,14 +207,17 @@ class TFTModelPredictTests(unittest.TestCase):
                 fitted_model,
                 frame,
                 ["location_id", "product_id"],
+                fallback_policy="baseline",
             )
 
         self.assertEqual(predictions.tolist(), [42.0, 13.0])
 
-    def test_predict_quantiles_with_tft_model_partially_falls_back_for_unsupported_groups(self) -> None:
+    def test_predict_quantiles_with_tft_model_partially_falls_back_for_unsupported_groups(
+        self,
+    ) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["series_1", "series_2"],
+                "client_id": ["series_1", "series_2"],
                 "location_id": ["store_1", "store_2"],
                 "product_id": ["sku_1", "sku_2"],
                 "dt": pd.to_datetime(["2024-02-01", "2024-02-01"]),
@@ -216,9 +264,13 @@ class TFTModelPredictTests(unittest.TestCase):
                 fitted_model,
                 frame,
                 ["location_id", "product_id"],
+                fallback_policy="baseline",
             )
 
-        self.assertEqual(list(quantiles.columns), ["prediction_p10", "prediction_p50", "prediction_p90"])
+        self.assertEqual(
+            list(quantiles.columns),
+            ["prediction_p10", "prediction_p50", "prediction_p90"],
+        )
         self.assertEqual(quantiles.iloc[0].tolist(), [40.0, 42.0, 44.0])
         self.assertEqual(quantiles.iloc[1].tolist(), [13.0, 13.0, 13.0])
 

@@ -26,10 +26,6 @@ select
     demand_dates.dataset_source,
     demand_dates.location_id,
     demand_dates.dt,
-    coalesce(school.school_holiday_flag, false) as school_holiday_flag_local,
-    school.school_holiday_name,
-    holiday_calendar.holiday_name,
-    cast(strftime(demand_dates.dt, '%d') as integer) in (1, 2, 3) as payday_flag,
     cast(strftime(demand_dates.dt, '%d') as integer) <= 3 as month_start_flag,
     cast(strftime(demand_dates.dt + interval 1 day, '%m') as integer) != cast(strftime(demand_dates.dt, '%m') as integer) as month_end_flag,
     case when holiday_calendar.holiday_name is null then 0 else 1 end as event_count_local,
@@ -38,7 +34,3 @@ from demand_dates
 left join holiday_calendar
   on demand_dates.country_code = holiday_calendar.country_code
  and demand_dates.dt = holiday_calendar.dt
-left join {{ ref("silver_open_school_holidays_daily") }} as school
-  on demand_dates.dataset_source = school.dataset_source
- and demand_dates.location_id = school.location_id
- and demand_dates.dt = school.dt

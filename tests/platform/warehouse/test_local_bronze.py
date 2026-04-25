@@ -19,6 +19,8 @@ for path in (PROJECT_ROOT, PLATFORM_SRC):
 
 from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
     BronzeTableSpec,
+    EmptyRequiredBronzeSourceError,
+    MissingRequiredBronzeSourceError,
     backup_local_bronze_sources,
     build_cloud_duckdb_config_from_env,
     build_local_duckdb_config_from_env,
@@ -28,6 +30,7 @@ from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
     load_all_bronze_tables,
     load_selected_bronze_specs,
     prepare_bronze_batch,
+    validate_bronze_sources,
 )
 
 
@@ -49,7 +52,6 @@ def _build_legacy_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSp
             CREATE TABLE IF NOT EXISTS bronze.bronze_open_location_metadata (
                 dataset_source VARCHAR,
                 location_id VARCHAR,
-                site_format VARCHAR,
                 source_file_path VARCHAR,
                 loaded_at TIMESTAMP
             );
@@ -83,13 +85,13 @@ def _assert_legacy_schema_loaded(local_db_path: Path) -> None:
     try:
         columns = connection.execute("PRAGMA table_info('bronze.bronze_open_location_metadata')").fetchall()
         loaded_row = connection.execute(
-            "SELECT dataset_source, location_id, site_format FROM bronze.bronze_open_location_metadata"
+            "SELECT dataset_source, location_id FROM bronze.bronze_open_location_metadata"
         ).fetchone()
     finally:
         connection.close()
     column_names = [cast(tuple[object, str], column)[1] for column in columns]
-    assert "site_format" in column_names
-    assert cast(tuple[str, str, str], loaded_row) == ("freshretail", "site_1", "bakery")
+    assert "site_format" not in column_names
+    assert cast(tuple[str, str], loaded_row) == ("freshretail", "site_1")
 
 
 class LoadBronzeDuckDBTests(unittest.TestCase):
@@ -195,16 +197,13 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "observed_demand_qty": 2.0,
                     "observed_revenue_net": 7.0,
                     "observed_discount_amount": None,
-                    "avg_selling_price": 3.5,
                     "promo_flag": None,
                     "holiday_flag": None,
                     "activity_flag": None,
                     "observed_stockout_flag": None,
                     "observed_stockout_available": False,
                     "observed_stockout_intensity": None,
-                    "location_open_flag": True,
                     "day_complete_flag": True,
-                    "missing_sales_flag": False,
                     "calendar_weekday_name": "Saturday",
                     "calendar_day_of_week": 5,
                     "calendar_month": 2,
@@ -218,7 +217,6 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "weather_temperature": None,
                     "weather_humidity": None,
                     "weather_wind_level": None,
-                    "anomaly_flag": False,
                     "silver_run_id": "manual",
                 }
             ]
@@ -321,6 +319,43 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("unit_price_raw", prepared.columns)
         self.assertEqual(prepared.loc[0, "source_partition"], "historical")
 
+    def test_validate_bronze_sources_fails_on_missing_required_source(self) -> None:
+        spec = BronzeTableSpec(
+            table_name="bronze_bakery_order_lines",
+            source_path=Path("missing.csv"),
+            ddl="create table x",
+            source_name="bakery",
+        )
+
+        with self.assertRaises(MissingRequiredBronzeSourceError):
+            validate_bronze_sources([spec])
+
+    def test_validate_bronze_sources_allows_missing_optional_source(self) -> None:
+        spec = BronzeTableSpec(
+            table_name="bronze_open_weather_daily",
+            source_path=Path("missing_weather.csv"),
+            ddl="create table x",
+            source_name="open_weather_daily",
+            required=False,
+            allow_empty=True,
+        )
+
+        validate_bronze_sources([spec])
+
+    def test_validate_bronze_sources_fails_on_empty_required_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "empty.csv"
+            source_path.write_text("", encoding="utf-8")
+            spec = BronzeTableSpec(
+                table_name="bronze_bakery_order_lines",
+                source_path=source_path,
+                ddl="create table x",
+                source_name="bakery",
+            )
+
+            with self.assertRaises(EmptyRequiredBronzeSourceError):
+                validate_bronze_sources([spec])
+
     def test_backup_local_bronze_sources_copies_files_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -376,6 +411,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
 
             row_counts = cast(dict[str, int], result["local_warehouse_row_counts"])
             self.assertEqual(row_counts["open_location_metadata"], 1)
+            self.assertIn("source_manifest_path", result)
             _assert_legacy_schema_loaded(local_db_path)
 
     def test_load_all_bronze_tables_loads_into_local_duckdb_and_keeps_backup(self) -> None:

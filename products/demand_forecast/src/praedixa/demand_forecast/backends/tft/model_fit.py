@@ -300,14 +300,30 @@ def _business_validation_logging_callback(
     callback_base: type[Any] = cast(type[Any], imports["Callback"])
 
     def _update_trainer_callback_metrics(
+        pl_module: Any,
         trainer: Any, metrics_payload: dict[str, float]
     ) -> None:
         callback_metrics = getattr(trainer, "callback_metrics", None)
         if callback_metrics is None:
             return
         try:
+            torch_module = imports.get("torch")
+            module_device = getattr(pl_module, "device", None)
             for metric_name, metric_value in metrics_payload.items():
-                callback_metrics[metric_name] = metric_value
+                tensor_factory = None
+                if torch_module is not None:
+                    tensor_factory = getattr(
+                        torch_module,
+                        "as_tensor",
+                        getattr(torch_module, "tensor", None),
+                    )
+                if callable(tensor_factory):
+                    callback_metrics[metric_name] = tensor_factory(
+                        float(metric_value),
+                        device=module_device,
+                    )
+                else:
+                    callback_metrics[metric_name] = float(metric_value)
         except (TypeError, KeyError, AttributeError):
             return
 
@@ -323,6 +339,7 @@ def _business_validation_logging_callback(
                 transient_model,
                 valid_frame,
                 feature_cols,
+                fallback_policy="raise",
             )
             business_metrics = _business_validation_metrics_payload(
                 valid_frame=valid_frame,
@@ -332,7 +349,7 @@ def _business_validation_logging_callback(
             )
             if not business_metrics:
                 return
-            _update_trainer_callback_metrics(trainer, business_metrics)
+            _update_trainer_callback_metrics(pl_module, trainer, business_metrics)
             LOGGER.info(
                 "TFT business validation metrics: epoch=%s business_val_wape=%.6f business_val_abs_bias=%.6f",
                 int(getattr(trainer, "current_epoch", 0)),
@@ -408,7 +425,7 @@ def fit_tft_model(
         if bool(
             cast(
                 Any,
-                resolved_params.get("enable_validation_metric_logging", True),
+                resolved_params.get("enable_business_validation_metrics", True),
             )
         ):
             business_metrics_callback = _business_validation_logging_callback(
@@ -425,9 +442,7 @@ def fit_tft_model(
             dataset_artifacts=resolved_dataset_artifacts,
             resolved_params=resolved_params,
             extra_callbacks=(
-                []
-                if business_metrics_callback is None
-                else [business_metrics_callback]
+                [] if business_metrics_callback is None else [business_metrics_callback]
             ),
         )
         interpretability_payload = extract_interpretability_payload(

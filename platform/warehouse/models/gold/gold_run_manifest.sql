@@ -11,7 +11,7 @@ select
     sum(case when target_demand_qty_d_plus_1 is null then 1 else 0 end) as null_target_rows,
     avg(sample_weight_source) as avg_sample_weight_source,
     avg(sample_weight_business) as avg_sample_weight_business
-from {{ ref("gold_daily_product_forecast_panel_d1") }}
+from {{ ref("gold_model_training_panel_d1") }}
 group by
     dataset_source,
     split_bucket

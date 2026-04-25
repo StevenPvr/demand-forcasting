@@ -3,14 +3,7 @@
 select
     dataset_source,
     location_id,
-    site_format,
-    service_model,
     drive_through_flag,
     delivery_flag,
-    pickup_flag,
-    late_night_flag,
-    trade_area_type,
-    office_density_bucket,
-    residential_density_bucket,
-    competition_intensity_bucket
+    pickup_flag
 from {{ ref("silver_open_location_metadata") }}

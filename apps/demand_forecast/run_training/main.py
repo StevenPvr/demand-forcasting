@@ -28,7 +28,9 @@ for path in reversed(SEARCH_PATHS):
 
 
 def main() -> None:
-    from praedixa.demand_forecast.training.main import main as training_main
+    from praedixa.demand_forecast.training.xgboost.main import (
+        main as training_main,
+    )
 
     training_main()
 

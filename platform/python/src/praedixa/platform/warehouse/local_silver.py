@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-import shutil
-import subprocess
 
 from praedixa.platform.runtime.constants import DEFAULT_BRONZE_SCHEMA
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_DBT_SELECT
@@ -13,10 +11,18 @@ from praedixa.platform.datasets.standardization.supplemental_corpus import build
 from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH
 from praedixa.platform.runtime.paths import PROJECT_ROOT
 from praedixa.platform.runtime.paths import SOURCES_DIR
-from praedixa.platform.runtime.paths import WAREHOUSE_PROJECT_DIR
 from praedixa.platform.runtime.warehouse import WarehouseRuntimeConfig
 from praedixa.platform.warehouse.bronze_specs import default_active_bronze_specs
 from praedixa.platform.warehouse.bronze_specs import supplemental_corpus_daily_ddl
+from praedixa.platform.warehouse.dbt_runner import dbt_packages_installed
+from praedixa.platform.warehouse.dbt_runner import ensure_dbt_profiles_file
+from praedixa.platform.warehouse.dbt_runner import resolve_dbt_executable
+from praedixa.platform.warehouse.dbt_runner import resolve_dbt_selector
+from praedixa.platform.warehouse.dbt_runner import resolve_dbt_test_exclude
+from praedixa.platform.warehouse.dbt_runner import resolve_dbt_test_selector
+from praedixa.platform.warehouse.dbt_runner import resolve_warehouse_project_dir
+from praedixa.platform.warehouse.dbt_runner import resolve_warehouse_project_dir_or_raise
+from praedixa.platform.warehouse.dbt_runner import run_dbt_command
 from praedixa.platform.warehouse.local_bronze import load_inline_bronze_frame
 from praedixa.platform.warehouse.local_bronze import load_selected_bronze_specs
 
@@ -25,32 +31,21 @@ DEFAULT_DATA_DIR = SOURCES_DIR
 DEFAULT_LOCAL_DUCKDB_PATH = LOCAL_DUCKDB_PATH
 DEFAULT_DBT_SELECT = DEFAULT_SILVER_DBT_SELECT
 
-
-def resolve_warehouse_project_dir(project_root: Path) -> Path | None:
-    """Resolve the dbt project directory from either a repo root or a project path."""
-
-    if (project_root / "dbt_project.yml").exists():
-        return project_root
-    platform_candidate = project_root / "platform" / "warehouse"
-    if (platform_candidate / "dbt_project.yml").exists():
-        return platform_candidate
-    legacy_candidate = project_root / "warehouse"
-    if (legacy_candidate / "dbt_project.yml").exists():
-        return legacy_candidate
-    if project_root == PROJECT_ROOT:
-        return WAREHOUSE_PROJECT_DIR
-    return None
-
-
-def resolve_warehouse_project_dir_or_raise(project_root: Path) -> Path:
-    """Resolve the dbt project directory or raise a helpful error."""
-
-    warehouse_project_dir = resolve_warehouse_project_dir(project_root)
-    if warehouse_project_dir is None:
-        raise FileNotFoundError(
-            f"Unable to resolve a dbt project directory from {project_root}"
-        )
-    return warehouse_project_dir
+__all__ = [
+    "LocalSilverRunConfig",
+    "build_default_local_silver_run_config",
+    "build_local_silver_env",
+    "dbt_packages_installed",
+    "ensure_dbt_profiles_file",
+    "resolve_dbt_executable",
+    "resolve_dbt_selector",
+    "resolve_dbt_test_exclude",
+    "resolve_dbt_test_selector",
+    "resolve_warehouse_project_dir",
+    "resolve_warehouse_project_dir_or_raise",
+    "run_dbt_command",
+    "run_local_silver",
+]
 
 
 @dataclass(frozen=True)
@@ -73,92 +68,6 @@ def build_local_silver_env(base_env: dict[str, str] | None = None) -> dict[str, 
         bronze_data_dir=DEFAULT_DATA_DIR,
     )
     return runtime.to_env(base_env=base_env)
-
-
-def resolve_dbt_executable(project_root: Path) -> str:
-    """Prefer the project-local dbt executable when available."""
-
-    candidate = project_root / ".venv" / "bin" / "dbt"
-    return str(candidate) if candidate.exists() else "dbt"
-
-
-def ensure_dbt_profiles_file(project_root: Path) -> Path:
-    """Ensure a real dbt profiles file exists for local IDE-friendly execution."""
-
-    warehouse_project_dir = resolve_warehouse_project_dir_or_raise(project_root)
-    profiles_path = warehouse_project_dir / "profiles.yml"
-    if profiles_path.exists():
-        return profiles_path
-
-    example_path = warehouse_project_dir / "profiles.example.yml"
-    if not example_path.exists():
-        raise FileNotFoundError(f"Missing dbt profiles example at {example_path}")
-
-    shutil.copy2(example_path, profiles_path)
-    return profiles_path
-
-
-def dbt_packages_installed(project_root: Path) -> bool:
-    """Return whether dbt dependencies are already installed locally."""
-
-    warehouse_project_dir = resolve_warehouse_project_dir(project_root)
-    if warehouse_project_dir is None:
-        return False
-    return (warehouse_project_dir / "dbt_packages").exists()
-
-
-def run_dbt_command(
-    dbt_executable: str,
-    command_name: str,
-    *,
-    project_dir: Path,
-    profiles_dir: Path,
-    env: dict[str, str],
-    cwd: Path,
-    select: str | None = None,
-    exclude: str | None = None,
-) -> None:
-    """Run one dbt command with the standard project/profile arguments."""
-
-    command = [
-        dbt_executable,
-        command_name,
-        "--project-dir",
-        str(project_dir),
-        "--profiles-dir",
-        str(profiles_dir),
-    ]
-    if select is not None:
-        command.extend(["--select", select])
-    if exclude is not None:
-        command.extend(["--exclude", exclude])
-    run_subprocess(command, env=env, cwd=cwd)
-
-
-def resolve_dbt_selector(selector: str) -> str:
-    """Ensure the dbt selector includes upstream parents for runnable silver builds."""
-
-    stripped = selector.strip()
-    return stripped if stripped.startswith("+") else f"+{stripped}"
-
-
-def resolve_dbt_test_selector(selector: str) -> str:
-    """Keep silver test selection scoped to silver nodes instead of downstream gold tests."""
-
-    return selector.strip().lstrip("+")
-
-
-def resolve_dbt_test_exclude() -> str:
-    """Exclude gold-tagged data tests when validating only the silver layer."""
-
-    return "tag:gold"
-
-
-def run_subprocess(command: list[str], *, env: dict[str, str], cwd: Path) -> None:
-    """Run one checked subprocess with consistent logging."""
-
-    logger.info("Running command: %s", " ".join(command))
-    subprocess.run(command, check=True, cwd=cwd, env=env)
 
 
 def _maybe_load_local_bronze(config: LocalSilverRunConfig, env: dict[str, str]) -> dict[str, object] | None:

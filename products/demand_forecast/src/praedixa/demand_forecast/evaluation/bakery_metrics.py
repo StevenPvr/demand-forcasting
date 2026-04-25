@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import re
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -63,6 +64,23 @@ def smape(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> flo
     valid_mask = denominator > 0.0
     scaled_errors[valid_mask] = (2.0 * np.abs(actual[valid_mask] - predicted[valid_mask])) / denominator[valid_mask]
     return float(np.mean(scaled_errors))
+
+
+def wape_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:
+    actual = np.asarray(y_true, dtype=float)
+    predicted = np.asarray(y_pred, dtype=float)
+    denominator = float(np.abs(actual).sum())
+    if abs(denominator) <= _FLOAT_COMPARISON_EPSILON:
+        return math.inf
+    return float(np.abs(actual - predicted).sum() / denominator)
+
+
+def bias_score(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:
+    actual = np.asarray(y_true, dtype=float)
+    predicted = np.asarray(y_pred, dtype=float)
+    if len(actual) == 0:
+        return 0.0
+    return float(np.mean(predicted - actual))
 
 
 def mase_score(
@@ -195,6 +213,7 @@ def compute_metrics_payload(
     overall_lower_95 = predictions_df["lower_95"]
     overall_upper_95 = predictions_df["upper_95"]
     product_maes = [float(payload["mae"]) for payload in per_product_metrics.values() if payload["mae"] is not None]
+    product_wapes = [float(payload["wape"]) for payload in per_product_metrics.values() if payload["wape"] is not None]
     overall_metrics = _overall_metrics_payload(
         predictions_df=predictions_df,
         actual_series=actual_series,
@@ -204,12 +223,61 @@ def compute_metrics_payload(
         overall_lower_95=overall_lower_95,
         overall_upper_95=overall_upper_95,
         product_maes=product_maes,
+        product_wapes=product_wapes,
     )
     return {
         "product_count": int(len(per_product_metrics)),
         "overall_metrics": overall_metrics,
         "per_product_metrics": per_product_metrics,
+        "segment_metrics": _segment_metrics_payload(predictions_df),
     }
+
+
+def _basic_error_metrics(frame: pd.DataFrame) -> dict[str, float | int]:
+    actual = frame["actual"].astype(float)
+    predicted = frame["prediction_raw"].astype(float)
+    return {
+        "rows": int(len(frame)),
+        "mae": mae_score(actual, predicted),
+        "wape": wape_score(actual, predicted),
+        "bias": bias_score(actual, predicted),
+        "abs_bias": abs(bias_score(actual, predicted)),
+    }
+
+
+def _label_quality_bucket(value: object) -> str:
+    try:
+        numeric_value = float(cast(Any, value))
+    except (TypeError, ValueError):
+        return "unknown"
+    if numeric_value >= 0.95:
+        return "high"
+    if numeric_value >= 0.75:
+        return "medium"
+    return "low"
+
+
+def _segment_metrics_payload(predictions_df: pd.DataFrame) -> dict[str, object]:
+    segments: dict[str, object] = {}
+    for column in ("dataset_source", "target_semantics", "censor_flag"):
+        if column not in predictions_df.columns:
+            continue
+        segments[column] = {
+            str(segment_value): _basic_error_metrics(segment_frame)
+            for segment_value, segment_frame in predictions_df.groupby(column, dropna=False, sort=True)
+        }
+    if "label_quality_score" in predictions_df.columns:
+        bucketed = predictions_df.copy()
+        bucketed["label_quality_bucket"] = bucketed["label_quality_score"].map(_label_quality_bucket)
+        segments["label_quality_bucket"] = {
+            str(segment_value): _basic_error_metrics(segment_frame)
+            for segment_value, segment_frame in bucketed.groupby(
+                "label_quality_bucket",
+                dropna=False,
+                sort=True,
+            )
+        }
+    return segments
 
 
 def _base_predictions_frame(
@@ -221,7 +289,7 @@ def _base_predictions_frame(
 ) -> pd.DataFrame:
     reference_dates = pd.to_datetime(reference_test_df[REFERENCE_DATE_COL])
     point_predictions = np.asarray(prediction_raw, dtype=float)
-    return pd.DataFrame(
+    output = pd.DataFrame(
         {
             "origin_date": (reference_dates - pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d"),
             "target_date": reference_dates.dt.strftime("%Y-%m-%d"),
@@ -236,6 +304,16 @@ def _base_predictions_frame(
             "product": reference_test_df[REFERENCE_PRODUCT_COL].astype(str).tolist(),
         }
     )
+    for column in (
+        "dataset_source",
+        "target_semantics",
+        "censor_flag",
+        "label_quality_score",
+        "usable_for_training_flag",
+    ):
+        if column in reference_test_df.columns:
+            output[column] = reference_test_df[column].to_numpy(copy=False)
+    return output
 
 
 def _supported_prediction_quantiles(quantile_frame: pd.DataFrame) -> list[str]:
@@ -287,6 +365,9 @@ def _per_product_metrics_payload(
     return {
         "test_rows": int(len(product_predictions_df)),
         "mae": mae_score(y_true, y_pred),
+        "wape": wape_score(y_true, y_pred),
+        "bias": bias_score(y_true, y_pred),
+        "abs_bias": abs(bias_score(y_true, y_pred)),
         "rmse": rmse_score(y_true, y_pred),
         "smape": smape(y_true, y_pred),
         "mase": mase_score(y_true, y_pred, history_values, seasonal_period=7),
@@ -307,33 +388,52 @@ def _overall_metrics_payload(
     overall_lower_95: pd.Series,
     overall_upper_95: pd.Series,
     product_maes: list[float],
+    product_wapes: list[float],
 ) -> dict[str, float | int | None]:
+    coverage_80 = interval_coverage(actual_series, overall_lower_80, overall_upper_80)
+    coverage_95 = interval_coverage(actual_series, overall_lower_95, overall_upper_95)
     return {
         "test_rows": int(len(predictions_df)),
         "mae": mae_score(actual_series, predicted_series),
+        "wape": wape_score(actual_series, predicted_series),
+        "bias": bias_score(actual_series, predicted_series),
+        "abs_bias": abs(bias_score(actual_series, predicted_series)),
         "rmse": rmse_score(actual_series, predicted_series),
         "smape": smape(actual_series, predicted_series),
-        "coverage_80": interval_coverage(actual_series, overall_lower_80, overall_upper_80),
-        "coverage_95": interval_coverage(actual_series, overall_lower_95, overall_upper_95),
+        "coverage_80": coverage_80,
+        "coverage_95": coverage_95,
+        "coverage_error_80": None if coverage_80 is None else abs(coverage_80 - 0.80),
+        "coverage_error_95": None if coverage_95 is None else abs(coverage_95 - 0.95),
         "mean_product_mae": float(np.mean(product_maes)),
+        "macro_product_wape": float(np.mean(product_wapes)) if product_wapes else None,
     }
 
 
 def compute_probabilistic_metrics_payload(predictions_df: pd.DataFrame) -> dict[str, object]:
     quantile_columns = _prediction_quantile_columns(predictions_df)
     actual_series = predictions_df["actual"].astype(float)
+    coverage_80 = interval_coverage(actual_series, predictions_df["lower_80"], predictions_df["upper_80"])
+    coverage_95 = interval_coverage(actual_series, predictions_df["lower_95"], predictions_df["upper_95"])
     overall_metrics: dict[str, float | None] = {
-        "coverage_80": interval_coverage(actual_series, predictions_df["lower_80"], predictions_df["upper_80"]),
-        "coverage_95": interval_coverage(actual_series, predictions_df["lower_95"], predictions_df["upper_95"]),
+        "coverage_80": coverage_80,
+        "coverage_95": coverage_95,
+        "coverage_error_80": None if coverage_80 is None else abs(coverage_80 - 0.80),
+        "coverage_error_95": None if coverage_95 is None else abs(coverage_95 - 0.95),
         "interval_width_80": interval_width(predictions_df["lower_80"], predictions_df["upper_80"]),
         "interval_width_95": interval_width(predictions_df["lower_95"], predictions_df["upper_95"]),
     }
+    pinball_values: list[float] = []
     for column, quantile in quantile_columns:
-        overall_metrics[_pinball_metric_key(quantile)] = pinball_loss(
+        loss_value = pinball_loss(
             actual_series,
             predictions_df[column].astype(float),
             quantile,
         )
+        pinball_values.append(loss_value)
+        overall_metrics[_pinball_metric_key(quantile)] = loss_value
+    overall_metrics["mean_pinball_loss"] = (
+        float(np.mean(pinball_values)) if pinball_values else None
+    )
 
     per_product_metrics: dict[str, dict[str, float | None]] = {}
     for product_name, product_predictions in predictions_df.groupby("product", sort=True):

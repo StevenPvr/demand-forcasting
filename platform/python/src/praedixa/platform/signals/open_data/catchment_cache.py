@@ -43,7 +43,6 @@ def empty_location_catchment_cache_frame() -> pd.DataFrame:
         columns=[
             "dataset_source",
             "location_id",
-            "site_format",
             "latitude",
             "longitude",
             "cache_key",
@@ -67,7 +66,6 @@ def _location_catchment_cache_key(
     *,
     dataset_source: str,
     location_id: str,
-    site_format: str,
     latitude: float,
     longitude: float,
 ) -> str:
@@ -75,7 +73,6 @@ def _location_catchment_cache_key(
         [
             dataset_source,
             location_id,
-            site_format or "unknown",
             f"{latitude:.5f}",
             f"{longitude:.5f}",
         ]
@@ -96,7 +93,6 @@ def _location_metadata_with_cache_keys(location_metadata: pd.DataFrame) -> pd.Da
             _location_catchment_cache_key(
                 dataset_source=str(row["dataset_source"]),
                 location_id=str(row["location_id"]),
-                site_format=str(row.get("site_format", "unknown") or "unknown"),
                 latitude=float(cast(float | int, latitude)),
                 longitude=float(cast(float | int, longitude)),
             )
@@ -149,7 +145,7 @@ def _location_catchment_cache_rows(
     if fetched_frame.empty:
         return empty_location_catchment_cache_frame()
     joined = fetchable_locations[
-        ["dataset_source", "location_id", "site_format", "latitude", "longitude", "cache_key"]
+        ["dataset_source", "location_id", "latitude", "longitude", "cache_key"]
     ].merge(
         fetched_frame,
         on=["dataset_source", "location_id"],

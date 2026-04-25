@@ -48,7 +48,6 @@ class FirstPartyTests(unittest.TestCase):
                 "location_id": ["site_1", "site_1"],
                 "product_id": ["sku_1", "sku_1"],
                 "observed_demand_qty": [12, 15],
-                "avg_selling_price": [4.5, 4.5],
                 "promo_flag": [False, True],
             }
         )
@@ -64,7 +63,6 @@ class FirstPartyTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0]["dataset_source"], "first_party_daily")
         self.assertEqual(records[0]["series_id"], "site_1__sku_1")
-        self.assertIsNone(records[0]["location_open_flag"])
         self.assertIsNone(records[0]["day_complete_flag"])
         self.assertEqual(records[0]["target_semantics"], "observed_sales")
         self.assertEqual(records[0]["censor_flag"], False)

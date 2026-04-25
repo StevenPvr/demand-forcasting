@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 from typing import Any
 
 
@@ -40,6 +41,8 @@ def _resolved_cpu_count(cpu_count: int | None = None) -> int:
 
 
 def _default_local_cpu_num_workers(cpu_count: int | None = None) -> int:
+    if platform.system() == "Darwin":
+        return 0
     resolved_cpu_count = _resolved_cpu_count(cpu_count)
     return max(0, min(4, resolved_cpu_count - 1))
 

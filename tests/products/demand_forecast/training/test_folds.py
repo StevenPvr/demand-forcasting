@@ -13,7 +13,7 @@ PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (pa
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from praedixa.demand_forecast.training.folds import (  # noqa: E402
+from praedixa.demand_forecast.training.validation.folds import (  # noqa: E402
     build_grouped_tuning_walk_forward_folds_by_dataset,
     build_tuning_walk_forward_folds,
     build_tuning_walk_forward_folds_by_dataset,

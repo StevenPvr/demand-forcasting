@@ -17,16 +17,13 @@ FIRST_PARTY_DAILY_TEMPLATE_COLUMNS = [
     "observed_demand_qty",
     "observed_revenue_net",
     "observed_discount_amount",
-    "avg_selling_price",
     "promo_flag",
     "holiday_flag",
     "activity_flag",
     "observed_stockout_flag",
     "observed_stockout_available",
     "observed_stockout_intensity",
-    "location_open_flag",
     "day_complete_flag",
-    "missing_sales_flag",
     "event_name_1",
     "event_type_1",
     "event_name_2",
@@ -35,20 +32,15 @@ FIRST_PARTY_DAILY_TEMPLATE_COLUMNS = [
     "weather_temperature",
     "weather_humidity",
     "weather_wind_level",
-    "anomaly_flag",
 ]
 
 FIRST_PARTY_LOCATION_PROFILE_TEMPLATE_COLUMNS = [
     "location_id",
     "country_code",
     "city_name",
-    "site_format",
-    "service_model",
     "drive_through_flag",
     "delivery_flag",
     "pickup_flag",
-    "late_night_flag",
-    "trade_area_type",
 ]
 
 FrameColumnDefault: TypeAlias = pd.Series | str | bool | float | None
@@ -57,8 +49,6 @@ FIRST_PARTY_PRODUCT_PROFILE_TEMPLATE_COLUMNS = [
     "product_id",
     "product_family",
     "product_subfamily",
-    "menu_role",
-    "price_band",
 ]
 
 
@@ -162,7 +152,6 @@ def _default_first_party_values(
         "category_level_3": None,
         "observed_revenue_net": None,
         "observed_discount_amount": None,
-        "avg_selling_price": None,
         "target_semantics": "observed_sales",
         "target_source": "observed_sales",
         "promo_flag": False,
@@ -171,9 +160,7 @@ def _default_first_party_values(
         "observed_stockout_flag": None,
         "observed_stockout_available": False,
         "observed_stockout_intensity": None,
-        "location_open_flag": None,
         "day_complete_flag": None,
-        "missing_sales_flag": None,
         "event_name_1": None,
         "event_type_1": None,
         "event_name_2": None,
@@ -182,7 +169,6 @@ def _default_first_party_values(
         "weather_temperature": None,
         "weather_humidity": None,
         "weather_wind_level": None,
-        "anomaly_flag": False,
     }
     defaults.update(_calendar_defaults(normalized))
     return defaults

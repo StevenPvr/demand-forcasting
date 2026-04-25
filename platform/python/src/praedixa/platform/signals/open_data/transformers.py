@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from praedixa.platform.signals.open_data.location_catchment import (
-    COMPETITOR_TAGS_BY_SITE_FORMAT,
+    COMPETITOR_TAGS_BY_SEGMENT,
     OVERPASS_BASE_URL,
     RESIDENTIAL_POPULATION_WEIGHTS,
     fetch_location_catchment_frame,
@@ -19,7 +19,7 @@ from praedixa.platform.signals.open_data.weather import fetch_weather_frame
 
 
 __all__ = [
-    "COMPETITOR_TAGS_BY_SITE_FORMAT",
+    "COMPETITOR_TAGS_BY_SEGMENT",
     "FIXED_SOURCE_METADATA",
     "OVERPASS_BASE_URL",
     "RESIDENTIAL_POPULATION_WEIGHTS",

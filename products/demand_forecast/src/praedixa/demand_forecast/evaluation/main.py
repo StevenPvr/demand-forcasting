@@ -31,7 +31,9 @@ _bootstrap_import_paths()
 
 
 def main() -> None:
-    from praedixa.demand_forecast.backends.tft.backend import TFTBackendNotReadyError
+    from praedixa.demand_forecast.backends.xgboost.backend import (
+        XGBoostBackendNotReadyError,
+    )
     from praedixa.demand_forecast.evaluation.pipeline import (
         EvaluationBuildRequest,
         build_evaluation_outputs,
@@ -42,10 +44,14 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     try:
-        build_evaluation_outputs(EvaluationBuildRequest())
-    except TFTBackendNotReadyError:
+        build_evaluation_outputs(
+            EvaluationBuildRequest(
+                model_backend="xgboost",
+            )
+        )
+    except XGBoostBackendNotReadyError:
         logging.getLogger(__name__).error(
-            "Le backend TFT unique n'est pas encore branche : l'etape evaluation reste un placeholder structurel."
+            "Le backend XGBoost n'est pas disponible : l'evaluation bakery ne peut pas etre executee."
         )
         raise
 

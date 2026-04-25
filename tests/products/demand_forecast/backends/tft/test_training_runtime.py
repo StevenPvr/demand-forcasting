@@ -239,18 +239,38 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
         self.assertIsNone(fake_torch.warn_only)
         self.assertTrue(fake_torch.backends.cudnn.benchmark)
 
-    def test_early_stopping_callbacks_monitor_wape_and_loss(self) -> None:
+    def test_early_stopping_callbacks_monitor_business_wape_and_loss(self) -> None:
         callbacks = cast(Any, training_runtime_module)._early_stopping_callbacks(
             {
                 "EarlyStopping": lambda **kwargs: kwargs,
             },
-            resolved_params={"patience": 8, "loss_patience": 6},
+            resolved_params={
+                "patience": 8,
+                "loss_patience": 6,
+                "validation_monitor_metric": "business_val_wape",
+                "enable_business_validation_metrics": True,
+            },
         )
 
         self.assertEqual(
             [(callback["monitor"], callback["patience"]) for callback in callbacks],
-            [("val_wape", 8), ("val_loss", 6)],
+            [("business_val_wape", 8), ("val_loss", 6)],
         )
+
+    def test_early_stopping_falls_back_to_model_wape_without_business_metrics(self) -> None:
+        callbacks = cast(Any, training_runtime_module)._early_stopping_callbacks(
+            {
+                "EarlyStopping": lambda **kwargs: kwargs,
+            },
+            resolved_params={
+                "patience": 8,
+                "loss_patience": 0,
+                "validation_monitor_metric": "business_val_wape",
+                "enable_business_validation_metrics": False,
+            },
+        )
+
+        self.assertEqual(callbacks[0]["monitor"], "val_wape")
 
     def test_find_learning_rate_uses_tuner_suggestion_when_enabled(self) -> None:
         tuner_calls: list[dict[str, object]] = []

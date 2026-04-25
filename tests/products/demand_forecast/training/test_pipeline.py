@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from typing import Any, cast
 from unittest.mock import patch
@@ -15,7 +16,7 @@ PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (pa
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from praedixa.demand_forecast.training.pipeline import (  # noqa: E402
+from praedixa.demand_forecast.training.orchestration.pipeline import (  # noqa: E402
     OptimisationBuildRequest,
     build_optimisation_outputs,
     build_grouped_tuning_walk_forward_folds_by_dataset,
@@ -23,8 +24,12 @@ from praedixa.demand_forecast.training.pipeline import (  # noqa: E402
     build_tuning_walk_forward_folds_by_dataset,
     evaluate_statistical_baselines_macro,
 )
-from praedixa.demand_forecast.training.constants import DEFAULT_GOLD_TABLE  # noqa: E402
-from praedixa.demand_forecast.training.feature_audit import drop_constant_feature_columns  # noqa: E402
+from praedixa.demand_forecast.training.orchestration.steps import (  # noqa: E402
+    LoadedOptimisationFrames,
+    prepare_optimisation_context,
+)
+from praedixa.demand_forecast.training.config.constants import DEFAULT_GOLD_TABLE  # noqa: E402
+from praedixa.demand_forecast.training.validation.feature_audit import drop_constant_feature_columns  # noqa: E402
 
 
 def _mock_hpo_result(*, mean_wape: float, stage_a_trials: int, stage_b_trials: int) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
@@ -51,6 +56,18 @@ def _mock_hpo_result(*, mean_wape: float, stage_a_trials: int, stage_b_trials: i
     )
 
 
+def _mock_backend(*, mean_wape: float, stage_a_trials: int, stage_b_trials: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        name="xgboost",
+        require_available=lambda stage: None,
+        optimize_fn=lambda **kwargs: _mock_hpo_result(
+            mean_wape=mean_wape,
+            stage_a_trials=stage_a_trials,
+            stage_b_trials=stage_b_trials,
+        ),
+    )
+
+
 def _sinusoidal_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     train_dates = pd.date_range("2024-04-01", periods=30, freq="D")
     tuning_dates = pd.date_range("2024-05-01", periods=18, freq="D")
@@ -66,7 +83,7 @@ def _sinusoidal_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "target_day_of_week": [int(value) for value in train_dates.dayofweek],
                 "target_holiday_flag": np.tile([0, 1, 0], 10),
                 "current_day_demand_qty": shifted_signal[:30] * 2.0 + 0.1,
-                "avg_selling_price": [2.4] * 30,
+                "rolling_mean_7": shifted_signal[:30] * 1.8,
             }
         ),
         pd.DataFrame(
@@ -79,7 +96,7 @@ def _sinusoidal_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "target_day_of_week": [int(value) for value in tuning_dates.dayofweek],
                 "target_holiday_flag": np.tile([0, 1, 0], 6),
                 "current_day_demand_qty": shifted_signal[30:] * 2.0 + 0.1,
-                "avg_selling_price": [2.4] * 18,
+                "rolling_mean_7": shifted_signal[30:] * 1.8,
             }
         ),
     )
@@ -116,13 +133,13 @@ def _gold_frame() -> pd.DataFrame:
             pd.DataFrame(
                 {
                     "dataset_source": [dataset_source] * 120,
-                    "series_id": [f"{location_id}__{product_id}"] * 120,
+                    "client_id": [f"{location_id}__{product_id}"] * 120,
                     "dt": dates,
                     "location_id": [location_id] * 120,
                     "product_id": [product_id] * 120,
                     "target_demand_qty_d_plus_1": base_signal,
                     "current_day_demand_qty": base_signal,
-                    "avg_selling_price": np.full(120, 2.5 + dataset_offset * 0.1),
+                    "rolling_mean_7": base_signal,
                     "target_day_of_week": dates.dayofweek.astype(int),
                     "target_holiday_flag": np.zeros(120, dtype=bool),
                     "split_bucket": ["train"] * 80 + ["val"] * 40,
@@ -145,13 +162,40 @@ def _write_gold_table(duckdb_path: Path) -> None:
 
 class OptimisationPipelineTests(unittest.TestCase):
     def test_training_defaults_to_model_facing_gold_panel(self) -> None:
-        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_daily_product_forecast_panel_d1")
+        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_model_training_panel_d1")
 
     def test_optimisation_request_defaults_to_full_sampling(self) -> None:
         request = OptimisationBuildRequest()
 
         self.assertEqual(request.train_sample_fraction, 1.0)
         self.assertEqual(request.tuning_sample_fraction, 1.0)
+        self.assertEqual(request.model_backend, "xgboost")
+
+    def test_xgboost_context_keeps_store_product_and_client_identifiers_as_features(
+        self,
+    ) -> None:
+        train_frame, tuning_frame = _sinusoidal_frames()
+        loaded = LoadedOptimisationFrames(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            sample_store_col="location_id",
+            train_sampling_metadata={},
+            tuning_sampling_metadata={},
+            train_path=None,
+            tuning_path=None,
+        )
+
+        context = prepare_optimisation_context(
+            loaded=loaded,
+            date_col="dt",
+            target_col="target",
+            model_backend="xgboost",
+            logger=__import__("logging").getLogger(__name__),
+        )
+
+        self.assertIn("client_id", context.feature_cols)
+        self.assertIn("location_id", context.feature_cols)
+        self.assertIn("product_id", context.feature_cols)
 
     def test_constant_metadata_features_are_kept_for_tft_training(self) -> None:
         frame = pd.DataFrame(
@@ -165,6 +209,7 @@ class OptimisationPipelineTests(unittest.TestCase):
         feature_cols, constant_feature_cols = drop_constant_feature_columns(
             frame,
             ["country_code", "city_name", "current_day_demand_qty"],
+            tuning_frame=frame,
         )
 
         self.assertEqual(
@@ -172,6 +217,47 @@ class OptimisationPipelineTests(unittest.TestCase):
             ["country_code", "city_name", "current_day_demand_qty"],
         )
         self.assertEqual(constant_feature_cols, [])
+
+    def test_zero_only_features_are_dropped_across_train_and_tuning(self) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "country_code": ["FR", "FR"],
+                "all_zero_real": [0.0, 0.0],
+                "all_zero_bool": [False, False],
+                "all_zero_category": ["0", "0"],
+                "train_zero_tuning_nonzero": [0.0, 0.0],
+            }
+        )
+        tuning_frame = pd.DataFrame(
+            {
+                "country_code": ["FR", "FR"],
+                "all_zero_real": [0.0, 0.0],
+                "all_zero_bool": [False, False],
+                "all_zero_category": ["0", "0"],
+                "train_zero_tuning_nonzero": [0.0, 1.0],
+            }
+        )
+
+        feature_cols, constant_feature_cols = drop_constant_feature_columns(
+            train_frame,
+            [
+                "country_code",
+                "all_zero_real",
+                "all_zero_bool",
+                "all_zero_category",
+                "train_zero_tuning_nonzero",
+            ],
+            tuning_frame=tuning_frame,
+        )
+
+        self.assertEqual(
+            feature_cols,
+            ["country_code", "train_zero_tuning_nonzero"],
+        )
+        self.assertEqual(
+            constant_feature_cols,
+            ["all_zero_real", "all_zero_bool", "all_zero_category"],
+        )
 
     def test_build_tuning_walk_forward_folds_uses_expanding_train_on_tuning_block(self) -> None:
         tuning_frame = pd.DataFrame(
@@ -281,8 +367,12 @@ class OptimisationPipelineTests(unittest.TestCase):
             train_input_path, tuning_input_path, train_frame, tuning_frame = _write_selected_inputs(root)
 
             with patch(
-                "praedixa.demand_forecast.training.orchestrator.optimize_tft_model_params",
-                return_value=_mock_hpo_result(mean_wape=0.15, stage_a_trials=3, stage_b_trials=1),
+                "praedixa.demand_forecast.training.orchestration.orchestrator.resolve_optimisation_model_backend",
+                return_value=_mock_backend(
+                    mean_wape=0.15,
+                    stage_a_trials=3,
+                    stage_b_trials=1,
+                ),
             ):
                 build_optimisation_outputs(
                     OptimisationBuildRequest(
@@ -301,6 +391,7 @@ class OptimisationPipelineTests(unittest.TestCase):
             self.assertGreaterEqual(metadata["feature_count"], 1)
             self.assertEqual(metadata["train_rows"], len(train_frame))
             self.assertEqual(metadata["tuning_rows"], len(tuning_frame))
+            self.assertEqual(metadata["model_backend"], "xgboost")
             self.assertEqual(metadata["hpo_runtime"]["pruner"]["type"], "MedianPruner")
             self.assertEqual(metadata["hpo_runtime"]["execution_policy"]["accelerator"], "cpu")
 
@@ -312,8 +403,12 @@ class OptimisationPipelineTests(unittest.TestCase):
             _write_gold_table(duckdb_path)
 
             with patch(
-                "praedixa.demand_forecast.training.orchestrator.optimize_tft_model_params",
-                return_value=_mock_hpo_result(mean_wape=0.25, stage_a_trials=1, stage_b_trials=1),
+                "praedixa.demand_forecast.training.orchestration.orchestrator.resolve_optimisation_model_backend",
+                return_value=_mock_backend(
+                    mean_wape=0.25,
+                    stage_a_trials=1,
+                    stage_b_trials=1,
+                ),
             ):
                 build_optimisation_outputs(
                     OptimisationBuildRequest(

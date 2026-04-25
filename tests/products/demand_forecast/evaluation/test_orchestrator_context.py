@@ -48,9 +48,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "dataset_source": ["bakery"] * 4,
             "location_id": ["bakery_store_1"] * 4,
             "product_id": ["croissant"] * 4,
-            "series_id": ["bakery_store_1__croissant"] * 4,
-            "client_id": ["public_bakery_sales"] * 4,
-            "avg_selling_price": [2.0, 2.0, 2.1, 2.1],
+            "client_id": ["bakery_store_1__croissant"] * 4,
+            "rolling_mean_7": [12.0, 13.0, 14.0, 15.0],
             "observed_discount_amount": [1.0, 2.0, 3.0, 4.0],
             "weather_humidity": [40.0, 42.0, 41.0, 43.0],
             "target_demand_qty_d_plus_1": train_targets,
@@ -63,9 +62,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "dataset_source": ["bakery"] * 2,
             "location_id": ["bakery_store_1"] * 2,
             "product_id": ["croissant"] * 2,
-            "series_id": ["bakery_store_1__croissant"] * 2,
-            "client_id": ["public_bakery_sales"] * 2,
-            "avg_selling_price": [2.2, 2.2],
+            "client_id": ["bakery_store_1__croissant"] * 2,
+            "rolling_mean_7": [16.0, 17.0],
             "observed_discount_amount": [5.0, 6.0],
             "weather_humidity": [44.0, 45.0],
             "target_demand_qty_d_plus_1": valid_targets,
@@ -78,9 +76,8 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "dataset_source": ["bakery"] * 2,
             "location_id": ["bakery_store_1"] * 2,
             "product_id": ["croissant"] * 2,
-            "series_id": ["bakery_store_1__croissant"] * 2,
-            "client_id": ["public_bakery_sales"] * 2,
-            "avg_selling_price": [2.3, 2.4],
+            "client_id": ["bakery_store_1__croissant"] * 2,
+            "rolling_mean_7": [18.0, 19.0],
             "observed_discount_amount": [np.nan, 7.0],
             "weather_humidity": [np.nan, np.nan],
             "target_demand_qty_d_plus_1": test_targets,
@@ -122,11 +119,11 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
 
 
 class EvaluationOrchestratorContextTests(unittest.TestCase):
-    def test_evaluation_build_request_uses_full_sample_defaults(self) -> None:
+    def test_evaluation_build_request_uses_sampled_train_validation_defaults(self) -> None:
         request = EvaluationBuildRequest()
 
-        self.assertEqual(request.train_sample_fraction, 1.0)
-        self.assertEqual(request.tuning_sample_fraction, 1.0)
+        self.assertEqual(request.train_sample_fraction, 0.10)
+        self.assertEqual(request.tuning_sample_fraction, 0.10)
 
     def test_load_evaluation_frames_routes_bakery_reference_mode_with_current_defaults(self) -> None:
         request = EvaluationBuildRequest()
@@ -153,8 +150,9 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         mocked_load_gold.assert_called_once_with(
             duckdb_path=request.duckdb_path,
             gold_table=request.gold_table,
-            train_sample_fraction=1.0,
-            tuning_sample_fraction=1.0,
+            train_sample_fraction=0.10,
+            tuning_sample_fraction=0.10,
+            model_backend="tft",
         )
 
     def test_prepare_evaluation_context_accepts_best_params_for_bakery_overlap(self) -> None:
@@ -187,7 +185,7 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         self.assertEqual(context.target_contract.learning_target_col, DEFAULT_ABSOLUTE_TARGET_COL)
         self.assertEqual(context.target_contract.absolute_target_col, "target_demand_qty_d_plus_1")
         self.assertEqual(context.dropped_test_rows, 0)
-        self.assertIn("avg_selling_price", context.feature_cols)
+        self.assertIn("rolling_mean_7", context.feature_cols)
         self.assertIn("weather_humidity", context.missing_in_test_feature_cols)
         self.assertNotIn("weather_humidity", context.feature_cols)
         self.assertIn("observed_discount_amount", context.feature_cols)
@@ -195,6 +193,58 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         self.assertIsNotNone(context.overlap_metadata)
         assert context.overlap_metadata is not None
         self.assertEqual(context.overlap_metadata["scorable_test_rows"], 2)
+
+    def test_xgboost_bakery_context_rejects_feature_contract_mismatch(self) -> None:
+        loaded = _build_bakery_loaded_frames()
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            best_params_path = Path(temp_dir) / "best_optuna_params.json"
+            best_params_path.write_text(
+                json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
+                encoding="utf-8",
+            )
+            with patch(
+                "praedixa.demand_forecast.evaluation.orchestrator_context._training_manifest_feature_columns",
+                return_value=["dataset_source", "rolling_mean_7", "missing_feature"],
+            ):
+                with self.assertRaisesRegex(ValueError, "XGBoost evaluation feature contract mismatch"):
+                    prepare_evaluation_context(
+                        loaded=loaded,
+                        requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,
+                        best_params_path=best_params_path,
+                        logger=logger,
+                        model_backend="xgboost",
+                    )
+
+    def test_xgboost_transfer_holdout_rejects_bakery_pretest_training(self) -> None:
+        loaded = _build_bakery_loaded_frames()
+        loaded = LoadedEvaluationFrames(
+            evaluation_mode="bakery_reference_transfer_holdout",
+            train_frame=loaded.train_frame,
+            valid_frame=loaded.valid_frame,
+            test_frame=loaded.test_frame,
+            history_reference=loaded.history_reference,
+            scored_reference_test=loaded.scored_reference_test,
+            overlap_metadata=loaded.overlap_metadata,
+        )
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            best_params_path = Path(temp_dir) / "best_optuna_params.json"
+            best_params_path.write_text(
+                json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "cannot train on bakery"):
+                prepare_evaluation_context(
+                    loaded=loaded,
+                    requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,
+                    best_params_path=best_params_path,
+                    logger=logger,
+                    model_backend="xgboost",
+                )
 
 
 if __name__ == "__main__":

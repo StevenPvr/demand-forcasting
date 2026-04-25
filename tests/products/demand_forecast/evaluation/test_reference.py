@@ -35,7 +35,6 @@ def _reference_gold_base_identity_payload() -> dict[str, list[object]]:
         "dataset_source": ["bakery"] * 8,
         "source_partition": ["p"] * 8,
         "source_run_id": ["r"] * 8,
-        "series_id": ["series_a"] * 8,
         "dt": list(pd.date_range("2024-01-01", periods=8, freq="D")),
         "target_dt": list(pd.date_range("2024-01-02", periods=8, freq="D")),
         "location_id": ["bakery_store_1"] * 8,
@@ -51,8 +50,6 @@ def _reference_gold_base_identity_payload() -> dict[str, list[object]]:
         "country_code": ["FR"] * 8,
         "region_code": ["FR-IDF"] * 8,
         "city_name": ["Paris"] * 8,
-        "freshretail_rescaled_flag": [False] * 8,
-        "target_scale_assumption": ["native_observed"] * 8,
         "gold_run_id": ["manual"] * 8,
     }
 
@@ -60,18 +57,12 @@ def _reference_gold_base_identity_payload() -> dict[str, list[object]]:
 def _reference_gold_base_signal_payload() -> dict[str, list[object]]:
     return {
         "is_observed_row": [True] * 8,
-        "location_open_flag": [True] * 8,
-        "product_active_flag": [True] * 8,
         "day_complete_flag": [True] * 8,
-        "missing_sales_flag": [False] * 8,
         "observed_stockout_flag": [False] * 8,
         "observed_stockout_available": [True] * 8,
-        "anomaly_flag": [False] * 8,
         "current_day_demand_qty": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
         "true_zero_demand_flag": [False] * 8,
-        "location_closed_flag": [False] * 8,
         "observed_revenue_net": [20.0] * 8,
-        "avg_selling_price": [2.0] * 8,
         "observed_discount_amount": [0.0] * 8,
         "promo_flag": [False] * 8,
         "holiday_flag": [False] * 8,
@@ -86,7 +77,6 @@ def _reference_gold_base_signal_payload() -> dict[str, list[object]]:
         "weather_humidity": [0.5] * 8,
         "weather_wind_level": [1.0] * 8,
         "lending_interest_rate_latest": [1.0] * 8,
-        "price_available": [True] * 8,
     }
 
 
@@ -94,6 +84,16 @@ def _build_reference_gold_base_frame() -> pd.DataFrame:
     payload = _reference_gold_base_identity_payload()
     payload.update(_reference_gold_base_signal_payload())
     return pd.DataFrame(payload)
+
+
+def _build_reference_gold_feature_frame() -> pd.DataFrame:
+    gold_feature = _build_reference_gold_base_frame()
+    gold_feature["target_day_of_week"] = list(range(8))
+    gold_feature["rolling_mean_7"] = [100.0 + i for i in range(8)]
+    gold_feature["weather_temperature_lag_0"] = [200.0 + i for i in range(8)]
+    gold_feature["weather_temperature_lag_1"] = [190.0 + i for i in range(8)]
+    gold_feature["weather_precipitation_lag_0"] = [0.5] * 8
+    return gold_feature.drop(columns=["weather_temperature", "weather_precipitation"])
 
 
 def _build_reference_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -114,9 +114,32 @@ class EvaluationReferenceTests(unittest.TestCase):
         self.assertEqual(feature_frame["target_lag_7"].tolist(), [11.0, 12.0])
         self.assertEqual(feature_frame["weather_temperature_lag_0"].iloc[0], 20.0)
         self.assertTrue(pd.isna(feature_frame["weather_temperature_lag_0"].iloc[1]))
-        self.assertEqual(feature_frame["avg_selling_price_lag_1"].tolist(), [2.0, 2.0])
+        self.assertNotIn("avg_selling_price_lag_1", feature_frame.columns)
+        self.assertEqual(feature_frame["client_id"].tolist(), ["public_bakery_sales", "public_bakery_sales"])
         self.assertEqual(feature_frame["promo_rate_7"].tolist(), [0.0, 0.0])
         self.assertEqual(feature_frame["activity_rate_7"].tolist(), [1.0, 1.0])
+
+    def test_build_bakery_reference_feature_frame_preserves_gold_feature_columns(self) -> None:
+        reference_full = _build_reference_full_frame()
+        reference_test = reference_full.iloc[-2:].reset_index(drop=True)
+        gold_feature = _build_reference_gold_feature_frame()
+
+        feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_feature)
+
+        self.assertIn("target_day_of_week", feature_frame.columns)
+        self.assertIn("rolling_mean_7", feature_frame.columns)
+        self.assertEqual(feature_frame["target_day_of_week"].iloc[0], 7)
+        self.assertEqual(feature_frame["rolling_mean_7"].iloc[0], 107.0)
+        self.assertEqual(feature_frame["weather_temperature_lag_0"].iloc[0], 207.0)
+        self.assertTrue(pd.isna(feature_frame["weather_temperature_lag_0"].iloc[1]))
+
+    def test_build_bakery_reference_feature_frame_synthesizes_missing_client_id(self) -> None:
+        reference_full, reference_test, gold_base = _build_reference_inputs()
+        gold_base = gold_base.drop(columns=["client_id"])
+
+        feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_base)
+
+        self.assertEqual(feature_frame["client_id"].tolist(), ["bakery_store_1__A", "bakery_store_1__A"])
 
     def test_build_bakery_reference_feature_frame_avoids_fragmentation_warning(self) -> None:
         reference_full, reference_test, gold_base = _build_reference_inputs()

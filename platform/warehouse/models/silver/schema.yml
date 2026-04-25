@@ -30,6 +30,24 @@ models:
       - name: observed_demand_qty
         tests:
           - not_null
+      - name: target_semantics
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["observed_sales", "latent_demand_estimated"]
+      - name: censor_flag
+        tests:
+          - not_null
+      - name: target_source
+        tests:
+          - not_null
+      - name: label_quality_score
+        tests:
+          - not_null
+      - name: usable_for_training_flag
+        tests:
+          - not_null
 
     tests:
       - dbt_utils.unique_combination_of_columns:

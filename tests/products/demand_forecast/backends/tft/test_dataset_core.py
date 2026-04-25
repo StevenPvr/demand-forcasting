@@ -52,7 +52,7 @@ def _synthetic_train_valid_frames() -> tuple[pd.DataFrame, pd.DataFrame, list[st
         for offset, dt in enumerate(pd.date_range("2024-01-01", periods=140, freq="D")):
             rows.append(
                 {
-                    "series_id": group,
+                    "client_id": group,
                     "location_id": f"loc_{group}",
                     "product_id": f"prod_{group}",
                     "dataset_source": "freshretail_lt",

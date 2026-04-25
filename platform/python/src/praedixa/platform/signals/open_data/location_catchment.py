@@ -20,7 +20,7 @@ RESIDENTIAL_POPULATION_WEIGHTS = {
     "semidetached_house": 4.0,
     "terrace": 6.0,
 }
-COMPETITOR_TAGS_BY_SITE_FORMAT = {
+COMPETITOR_TAGS_BY_SEGMENT = {
     "bakery": {("shop", "bakery"), ("shop", "pastry"), ("shop", "confectionery")},
     "grocery": {
         ("shop", "supermarket"),
@@ -31,6 +31,11 @@ COMPETITOR_TAGS_BY_SITE_FORMAT = {
     "pharmacy": {("amenity", "pharmacy"), ("shop", "chemist")},
     "counter_service": {("amenity", "fast_food"), ("amenity", "cafe"), ("amenity", "restaurant")},
     "synthetic_food_service": {("amenity", "fast_food"), ("amenity", "cafe"), ("amenity", "restaurant")},
+}
+DATASET_SOURCE_COMPETITOR_SEGMENT = {
+    "bakery": "bakery",
+    "freshretail": "grocery",
+    "freshretail_lt": "grocery",
 }
 
 
@@ -105,8 +110,9 @@ def _estimate_population_proxy(elements: list[dict[str, object]]) -> float:
     return total
 
 
-def _competitor_predicate(site_format: str) -> Callable[[dict[str, str]], bool]:
-    exact_matches = COMPETITOR_TAGS_BY_SITE_FORMAT.get(site_format, COMPETITOR_TAGS_BY_SITE_FORMAT["counter_service"])
+def _competitor_predicate(dataset_source: str) -> Callable[[dict[str, str]], bool]:
+    segment = DATASET_SOURCE_COMPETITOR_SEGMENT.get(dataset_source, "counter_service")
+    exact_matches = COMPETITOR_TAGS_BY_SEGMENT.get(segment, COMPETITOR_TAGS_BY_SEGMENT["counter_service"])
 
     def predicate(tags: dict[str, str]) -> bool:
         return any(tags.get(tag_key) == tag_value for tag_key, tag_value in exact_matches)
@@ -249,7 +255,7 @@ def _location_catchment_row(
     elements_1km: list[dict[str, object]],
     elements_3km: list[dict[str, object]],
 ) -> dict[str, object]:
-    competitor_predicate = _competitor_predicate(str(location.get("site_format", "counter_service")))
+    competitor_predicate = _competitor_predicate(str(location.get("dataset_source", "")))
     transit_count_1km = _count_matching_elements(elements_1km, _transit_predicate)
     return {
         "dataset_source": location["dataset_source"],

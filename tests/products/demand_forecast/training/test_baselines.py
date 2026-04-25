@@ -17,7 +17,7 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
         sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.training.baselines import evaluate_statistical_baselines_macro  # noqa: E402
-from praedixa.demand_forecast.training.folds import build_tuning_walk_forward_folds_by_dataset  # noqa: E402
+from praedixa.demand_forecast.training.validation.folds import build_tuning_walk_forward_folds_by_dataset  # noqa: E402
 
 
 class OptimisationBaselinesTests(unittest.TestCase):

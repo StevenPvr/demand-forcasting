@@ -4,8 +4,6 @@ from typing import Any, cast
 
 import pandas as pd
 
-COUNTER_SERVICE_MODEL = "counter_service"
-STORE_PICK_PACK_SERVICE_MODEL = "store_pick_pack"
 DATASET_SOURCE_COL = "dataset_source"
 LOCATION_ID_COL = "location_id"
 COUNTRY_CODE_COL = "country_code"
@@ -13,8 +11,6 @@ REGION_CODE_COL = "region_code"
 ASSUMPTION_SOURCE_COL = "assumption_source"
 SCHOOL_ZONE_COL = "school_zone"
 WEATHER_LOCATION_LABEL_COL = "weather_location_label"
-SITE_FORMAT_COL = "site_format"
-SERVICE_MODEL_COL = "service_model"
 LOCATION_METADATA_COLUMNS = [
     DATASET_SOURCE_COL,
     LOCATION_ID_COL,
@@ -26,19 +22,12 @@ LOCATION_METADATA_COLUMNS = [
     SCHOOL_ZONE_COL,
     WEATHER_LOCATION_LABEL_COL,
     ASSUMPTION_SOURCE_COL,
-    SITE_FORMAT_COL,
-    SERVICE_MODEL_COL,
     "drive_through_flag",
     "delivery_flag",
     "pickup_flag",
-    "late_night_flag",
-    "trade_area_type",
     "mall_flag",
     "transit_hub_flag",
     "tourism_flag",
-    "office_density_bucket",
-    "residential_density_bucket",
-    "competition_intensity_bucket",
 ]
 
 
@@ -54,14 +43,14 @@ def _fixed_source_metadata(
     *,
     country_code: str | None,
     assumption_source: str,
-    site_format: str,
-    service_model: str,
+    delivery_flag: bool,
+    pickup_flag: bool,
 ) -> dict[str, object]:
     return {
         "country_code": country_code,
         "assumption_source": assumption_source,
-        "site_format": site_format,
-        "service_model": service_model,
+        "delivery_flag": delivery_flag,
+        "pickup_flag": pickup_flag,
     }
 
 
@@ -69,48 +58,34 @@ FIXED_SOURCE_METADATA = {
     "freshretail_lt": _fixed_source_metadata(
         country_code="CN",
         assumption_source="freshretail_lt_without_public_geocoding",
-        site_format="grocery",
-        service_model=STORE_PICK_PACK_SERVICE_MODEL,
+        delivery_flag=True,
+        pickup_flag=True,
     ),
     "first_party_daily": _fixed_source_metadata(
         country_code=None,
         assumption_source="first_party_location_metadata_pending_client_onboarding",
-        site_format="unknown",
-        service_model="unknown",
+        delivery_flag=False,
+        pickup_flag=False,
     ),
 }
 
 
 def _location_profile_fields(
     *,
-    site_format: str,
-    service_model: str,
-    trade_area_type: str,
     drive_through_flag: bool,
     delivery_flag: bool,
     pickup_flag: bool,
-    late_night_flag: bool,
     mall_flag: bool,
     transit_hub_flag: bool,
     tourism_flag: bool,
-    office_density_bucket: str,
-    residential_density_bucket: str,
-    competition_intensity_bucket: str,
 ) -> dict[str, object]:
     return {
-        "site_format": site_format,
-        "service_model": service_model,
         "drive_through_flag": drive_through_flag,
         "delivery_flag": delivery_flag,
         "pickup_flag": pickup_flag,
-        "late_night_flag": late_night_flag,
-        "trade_area_type": trade_area_type,
         "mall_flag": mall_flag,
         "transit_hub_flag": transit_hub_flag,
         "tourism_flag": tourism_flag,
-        "office_density_bucket": office_density_bucket,
-        "residential_density_bucket": residential_density_bucket,
-        "competition_intensity_bucket": competition_intensity_bucket,
     }
 
 
@@ -134,19 +109,12 @@ def _bakery_location_metadata_row(
         WEATHER_LOCATION_LABEL_COL: "manual_bakery_location_proxy",
         ASSUMPTION_SOURCE_COL: "bakery_manual_default_location_hypothesis",
         **_location_profile_fields(
-            site_format="bakery",
-            service_model=COUNTER_SERVICE_MODEL,
-            trade_area_type="urban_high_street",
             drive_through_flag=False,
             delivery_flag=False,
             pickup_flag=True,
-            late_night_flag=False,
             mall_flag=False,
             transit_hub_flag=False,
             tourism_flag=False,
-            office_density_bucket="medium",
-            residential_density_bucket="medium",
-            competition_intensity_bucket="high",
         ),
     }
 
@@ -164,19 +132,12 @@ def _freshretail_location_metadata_row(location: object) -> dict[str, object]:
         WEATHER_LOCATION_LABEL_COL: None,
         ASSUMPTION_SOURCE_COL: "freshretail_city_id_without_public_geocoding",
         **_location_profile_fields(
-            site_format="grocery",
-            service_model=STORE_PICK_PACK_SERVICE_MODEL,
-            trade_area_type="urban_neighborhood",
             drive_through_flag=False,
             delivery_flag=True,
             pickup_flag=True,
-            late_night_flag=False,
             mall_flag=False,
             transit_hub_flag=False,
             tourism_flag=False,
-            office_density_bucket="unknown",
-            residential_density_bucket="medium",
-            competition_intensity_bucket="medium",
         ),
     }
 
@@ -186,8 +147,8 @@ def _fixed_country_location_metadata_row(
     *,
     country_code: str | None,
     assumption_source: str,
-    site_format: str,
-    service_model: str,
+    delivery_flag: bool,
+    pickup_flag: bool,
 ) -> dict[str, object]:
     return {
         DATASET_SOURCE_COL: getattr(location, DATASET_SOURCE_COL),
@@ -201,19 +162,12 @@ def _fixed_country_location_metadata_row(
         WEATHER_LOCATION_LABEL_COL: None,
         ASSUMPTION_SOURCE_COL: assumption_source,
         **_location_profile_fields(
-            site_format=site_format,
-            service_model=service_model,
-            trade_area_type="unknown",
             drive_through_flag=False,
-            delivery_flag=service_model in {"delivery_only", "store_pick_pack"},
-            pickup_flag=service_model in {"counter_service", "store_pick_pack"},
-            late_night_flag=False,
+            delivery_flag=delivery_flag,
+            pickup_flag=pickup_flag,
             mall_flag=False,
             transit_hub_flag=False,
             tourism_flag=False,
-            office_density_bucket="unknown",
-            residential_density_bucket="unknown",
-            competition_intensity_bucket="unknown",
         ),
     }
 
@@ -244,8 +198,8 @@ def _location_metadata_row(
         location,
         country_code=cast(str | None, spec["country_code"]),
         assumption_source=str(spec["assumption_source"]),
-        site_format=str(spec["site_format"]),
-        service_model=str(spec["service_model"]),
+        delivery_flag=bool(spec["delivery_flag"]),
+        pickup_flag=bool(spec["pickup_flag"]),
     )
 
 

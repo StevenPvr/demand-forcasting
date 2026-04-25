@@ -28,7 +28,7 @@ from praedixa.demand_forecast.evaluation.reference import (
 from praedixa.demand_forecast.evaluation.refit import (
     evaluate_daily_refit_predictions as _evaluate_daily_refit_predictions_internal,
 )
-from praedixa.demand_forecast.training.constants import (
+from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_DATE_COL,
 )
 from praedixa.demand_forecast.contracts.targets import TargetContract

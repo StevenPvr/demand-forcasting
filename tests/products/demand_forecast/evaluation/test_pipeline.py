@@ -192,6 +192,9 @@ def _assert_metric_exports(output_dir: Path) -> None:
     canonical_overall = cast(dict[str, object], canonical_metrics_payload["overall_metrics"])
     canonical_product = cast(dict[str, dict[str, object]], canonical_metrics_payload["per_product_metrics"])
     assert "pinball_loss_p50" not in canonical_overall
+    assert "wape" in canonical_overall
+    assert "bias" in canonical_overall
+    assert "segment_metrics" in canonical_metrics_payload
     assert canonical_overall["coverage_80"] is None
     assert canonical_overall["coverage_95"] is None
     assert "pinball_loss_p50" not in canonical_product["sku_1"]
@@ -254,7 +257,7 @@ class EvaluationPipelineTests(unittest.TestCase):
                 "target_demand_qty_d_plus_1": [1.0, 2.0, 3.0],
                 "country_code": ["FR", "FR", "FR"],
                 "city_name": ["Paris", "Paris", "Paris"],
-                "avg_selling_price": [1.0, 2.0, 3.0],
+                "rolling_mean_7": [1.0, 2.0, 3.0],
             }
         )
 
@@ -266,8 +269,35 @@ class EvaluationPipelineTests(unittest.TestCase):
 
         self.assertIn("country_code", feature_cols)
         self.assertIn("city_name", feature_cols)
-        self.assertIn("avg_selling_price", feature_cols)
+        self.assertIn("rolling_mean_7", feature_cols)
         self.assertEqual(constant_feature_cols, [])
+        self.assertEqual(identifier_feature_cols, [])
+
+    def test_xgboost_evaluation_keeps_store_product_and_client_identifiers(self) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
+                "client_id": ["store_1_sku_1"] * 3,
+                "location_id": ["store_1"] * 3,
+                "product_id": ["sku_1"] * 3,
+                "target": [1.0, 2.0, 3.0],
+                "target_demand_qty_d_plus_1": [1.0, 2.0, 3.0],
+                "country_code": ["FR", "FR", "FR"],
+                "rolling_mean_7": [1.0, 2.0, 3.0],
+            }
+        )
+
+        feature_cols, _, identifier_feature_cols = select_feature_columns(
+            train_frame,
+            learning_target_col="target",
+            absolute_target_col="target_demand_qty_d_plus_1",
+            model_backend="xgboost",
+        )
+
+        self.assertIn("client_id", feature_cols)
+        self.assertIn("location_id", feature_cols)
+        self.assertIn("product_id", feature_cols)
+        self.assertNotIn("gold_run_id", feature_cols)
         self.assertEqual(identifier_feature_cols, [])
 
     def test_build_predictions_frame_populates_quantile_columns_and_intervals(self) -> None:
@@ -424,6 +454,61 @@ class EvaluationPipelineTests(unittest.TestCase):
             _assert_metric_exports(output_dir)
             _assert_diagnostics_exports(output_dir)
 
+    def test_build_xgboost_evaluation_outputs_writes_xgboost_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            selection_path, tuning_path, val_path, params_path, output_dir, val_frame = _write_eval_fixture_inputs(root)
+            params_path.write_text(
+                json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
+                encoding="utf-8",
+            )
+            stub_predictions, stub_daily_report = _build_stub_predictions(val_frame)
+
+            with (
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.raise_if_xgboost_backend_required",
+                    return_value=None,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.evaluate_xgboost_daily_refit_predictions",
+                    return_value=(stub_predictions, stub_daily_report, 1),
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.fit_final_xgboost_model",
+                    return_value=_dummy_final_model(),
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.save_xgboost_model",
+                    side_effect=_write_dummy_artifact,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.plot_actual_vs_predicted",
+                    side_effect=_write_dummy_plot,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.plot_residuals",
+                    side_effect=_write_dummy_plot,
+                ),
+            ):
+                build_evaluation_outputs(
+                    EvaluationBuildRequest(
+                        train_selection_input_path=selection_path,
+                        train_tuning_input_path=tuning_path,
+                        val_input_path=val_path,
+                        best_params_path=params_path,
+                        output_dir=output_dir,
+                        model_backend="xgboost",
+                    )
+                )
+
+            self.assertTrue((output_dir / "xgboost_test_metrics.json").exists())
+            self.assertTrue((output_dir / "xgboost_test_predictions.csv").exists())
+            self.assertTrue((output_dir / "xgboost_final_model.json").exists())
+            metadata = json.loads((output_dir / "xgboost_evaluation_metadata.json").read_text("utf-8"))
+            self.assertEqual(metadata["model_backend"], "xgboost")
+            self.assertEqual(metadata["model_family"], "xgboost")
+            self.assertTrue(metadata["daily_refit"])
+
     def test_daily_refit_predictions_keep_actuals_aligned_with_product_and_target_date(self) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         train_row_counts: list[int] = []
@@ -495,7 +580,7 @@ class EvaluationPipelineTests(unittest.TestCase):
 
         self.assertEqual(result, "final-model")
         self.assertEqual(recorded["columns"], list(train_frame.columns))
-        self.assertEqual(recorded["rows"], len(train_frame) + len(valid_frame) + len(test_frame))
+        self.assertEqual(recorded["rows"], len(train_frame) + len(valid_frame))
 
 
 if __name__ == "__main__":

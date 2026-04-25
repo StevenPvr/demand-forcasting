@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from typing import Any, cast
 import unittest
 from unittest import mock
 
@@ -19,11 +20,14 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from praedixa.demand_forecast.training.pipeline import OptimisationBuildRequest  # noqa: E402
+from praedixa.demand_forecast.training.orchestration.pipeline import OptimisationBuildRequest  # noqa: E402
 from praedixa.demand_forecast.training.main import (  # noqa: E402
     OFFICIAL_OPTIMISATION_MAIN_CONFIG,
     build_default_optimisation_main_config,
     main as optimisation_main,
+)
+from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
+    build_optimisation_model_params,
 )
 from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR  # noqa: E402
 
@@ -50,16 +54,19 @@ def _assert_bundle_request(
     request: OptimisationBuildRequest,
     bundle_dir: Path,
     *,
+    expected_model_backend: str,
     expected_runtime_profile: str,
 ) -> None:
     assert request.model_params is not None
     assert request.bundle_dir == bundle_dir
+    assert request.model_backend == expected_model_backend
     assert request.train_input_path == bundle_dir / "train.parquet"
     assert request.tuning_input_path == bundle_dir / "tuning.parquet"
     assert request.n_folds == 2
     assert request.tuning_trials == 7
     assert request.train_sample_fraction == 0.02
     assert request.tuning_sample_fraction == 0.03
+    assert request.model_params["model_backend"] == expected_model_backend
     assert request.model_params["runtime_profile"] == expected_runtime_profile
     assert request.model_params["stage_budget"] == "quick"
     assert request.model_params["tensorboard_logdir"] == str(bundle_dir / "tensorboard")
@@ -70,6 +77,7 @@ class OptimisationMainTests(unittest.TestCase):
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
         rebuilt = build_default_optimisation_main_config()
 
+        self.assertEqual(config.model_backend, rebuilt.model_backend)
         self.assertEqual(config.runtime_profile, rebuilt.runtime_profile)
         self.assertEqual(config.n_folds, rebuilt.n_folds)
         self.assertEqual(config.max_trials, rebuilt.max_trials)
@@ -78,68 +86,82 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.tuning_sample_fraction, rebuilt.tuning_sample_fraction)
         self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
 
-    def test_default_config_selects_scaleway_profile_when_cuda_is_available(
+    def test_default_xgboost_config_keeps_cpu_profile_when_cuda_is_available(
         self,
     ) -> None:
         with (
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_available",
+                "praedixa.demand_forecast.training.config.main_config._cuda_available",
                 return_value=True,
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_device_name",
+                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
                 return_value="NVIDIA L40S",
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._mps_available",
+                "praedixa.demand_forecast.training.config.main_config._mps_available",
                 return_value=False,
             ),
         ):
             config = build_default_optimisation_main_config()
 
-        self.assertEqual(config.runtime_profile, "scaleway_l40s")
+        self.assertEqual(config.model_backend, "xgboost")
+        self.assertEqual(config.runtime_profile, "local_cpu")
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 100)
         self.assertEqual(config.stage_budget, "standard")
 
-    def test_default_config_selects_h100_profile_and_budget_when_h100_is_available(
+    def test_default_xgboost_config_keeps_standard_budget_when_h100_is_available(
         self,
     ) -> None:
         with (
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_available",
+                "praedixa.demand_forecast.training.config.main_config._cuda_available",
                 return_value=True,
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_device_name",
+                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
                 return_value="NVIDIA H100 PCIe",
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._mps_available",
+                "praedixa.demand_forecast.training.config.main_config._mps_available",
                 return_value=False,
             ),
         ):
             config = build_default_optimisation_main_config()
 
-        self.assertEqual(config.runtime_profile, "nvidia_h100")
+        self.assertEqual(config.model_backend, "xgboost")
+        self.assertEqual(config.runtime_profile, "local_cpu")
         self.assertEqual(config.n_folds, 5)
-        self.assertEqual(config.max_trials, 192)
-        self.assertEqual(config.stage_budget, "full")
+        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.stage_budget, "standard")
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)
+
+    def test_xgboost_model_params_use_two_threads_per_parallel_fold(self) -> None:
+        config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
+            model_backend="xgboost",
+            runtime_profile="local_cpu",
+        )
+
+        params = build_optimisation_model_params(config)
+
+        self.assertEqual(int(cast(Any, params["n_jobs"])), 2)
+        self.assertEqual(int(cast(Any, params["max_parallel_fold_workers"])), 5)
+        self.assertEqual(params["model_backend"], "xgboost")
 
     def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
         with (
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_available",
+                "praedixa.demand_forecast.training.config.main_config._cuda_available",
                 return_value=False,
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._cuda_device_name",
+                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
                 return_value=None,
             ),
             mock.patch(
-                "praedixa.demand_forecast.training.main._mps_available",
+                "praedixa.demand_forecast.training.config.main_config._mps_available",
                 return_value=True,
             ),
         ):
@@ -152,26 +174,13 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)
 
-    def test_main_exposes_explicit_tft_not_ready_error(self) -> None:
-        from praedixa.demand_forecast.backends.tft.backend import (
-            TFTBackendNotReadyError,
-        )
-
-        with (
-            mock.patch(
-                "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
-                side_effect=TFTBackendNotReadyError("tft missing"),
-            ),
-            self.assertRaises(TFTBackendNotReadyError),
-        ):
-            optimisation_main()
-
     def test_main_uses_official_config_builder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             bundle_dir = Path(temp_dir)
             _write_bundle_fixture(bundle_dir)
             patched_config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
                 bundle_dir=bundle_dir,
+                model_backend="xgboost",
                 runtime_profile="local_cpu",
                 output_dir=bundle_dir / "outputs",
                 n_folds=2,
@@ -184,13 +193,13 @@ class OptimisationMainTests(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
+                    "praedixa.demand_forecast.training.orchestration.pipeline.build_optimisation_outputs",
                     return_value={
                         "best_params": bundle_dir / "best_optuna_params.json"
                     },
                 ) as mocked_build,
                 mock.patch(
-                    "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
+                    "praedixa.demand_forecast.training.entrypoints.main_runner.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
                     patched_config,
                 ),
             ):
@@ -201,6 +210,7 @@ class OptimisationMainTests(unittest.TestCase):
         _assert_bundle_request(
             args[0],
             bundle_dir,
+            expected_model_backend="xgboost",
             expected_runtime_profile="local_cpu",
         )
 
@@ -210,6 +220,7 @@ class OptimisationMainTests(unittest.TestCase):
             _write_bundle_fixture(bundle_dir, include_optimisation_projection=True)
             patched_config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
                 bundle_dir=bundle_dir,
+                model_backend="xgboost",
                 runtime_profile="local_cpu",
                 output_dir=bundle_dir / "outputs",
                 n_folds=2,
@@ -222,13 +233,13 @@ class OptimisationMainTests(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
+                    "praedixa.demand_forecast.training.orchestration.pipeline.build_optimisation_outputs",
                     return_value={
                         "best_params": bundle_dir / "best_optuna_params.json"
                     },
                 ) as mocked_build,
                 mock.patch(
-                    "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
+                    "praedixa.demand_forecast.training.entrypoints.main_runner.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
                     patched_config,
                 ),
             ):
@@ -251,6 +262,7 @@ class OptimisationMainTests(unittest.TestCase):
             _write_bundle_fixture(bundle_dir)
             patched_config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
                 bundle_dir=bundle_dir,
+                model_backend="xgboost",
                 runtime_profile="scaleway_l40s",
                 output_dir=bundle_dir / "outputs",
                 n_folds=2,
@@ -263,26 +275,26 @@ class OptimisationMainTests(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "praedixa.demand_forecast.training.pipeline.build_optimisation_outputs",
+                    "praedixa.demand_forecast.training.orchestration.pipeline.build_optimisation_outputs",
                     return_value={
                         "best_params": bundle_dir / "best_optuna_params.json"
                     },
                 ),
                 mock.patch(
-                    "praedixa.demand_forecast.training.main.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
+                    "praedixa.demand_forecast.training.entrypoints.main_runner.OFFICIAL_OPTIMISATION_MAIN_CONFIG",
                     patched_config,
                 ),
                 mock.patch(
-                    "praedixa.demand_forecast.training.main._cuda_available",
+                    "praedixa.demand_forecast.training.config.main_config._cuda_available",
                     return_value=False,
                 ),
                 mock.patch(
-                    "praedixa.demand_forecast.training.main._mps_available",
+                    "praedixa.demand_forecast.training.config.main_config._mps_available",
                     return_value=False,
                 ),
                 self.assertRaisesRegex(
                     RuntimeError,
-                    "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself.",
+                    "XGBoost optimisation backend is currently wired as a CPU backend.",
                 ),
             ):
                 optimisation_main()

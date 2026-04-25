@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,11 +8,17 @@ from typing import Any, cast
 
 import pandas as pd
 
-from praedixa.demand_forecast.backends.tft.feature_mapping import resolve_explicit_tft_layout
+from praedixa.demand_forecast.backends.tft.feature_mapping import (
+    TFT_EXPLICIT_ROLE_BY_COLUMN,
+)
 from praedixa.demand_forecast.contracts.targets import (
     TargetContract,
     build_target_contract_metadata,
     resolve_target_contract,
+)
+from praedixa.demand_forecast.evaluation.constants import (
+    DEFAULT_BAKERY_REFERENCE_DATASET_SOURCE,
+    DEFAULT_TRAINING_FEATURE_MANIFEST_PATH,
 )
 from praedixa.demand_forecast.evaluation.modeling import select_feature_columns
 from praedixa.demand_forecast.evaluation.reference_mode import (
@@ -21,6 +28,9 @@ from praedixa.demand_forecast.evaluation.reference_mode import (
     prepare_training_target_frame,
 )
 from praedixa.demand_forecast.evaluation.reporting import load_best_params
+from praedixa.demand_forecast.training.config.constants import (
+    DEFAULT_XGBOOST_IDENTIFIER_FEATURE_COLS,
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +47,7 @@ class LoadedEvaluationFrames:
 @dataclass(frozen=True)
 class EvaluationPreparedContext:
     best_params: dict[str, Any]
+    model_backend: str
     evaluation_mode: str
     train_frame: pd.DataFrame
     valid_frame: pd.DataFrame
@@ -64,12 +75,20 @@ def _load_local_evaluation_frames(
     train_tuning_input_path: str | Path,
     val_input_path: str | Path,
     requested_target_col: str,
+    train_sample_fraction: float,
+    tuning_sample_fraction: float,
+    evaluation_dataset_source: str | None,
+    logger: logging.Logger,
 ) -> LoadedEvaluationFrames:
     loaded = load_local_mode_frames(
         train_selection_input_path=train_selection_input_path,
         train_tuning_input_path=train_tuning_input_path,
         val_input_path=val_input_path,
         requested_target_col=requested_target_col,
+        train_sample_fraction=train_sample_fraction,
+        tuning_sample_fraction=tuning_sample_fraction,
+        evaluation_dataset_source=evaluation_dataset_source,
+        logger=logger,
     )
     return LoadedEvaluationFrames("local_parquet", *loaded)
 
@@ -80,14 +99,21 @@ def _load_gold_evaluation_frames(
     gold_table: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
+    model_backend: str,
 ) -> LoadedEvaluationFrames:
     loaded = load_gold_reference_mode_frames(
         duckdb_path=duckdb_path,
         gold_table=gold_table,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
+        model_backend=model_backend,
     )
-    return LoadedEvaluationFrames("bakery_reference_overlap", *loaded)
+    evaluation_mode = (
+        "bakery_reference_transfer_holdout"
+        if model_backend.strip().lower() == "xgboost"
+        else "bakery_reference_overlap"
+    )
+    return LoadedEvaluationFrames(evaluation_mode, *loaded)
 
 
 def load_evaluation_frames(
@@ -101,6 +127,8 @@ def load_evaluation_frames(
     train_sample_fraction: float,
     tuning_sample_fraction: float,
     logger: logging.Logger,
+    evaluation_dataset_source: str | None = None,
+    model_backend: str = "tft",
 ) -> LoadedEvaluationFrames:
     explicit_local_mode = (
         train_selection_input_path is not None
@@ -119,19 +147,25 @@ def load_evaluation_frames(
             train_tuning_input_path=cast(str | Path, train_tuning_input_path),
             val_input_path=cast(str | Path, val_input_path),
             requested_target_col=requested_target_col,
+            train_sample_fraction=train_sample_fraction,
+            tuning_sample_fraction=tuning_sample_fraction,
+            evaluation_dataset_source=evaluation_dataset_source,
+            logger=logger,
         )
     logger.info(
-        "Running evaluation in bakery reference mode: duckdb_path=%s gold_table=%s train_sample_fraction=%.4f tuning_sample_fraction=%.4f bakery_test=unsampled_reference_split reference_protocol=bakery_product_arima_equivalent_from_gold",
+        "Running evaluation in bakery reference mode: duckdb_path=%s gold_table=%s train_sample_fraction=%.4f tuning_sample_fraction=%.4f bakery_test=unsampled_reference_split model_backend=%s reference_protocol=bakery_product_arima_equivalent_from_gold",
         duckdb_path,
         gold_table,
         train_sample_fraction,
         tuning_sample_fraction,
+        model_backend,
     )
     return _load_gold_evaluation_frames(
         duckdb_path=duckdb_path,
         gold_table=gold_table,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
+        model_backend=model_backend,
     )
 
 
@@ -141,12 +175,14 @@ def _resolve_feature_context(
     valid_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
     target_contract: TargetContract,
+    model_backend: str,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     combined_pretest_frame = pd.concat([train_frame, valid_frame], ignore_index=True)
     feature_cols, constant_feature_cols, identifier_feature_cols = select_feature_columns(
         combined_pretest_frame,
         learning_target_col=target_contract.learning_target_col,
         absolute_target_col=target_contract.absolute_target_col,
+        model_backend=model_backend,
     )
     missing_in_test_feature_cols = [column for column in feature_cols if column not in test_frame.columns]
     filtered_feature_cols = [column for column in feature_cols if column in test_frame.columns]
@@ -156,12 +192,16 @@ def _resolve_feature_context(
 def _real_feature_columns(
     feature_cols: list[str],
 ) -> list[str]:
-    layout = resolve_explicit_tft_layout(feature_cols)
-    ordered_reals: list[str] = []
-    for column in [*layout["static_reals"], *layout["time_varying_known_reals"], *layout["time_varying_unknown_reals"]]:
-        if column not in ordered_reals:
-            ordered_reals.append(column)
-    return ordered_reals
+    real_roles = {
+        "static_real",
+        "time_varying_known_real",
+        "time_varying_unknown_real",
+    }
+    return [
+        column
+        for column in feature_cols
+        if TFT_EXPLICIT_ROLE_BY_COLUMN.get(column) in real_roles
+    ]
 
 
 def _feature_cols_all_null_in_test(
@@ -224,6 +264,56 @@ def _sanitize_evaluation_feature_frames(
     )
 
 
+def _training_manifest_feature_columns(
+    feature_manifest_path: Path = DEFAULT_TRAINING_FEATURE_MANIFEST_PATH,
+) -> list[str] | None:
+    if not feature_manifest_path.exists():
+        return None
+    payload = json.loads(feature_manifest_path.read_text(encoding="utf-8"))
+    raw_feature_columns = payload.get("feature_columns")
+    if not isinstance(raw_feature_columns, list):
+        return None
+    feature_columns = cast(list[object], raw_feature_columns)
+    return [str(column) for column in feature_columns]
+
+
+def _expected_xgboost_feature_columns(
+    *,
+    train_frame: pd.DataFrame,
+) -> list[str] | None:
+    expected = _training_manifest_feature_columns()
+    if expected is None:
+        return None
+    resolved = list(expected)
+    for column in DEFAULT_XGBOOST_IDENTIFIER_FEATURE_COLS:
+        if column in train_frame.columns and column not in resolved:
+            resolved.append(column)
+    return resolved
+
+
+def _validate_xgboost_feature_contract(
+    *,
+    evaluation_mode: str,
+    train_frame: pd.DataFrame,
+    feature_cols: list[str],
+) -> None:
+    if evaluation_mode not in {
+        "bakery_reference_overlap",
+        "bakery_reference_transfer_holdout",
+    }:
+        return
+    expected = _expected_xgboost_feature_columns(train_frame=train_frame)
+    if expected is None or set(feature_cols) == set(expected):
+        return
+    missing = [column for column in expected if column not in feature_cols]
+    extra = [column for column in feature_cols if column not in expected]
+    raise ValueError(
+        "XGBoost evaluation feature contract mismatch with the optimisation bundle "
+        f"(expected_count={len(expected)} actual_count={len(feature_cols)} "
+        f"missing={missing} extra={extra})."
+    )
+
+
 def _log_evaluation_dataset_summary(
     *,
     loaded: LoadedEvaluationFrames,
@@ -278,6 +368,26 @@ def _prepared_target_frames(
     return train_frame, valid_frame, test_frame, scored_reference_test, dropped_test_rows
 
 
+def _assert_transfer_holdout_training_sources(
+    *,
+    evaluation_mode: str,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+) -> None:
+    if evaluation_mode != "bakery_reference_transfer_holdout":
+        return
+    for split_name, frame in (("train", train_frame), ("valid", valid_frame)):
+        if "dataset_source" not in frame.columns:
+            continue
+        sources = set(frame["dataset_source"].dropna().astype(str).unique().tolist())
+        if DEFAULT_BAKERY_REFERENCE_DATASET_SOURCE not in sources:
+            continue
+        raise ValueError(
+            "XGBoost transfer-holdout evaluation cannot train on bakery before the "
+            f"test window (split={split_name})."
+        )
+
+
 def _resolved_target_contract(
     *,
     loaded: LoadedEvaluationFrames,
@@ -294,6 +404,7 @@ def _resolved_target_contract(
 def _evaluation_context_payload(
     *,
     best_params: dict[str, Any],
+    model_backend: str,
     loaded: LoadedEvaluationFrames,
     target_contract: TargetContract,
     train_frame: pd.DataFrame,
@@ -309,6 +420,7 @@ def _evaluation_context_payload(
 ) -> EvaluationPreparedContext:
     return EvaluationPreparedContext(
         best_params=best_params,
+        model_backend=model_backend,
         evaluation_mode=loaded.evaluation_mode,
         train_frame=train_frame,
         valid_frame=valid_frame,
@@ -331,8 +443,16 @@ def prepare_evaluation_context(
     requested_target_col: str,
     best_params_path: str | Path,
     logger: logging.Logger,
+    model_backend: str = "tft",
 ) -> EvaluationPreparedContext:
     best_params = load_best_params(best_params_path)
+    if model_backend == "xgboost" and best_params.get("model_backend") != "xgboost":
+        logger.warning(
+            "XGBoost evaluation best params do not declare model_backend=xgboost: path=%s. "
+            "XGBoost defaults will fill missing native parameters; rerun XGBoost optimisation "
+            "before treating this as the tuned evaluation.",
+            best_params_path,
+        )
     target_contract = _resolved_target_contract(loaded=loaded, requested_target_col=requested_target_col)
     train_frame, valid_frame, test_frame, scored_reference_test, dropped_test_rows = (
         _prepared_target_frames(
@@ -340,12 +460,18 @@ def prepare_evaluation_context(
             target_contract=target_contract,
         )
     )
+    _assert_transfer_holdout_training_sources(
+        evaluation_mode=loaded.evaluation_mode,
+        train_frame=train_frame,
+        valid_frame=valid_frame,
+    )
     feature_cols, constant_feature_cols, identifier_feature_cols, missing_in_test_feature_cols = (
         _resolve_feature_context(
             train_frame=train_frame,
             valid_frame=valid_frame,
             test_frame=test_frame,
             target_contract=target_contract,
+            model_backend=model_backend,
         )
     )
     train_frame, valid_frame, test_frame, feature_cols, missing_in_test_feature_cols = (
@@ -357,6 +483,12 @@ def prepare_evaluation_context(
             missing_in_test_feature_cols=missing_in_test_feature_cols,
         )
     )
+    if model_backend == "xgboost":
+        _validate_xgboost_feature_contract(
+            evaluation_mode=loaded.evaluation_mode,
+            train_frame=train_frame,
+            feature_cols=feature_cols,
+        )
     overlap_metadata = _log_evaluation_dataset_summary(
         loaded=loaded,
         target_contract=target_contract,
@@ -369,6 +501,7 @@ def prepare_evaluation_context(
     )
     return _evaluation_context_payload(
         best_params=best_params,
+        model_backend=model_backend,
         loaded=loaded,
         target_contract=target_contract,
         train_frame=train_frame,

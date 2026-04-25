@@ -25,6 +25,7 @@ def build_simple_economic_gain_payload(
     predictions_df: pd.DataFrame,
     metrics_payload: dict[str, Any],
     *,
+    model_family: str = "foundation_tft",
     duckdb_path: str | Path | None = None,
     raw_sales_csv: str | Path | None = DEFAULT_RAW_SALES_CSV,
     production_cost_ratio: float = DEFAULT_PRODUCTION_COST_RATIO,
@@ -32,7 +33,10 @@ def build_simple_economic_gain_payload(
     per_product_metrics = dict(metrics_payload["per_product_metrics"])
     comparison_df = _economic_comparison_frame(predictions_df)
     if len(comparison_df) == 0:
-        return _empty_economic_gain_payload(production_cost_ratio)
+        return _empty_economic_gain_payload(
+            model_family=model_family,
+            production_cost_ratio=production_cost_ratio,
+        )
 
     unit_sale_prices = _test_window_unit_prices(
         predictions_df=predictions_df,
@@ -50,7 +54,7 @@ def build_simple_economic_gain_payload(
         per_product_metrics=per_product_metrics,
     )
     return {
-        "model_family": "FOUNDATION_TFT",
+        "model_family": model_family,
         "product_count": int(len(per_product_gain)),
         "default_unit_sale_price_eur": float(DEFAULT_UNIT_SALE_PRICE_EUR),
         "production_cost_ratio": float(production_cost_ratio),
@@ -102,9 +106,13 @@ def _cancel_negative_sales_for_article(article_df: pd.DataFrame) -> pd.DataFrame
     return working_df
 
 
-def _empty_economic_gain_payload(production_cost_ratio: float) -> dict[str, Any]:
+def _empty_economic_gain_payload(
+    *,
+    model_family: str,
+    production_cost_ratio: float,
+) -> dict[str, Any]:
     return {
-        "model_family": "FOUNDATION_TFT",
+        "model_family": model_family,
         "product_count": 0,
         "default_unit_sale_price_eur": float(DEFAULT_UNIT_SALE_PRICE_EUR),
         "production_cost_ratio": float(production_cost_ratio),

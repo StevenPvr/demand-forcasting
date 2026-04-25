@@ -18,19 +18,49 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from praedixa.demand_forecast.training.sampling_metadata import (  # noqa: E402
+from praedixa.demand_forecast.training.sampling.metadata import (  # noqa: E402
     load_sampling_metadata_from_relation,
     relation_sampling_requires_top_up,
+    resolve_gold_projection_columns,
 )
-from praedixa.demand_forecast.training.sampling_execution import (  # noqa: E402
+from praedixa.demand_forecast.training.sampling.execution import (  # noqa: E402
     sample_relation_frame,
 )
-from praedixa.demand_forecast.training.sampling_models import (  # noqa: E402
+from praedixa.demand_forecast.training.sampling.models import (  # noqa: E402
     RelationSamplingSpec,
 )
 
 
 class SamplingMetadataTests(unittest.TestCase):
+    def test_gold_projection_keeps_explicit_categorical_model_features(self) -> None:
+        schema_preview = pd.DataFrame(
+            {
+                "dt": pd.Series([], dtype="datetime64[ns]"),
+                "dataset_source": pd.Series([], dtype="object"),
+                "location_id": pd.Series([], dtype="object"),
+                "product_id": pd.Series([], dtype="object"),
+                "client_id": pd.Series([], dtype="object"),
+                "vertical_level_1": pd.Series([], dtype="object"),
+                "product_family": pd.Series([], dtype="object"),
+                "cold_start_bucket": pd.Series([], dtype="object"),
+                "rolling_mean_7": pd.Series([], dtype="float64"),
+                "free_text_note": pd.Series([], dtype="object"),
+            }
+        )
+
+        projection_columns = resolve_gold_projection_columns(
+            schema_preview,
+            date_col="dt",
+            dataset_source_col="dataset_source",
+            sample_store_col="location_id",
+        )
+
+        self.assertIn("vertical_level_1", projection_columns)
+        self.assertIn("product_family", projection_columns)
+        self.assertIn("cold_start_bucket", projection_columns)
+        self.assertIn("rolling_mean_7", projection_columns)
+        self.assertNotIn("free_text_note", projection_columns)
+
     def test_relation_sampling_metadata_detects_top_up_requirement(self) -> None:
         frame = pd.DataFrame(
             {

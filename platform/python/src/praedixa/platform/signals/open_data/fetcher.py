@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+import hashlib
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -64,7 +67,32 @@ def provider_policy_snapshot(
 
 def _write_csv(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        frame.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(text, encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _build_country_context(
@@ -273,7 +301,11 @@ def _open_exogenous_output_paths(output_dir: Path) -> dict[str, Path]:
     }
 
 
-def _persist_named_open_exogenous_frames(frames: dict[str, pd.DataFrame], output_paths: dict[str, Path]) -> None:
+def _persist_named_open_exogenous_frames(
+    frames: dict[str, pd.DataFrame],
+    output_paths: dict[str, Path],
+) -> dict[str, dict[str, object]]:
+    file_manifest: dict[str, dict[str, object]] = {}
     for frame_name, output_key in [
         ("location_metadata", "location_metadata_path"),
         ("location_catchment", "location_catchment_path"),
@@ -283,7 +315,15 @@ def _persist_named_open_exogenous_frames(frames: dict[str, pd.DataFrame], output
         ("macro_annual", "macro_annual_path"),
         ("macro_timeseries", "macro_timeseries_path"),
     ]:
-        _write_csv(frames[frame_name], output_paths[output_key])
+        output_path = output_paths[output_key]
+        _write_csv(frames[frame_name], output_path)
+        file_manifest[frame_name] = {
+            "path": str(output_path),
+            "rows": int(len(frames[frame_name])),
+            "size_bytes": int(output_path.stat().st_size),
+            "sha256": _file_sha256(output_path),
+        }
+    return file_manifest
 
 
 def _build_open_exogenous_manifest(
@@ -293,8 +333,10 @@ def _build_open_exogenous_manifest(
     country_years: dict[str, list[int]],
     provider_policy: dict[str, dict[str, object]],
     catchment_metadata: dict[str, object],
+    file_manifest: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     return {
+        "created_at": datetime.now(tz=UTC).isoformat(),
         "duckdb_path": config.duckdb_path,
         "output_dir": str(config.output_dir),
         "location_rows": int(len(frames["location_metadata"])),
@@ -309,6 +351,7 @@ def _build_open_exogenous_manifest(
         "country_years": country_years,
         "allow_contractual_providers": config.allow_contractual_providers,
         "provider_policy": provider_policy,
+        "files": file_manifest,
         "sources": {
             "location_catchment": "OpenStreetMap ODbL via Overpass-derived POI catchment features",
             "public_holidays": "Deterministic local public-holiday rules for supported countries",
@@ -345,16 +388,20 @@ def _persist_open_exogenous_frames(
     catchment_metadata: dict[str, object],
 ) -> dict[str, object]:
     output_paths = _open_exogenous_output_paths(config.output_dir)
-    _persist_named_open_exogenous_frames(frames, output_paths)
+    file_manifest = _persist_named_open_exogenous_frames(frames, output_paths)
     manifest = _build_open_exogenous_manifest(
         config=config,
         frames=frames,
         country_years=country_years,
         provider_policy=provider_policy,
         catchment_metadata=catchment_metadata,
+        file_manifest=file_manifest,
     )
     manifest_path = config.output_dir / "open_exogenous_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+    _write_text_atomic(
+        manifest_path,
+        json.dumps(manifest, indent=2, ensure_ascii=True),
+    )
     _log_open_exogenous_row_counts(frames)
     return {**output_paths, "manifest_path": manifest_path}
 

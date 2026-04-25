@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from praedixa.demand_forecast.backends.tft.feature_contract import (  # noqa: E402
     build_feature_contract,
     feature_available_at_prediction,
+    validate_feature_contract,
 )
 from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN  # noqa: E402
 
@@ -36,6 +37,43 @@ class TFTFeatureContractTests(unittest.TestCase):
                     contract[column]["available_at_prediction"],
                     feature_available_at_prediction(role),
                 )
+
+    def test_pre_close_profile_blocks_decision_day_history_features(self) -> None:
+        with self.assertRaisesRegex(ValueError, "pre-close D\\+1"):
+            validate_feature_contract(
+                ["rolling_mean_7"],
+                decision_profile="pre_close_d_plus_1",
+            )
+
+    def test_post_close_profile_allows_decision_day_history_features(self) -> None:
+        contract = validate_feature_contract(
+            ["rolling_mean_7"],
+            decision_profile="post_close_d_plus_1",
+        )
+
+        self.assertEqual(
+            contract["rolling_mean_7"]["decision_profile"],
+            "post_close_d_plus_1",
+        )
+
+    def test_lagged_operational_features_keep_point_in_time_scope(self) -> None:
+        contract = build_feature_contract(
+            [
+                "observed_discount_amount_rolling_mean_7",
+                "censor_rate_7",
+                "label_quality_score_rolling_mean_7",
+            ]
+        )
+
+        self.assertEqual(
+            contract["observed_discount_amount_rolling_mean_7"]["decision_time_scope"],
+            "decision_day_history",
+        )
+        self.assertEqual(contract["censor_rate_7"]["source_system"], "operations")
+        self.assertEqual(
+            contract["label_quality_score_rolling_mean_7"]["source_system"],
+            "data_quality",
+        )
 
 
 if __name__ == "__main__":

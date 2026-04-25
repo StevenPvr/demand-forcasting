@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from praedixa.platform.signals.open_data.annual_public import read_silver_location_bounds
+from praedixa.platform.signals.open_data.fetcher import fetch_open_exogenous_data
 from praedixa.platform.signals.open_data.http import http_json, http_text
 from praedixa.platform.signals.open_data.runtime import (
     DEFAULT_OPEN_METEO_ARCHIVE_URL,
@@ -13,7 +14,7 @@ from praedixa.platform.signals.open_data.runtime import (
     build_runtime_config_from_env,
 )
 from praedixa.platform.signals.open_data.transformers import (
-    COMPETITOR_TAGS_BY_SITE_FORMAT,
+    COMPETITOR_TAGS_BY_SEGMENT,
     FIXED_SOURCE_METADATA,
     OVERPASS_BASE_URL,
     RESIDENTIAL_POPULATION_WEIGHTS,
@@ -78,28 +79,15 @@ def _write_transformer_csv(frame: pd.DataFrame, output_path: Path) -> Path:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     config = build_runtime_config_from_env()
-    frames = build_open_exogenous_transformer_frames(config)
-    outputs = {
-        "location_metadata": _write_transformer_csv(frames["location_metadata"], config.output_dir / "location_metadata.csv"),
-        "location_catchment": _write_transformer_csv(frames["location_catchment"], config.output_dir / "location_catchment.csv"),
-        "school_holidays": _write_transformer_csv(frames["school_holidays"], config.output_dir / "school_holidays.csv"),
-        "weather_daily": _write_transformer_csv(frames["weather_daily"], config.output_dir / "weather_daily.csv"),
-    }
+    result = fetch_open_exogenous_data(config)
     LOGGER.info(
-        "Open exogenous transformers written: metadata=%s -> %s, catchment=%s -> %s, school=%s -> %s, weather=%s -> %s",
-        len(frames["location_metadata"]),
-        outputs["location_metadata"],
-        len(frames["location_catchment"]),
-        outputs["location_catchment"],
-        len(frames["school_holidays"]),
-        outputs["school_holidays"],
-        len(frames["weather_daily"]),
-        outputs["weather_daily"],
+        "Open exogenous transformers delegated to governed fetcher: manifest=%s",
+        result["manifest_path"],
     )
 
 
 __all__ = [
-    "COMPETITOR_TAGS_BY_SITE_FORMAT",
+    "COMPETITOR_TAGS_BY_SEGMENT",
     "FIXED_SOURCE_METADATA",
     "OVERPASS_BASE_URL",
     "OpenExogenousRuntimeConfig",

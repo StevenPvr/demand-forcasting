@@ -65,13 +65,10 @@ def _merged_reference_frame(base: pl.DataFrame, gold_base: pl.DataFrame) -> pl.D
     )
 
 
-def _reference_templates(gold_base: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def _reference_templates(gold_base: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     date_template = gold_base.sort(["dt", "product_id"]).group_by("dt", maintain_order=True).first()
     product_template = gold_base.sort("dt").group_by("product_id", maintain_order=True).last()
-    price_template = gold_base.group_by("product_id", maintain_order=True).agg(
-        pl.col("avg_selling_price").median().alias("avg_selling_price_template")
-    )
-    return date_template, product_template, price_template
+    return date_template, product_template
 
 
 def _fill_template_columns(
@@ -135,51 +132,69 @@ def _optional_float_expr(frame: pl.DataFrame, column: str) -> pl.Expr:
         return pl.col(column).cast(pl.Float64, strict=False)
     return pl.lit(None, dtype=pl.Float64)
 
-def _apply_reference_defaults(merged: pl.DataFrame, *, price_template: pl.DataFrame) -> pl.DataFrame:
-    base = merged.join(price_template, how="left", on="product_id").with_columns(
+
+def _optional_source_expr(frame: pl.DataFrame, *columns: str) -> pl.Expr:
+    for column in columns:
+        if column in frame.columns:
+            return pl.col(column)
+    return pl.lit(None)
+
+
+def _coalesced_feature_expr(
+    frame: pl.DataFrame,
+    column: str,
+    fallback: pl.Expr,
+) -> pl.Expr:
+    if column in frame.columns:
+        return pl.coalesce(pl.col(column), fallback).alias(column)
+    return fallback.alias(column)
+
+
+def _client_id_expr(frame: pl.DataFrame) -> pl.Expr:
+    default_client_id = pl.concat_str(
+        [
+            pl.col("location_id").cast(pl.Utf8, strict=False),
+            pl.lit("__"),
+            pl.col("product_id").cast(pl.Utf8, strict=False),
+        ]
+    )
+    if "client_id" not in frame.columns:
+        return default_client_id
+    return pl.coalesce(
+        pl.col("client_id").cast(pl.Utf8, strict=False),
+        default_client_id,
+    )
+
+
+def _apply_reference_defaults(merged: pl.DataFrame) -> pl.DataFrame:
+    base = merged.with_columns(
         [
             pl.lit("bakery").alias("dataset_source"),
             _resolved_column_expr(merged, "location_id", "bakery_store_1", dtype=pl.Utf8).alias("location_id"),
-            _resolved_column_expr(merged, "product_active_flag", True, dtype=pl.Boolean).alias("product_active_flag"),
-            _resolved_column_expr(merged, "location_open_flag", True, dtype=pl.Boolean).alias("location_open_flag"),
             _resolved_column_expr(merged, "day_complete_flag", True, dtype=pl.Boolean).alias("day_complete_flag"),
-            _resolved_column_expr(merged, "is_missing_day", 0, dtype=pl.Int64)
-            .cast(pl.Boolean)
-            .alias("missing_sales_flag"),
             _resolved_column_expr(merged, "observed_stockout_flag", False, dtype=pl.Boolean).alias(
                 "observed_stockout_flag"
             ),
             _resolved_column_expr(merged, "observed_stockout_available", False, dtype=pl.Boolean).alias(
                 "observed_stockout_available"
             ),
-            _resolved_column_expr(merged, "anomaly_flag", False, dtype=pl.Boolean).alias("anomaly_flag"),
-            _resolved_column_expr(merged, "location_closed_flag", False, dtype=pl.Boolean).alias(
-                "location_closed_flag"
-            ),
-            pl.coalesce(
-                _optional_float_expr(merged, "avg_selling_price"),
-                pl.col("avg_selling_price_template"),
-            ).alias("avg_selling_price"),
             _resolved_column_expr(merged, "observed_discount_amount", 0.0, dtype=pl.Float64).alias(
                 "observed_discount_amount"
             ),
             _resolved_column_expr(merged, "promo_flag", False, dtype=pl.Boolean).alias("promo_flag"),
             (pl.col("dt") + pl.duration(days=1)).alias("target_dt"),
         ]
+    ).with_columns(
+        _client_id_expr(merged).alias("client_id")
     )
-    revenue_fill = pl.col("current_day_demand_qty").fill_null(0.0) * pl.col("avg_selling_price").fill_null(0.0)
     return (
         base.with_columns(
             [
-                (~pl.col("missing_sales_flag")).alias("is_observed_row"),
+                _resolved_column_expr(base, "is_observed_row", True, dtype=pl.Boolean).alias("is_observed_row"),
                 pl.col("current_day_demand_qty").fill_null(0.0).eq(0.0).alias("true_zero_demand_flag"),
-                pl.coalesce(_optional_float_expr(base, "observed_revenue_net"), revenue_fill).alias(
-                    "observed_revenue_net"
-                ),
-                pl.col("avg_selling_price").is_not_null().alias("price_available"),
+                _optional_float_expr(base, "observed_revenue_net").alias("observed_revenue_net"),
             ]
         )
-        .drop("avg_selling_price_template")
         .sort(["product_id", "dt"])
     )
 
@@ -188,35 +203,91 @@ def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
     with_target_dow = merged.with_columns(((pl.col("target_dt").dt.weekday() - 1).cast(pl.Int8)).alias("__target_dow"))
     return with_target_dow.with_columns(
         [
-            pl.col("current_day_demand_qty").shift(-1).over("product_id").alias("target_demand_qty_d_plus_1"),
-            pl.col("current_day_demand_qty").shift(1).over("product_id").alias("lag_1"),
-            pl.col("current_day_demand_qty").shift(7).over("product_id").alias("lag_7"),
-            pl.col("current_day_demand_qty").shift(14).over("product_id").alias("lag_14"),
-            pl.col("current_day_demand_qty").shift(21).over("product_id").alias("lag_21"),
-            pl.col("current_day_demand_qty").shift(28).over("product_id").alias("lag_28"),
-            pl.col("current_day_demand_qty").shift(6).over("product_id").alias("target_lag_7"),
-            pl.col("avg_selling_price").shift(1).over("product_id").alias("avg_selling_price_lag_1"),
-            pl.col("promo_flag").shift(1).over("product_id").alias("promo_flag_lag_1"),
-            pl.col("promo_flag")
-            .cast(pl.Float64)
-            .rolling_mean(window_size=7, min_samples=1)
-            .over("product_id")
-            .alias("promo_rate_7"),
-            pl.col("activity_flag")
-            .cast(pl.Float64)
-            .rolling_mean(window_size=7, min_samples=1)
-            .over("product_id")
-            .alias("activity_rate_7"),
-            pl.col("weather_temperature").alias("weather_temperature_lag_0"),
-            pl.col("weather_temperature").shift(1).over("product_id").alias("weather_temperature_lag_1"),
-            pl.col("weather_precipitation").alias("weather_precipitation_lag_0"),
-            pl.col("weather_humidity").alias("weather_humidity_lag_0"),
-            pl.col("weather_wind_level").alias("weather_wind_level_lag_0"),
-            pl.col("current_day_demand_qty")
-            .shift(7)
-            .rolling_mean(window_size=4, min_samples=1)
-            .over(["product_id", "__target_dow"])
-            .alias("target_same_dow_mean_4w"),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "target_demand_qty_d_plus_1",
+                pl.col("current_day_demand_qty").shift(-1).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "lag_1",
+                pl.col("current_day_demand_qty").shift(1).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "lag_7",
+                pl.col("current_day_demand_qty").shift(7).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "lag_14",
+                pl.col("current_day_demand_qty").shift(14).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "lag_21",
+                pl.col("current_day_demand_qty").shift(21).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "lag_28",
+                pl.col("current_day_demand_qty").shift(28).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "target_lag_7",
+                pl.col("current_day_demand_qty").shift(6).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "promo_flag_lag_1",
+                pl.col("promo_flag").shift(1).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "promo_rate_7",
+                pl.col("promo_flag").cast(pl.Float64).rolling_mean(window_size=7, min_samples=1).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "activity_rate_7",
+                pl.col("activity_flag").cast(pl.Float64).rolling_mean(window_size=7, min_samples=1).over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "weather_temperature_lag_0",
+                _optional_source_expr(with_target_dow, "weather_temperature", "weather_temperature_lag_0"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "weather_temperature_lag_1",
+                _optional_source_expr(with_target_dow, "weather_temperature", "weather_temperature_lag_0")
+                .shift(1)
+                .over("product_id"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "weather_precipitation_lag_0",
+                _optional_source_expr(with_target_dow, "weather_precipitation", "weather_precipitation_lag_0"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "weather_humidity_lag_0",
+                _optional_source_expr(with_target_dow, "weather_humidity", "weather_humidity_lag_0"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "weather_wind_level_lag_0",
+                _optional_source_expr(with_target_dow, "weather_wind_level", "weather_wind_level_lag_0"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
+                "target_same_dow_mean_4w",
+                pl.col("current_day_demand_qty")
+                .shift(7)
+                .rolling_mean(window_size=4, min_samples=1)
+                .over(["product_id", "__target_dow"]),
+            ),
         ]
     ).drop("__target_dow")
 
@@ -249,20 +320,19 @@ def build_bakery_reference_feature_frame(
     reference_test = _normalized_reference_split_frame_polars(reference_test_df)
     gold_base = _normalized_gold_base_frame(gold_base_panel_df)
     merged = _merged_reference_frame(_reference_base_frame(reference_full_df), gold_base)
-    date_template, product_template, price_template = _reference_templates(gold_base)
+    date_template, product_template = _reference_templates(gold_base)
     merged = _fill_reference_templates(
         merged,
         date_template=date_template,
         product_template=product_template,
     )
-    prepared = _apply_reference_defaults(merged, price_template=price_template)
+    prepared = _apply_reference_defaults(merged)
     return _target_rows_from_reference(_build_bakery_overlap_feature_block(prepared), reference_test)
 
 
 _DATE_TEMPLATE_FILL_COLUMNS = [
     "source_partition",
     "source_run_id",
-    "location_open_flag",
     "day_complete_flag",
     "holiday_flag",
     "activity_flag",
@@ -275,19 +345,16 @@ _DATE_TEMPLATE_FILL_COLUMNS = [
     "weather_humidity",
     "weather_wind_level",
     "lending_interest_rate_latest",
-    "client_id",
     "vertical_level_1",
     "vertical_level_2",
     "country_code",
     "region_code",
     "city_name",
-    "freshretail_rescaled_flag",
-    "target_scale_assumption",
     "gold_run_id",
 ]
 
 _PRODUCT_TEMPLATE_FILL_COLUMNS = [
-    "series_id",
+    "client_id",
     "location_id",
     "region_id",
     "org_group_id",

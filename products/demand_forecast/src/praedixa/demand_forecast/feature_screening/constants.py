@@ -8,7 +8,7 @@ from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH
 DEFAULT_INPUT_PATH = None
 DEFAULT_OUTPUT_DIR = FEATURE_SELECTION_DIR
 DEFAULT_DUCKDB_PATH = LOCAL_DUCKDB_PATH
-DEFAULT_GOLD_TABLE = "gold.gold_daily_product_forecast_panel_d1"
+DEFAULT_GOLD_TABLE = "gold.gold_model_training_panel_d1"
 DEFAULT_TARGET_COL = "target"
 DEFAULT_DATE_COL = "dt"
 DEFAULT_TRAIN_FRACTION = 0.7

@@ -113,10 +113,11 @@ def materialize_feature_selection_source_from_gold(
     materialized_path = cache_dir / "feature_selection_source_train.parquet"
     connection = duckdb.connect(str(duckdb_path), read_only=True)
     try:
+        projection_sql = _gold_projection_sql(connection, gold_table=gold_table)
         connection.execute(
             f"""
             copy (
-                select *
+                select {projection_sql}
                 from {gold_table}
                 where split_bucket = 'train'
             ) to '{materialized_path.as_posix()}' (format parquet)
@@ -131,6 +132,21 @@ def materialize_feature_selection_source_from_gold(
         materialized_path,
     )
     return materialized_path
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _gold_projection_sql(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+) -> str:
+    schema_preview = connection.execute(f"select * from {gold_table} limit 0").fetchdf()
+    if schema_preview.empty and not list(schema_preview.columns):
+        raise ValueError(f"Gold table `{gold_table}` exposes no columns.")
+    return ", ".join(_quote_identifier(column) for column in schema_preview.columns)
 
 
 def build_split_artifacts(

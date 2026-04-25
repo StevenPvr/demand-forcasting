@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from importlib import import_module
 import logging
 import platform
-from typing import Any, Iterable, Iterator, cast
+from typing import Any, Generator, Iterable, cast
 import warnings
 
 import pandas as pd
@@ -47,7 +47,9 @@ DEFAULT_TFT_MODEL_PARAMS: dict[str, object] = {
     "enable_csv_logger": True,
     "enable_lr_monitor": True,
     "enable_validation_metric_logging": True,
+    "enable_business_validation_metrics": True,
     "enable_device_stats_monitor": True,
+    "validation_monitor_metric": "business_val_wape",
     "log_every_n_steps": 1,
     "quantiles": [0.025, 0.1, 0.5, 0.9, 0.975],
     "reduce_on_plateau_patience": 3,
@@ -91,7 +93,7 @@ def _filter_tft_dataframe_fragmentation_warnings() -> None:
 
 
 @contextmanager
-def suppress_tft_dataframe_fragmentation_warnings() -> Iterator[None]:
+def suppress_tft_dataframe_fragmentation_warnings() -> Generator[None]:
     with warnings.catch_warnings():
         _filter_tft_dataframe_fragmentation_warnings()
         yield
@@ -142,7 +144,7 @@ def lazy_import_tft_dependencies() -> dict[str, Any]:
 
 
 @contextmanager
-def suppress_tft_runtime_noise() -> Iterator[None]:
+def suppress_tft_runtime_noise() -> Generator[None]:
     logger_states = [
         (
             logger_name,

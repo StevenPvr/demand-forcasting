@@ -17,8 +17,14 @@ def _resolve_project_root() -> Path:
 
 
 PROJECT_ROOT = _resolve_project_root()
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SEARCH_PATHS: tuple[Path, ...] = (
+    PROJECT_ROOT,
+    PROJECT_ROOT / "platform" / "python" / "src",
+    PROJECT_ROOT / "products" / "demand_forecast" / "src",
+)
+for path in reversed(SEARCH_PATHS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def main() -> None:

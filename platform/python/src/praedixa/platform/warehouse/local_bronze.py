@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from praedixa.platform.runtime.paths import (
     LOCAL_DUCKDB_PATH,
     PROJECT_ROOT,
     SOURCES_DIR,
+    WAREHOUSE_RUNTIME_DIR,
 )
 from praedixa.platform.warehouse.bronze_specs import (
     BronzeTableSpec,
@@ -31,9 +33,12 @@ DEFAULT_LOCAL_BACKUP_DIR = SOURCES_DIR / "local_backup"
 DEFAULT_LOCAL_DUCKDB_PATH = LOCAL_DUCKDB_PATH
 DEFAULT_CLOUD_DUCKDB_PATH = "md:praedixa"
 DEFAULT_BRONZE_SCHEMA = "bronze"
+PARQUET_API: Any = pq
 
 __all__ = [
     "BronzeTableSpec",
+    "EmptyRequiredBronzeSourceError",
+    "MissingRequiredBronzeSourceError",
     "prepare_bronze_batch",
     "backup_local_bronze_sources",
     "build_cloud_duckdb_config_from_env",
@@ -43,6 +48,7 @@ __all__ = [
     "default_bronze_specs",
     "load_inline_bronze_frame",
     "load_all_bronze_tables",
+    "validate_bronze_sources",
 ]
 
 
@@ -80,6 +86,14 @@ class BronzeLoadRuntimeConfig:
     cloud_warehouse_enabled: bool
     local_backup_enabled: bool
     local_backup_dir: Path
+
+
+class MissingRequiredBronzeSourceError(FileNotFoundError):
+    """Raised before warehouse mutation when a required bronze source is absent."""
+
+
+class EmptyRequiredBronzeSourceError(ValueError):
+    """Raised before warehouse mutation when a required bronze source file is empty."""
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -166,7 +180,52 @@ def build_duckdb_client(config: DuckDBTargetConfig) -> DuckDBConnectionProtocol:
 
     if not config.is_cloud:
         Path(config.database_path).parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(database=_duckdb_connection_string(config))
+    client = duckdb.connect(database=_duckdb_connection_string(config))
+    _configure_duckdb_client(client)
+    return client
+
+
+def _configure_duckdb_client(client: DuckDBConnectionProtocol) -> None:
+    """Apply conservative DuckDB runtime settings shared by bronze loads."""
+
+    client.execute("SET preserve_insertion_order = false")
+    if threads := os.environ.get("PRAEDIXA_DUCKDB_THREADS"):
+        client.execute(f"SET threads = {int(threads)}")
+    if memory_limit := os.environ.get("PRAEDIXA_DUCKDB_MEMORY_LIMIT"):
+        escaped_memory_limit = memory_limit.replace("'", "''")
+        client.execute(f"SET memory_limit = '{escaped_memory_limit}'")
+    if temp_directory := os.environ.get("PRAEDIXA_DUCKDB_TEMP_DIRECTORY"):
+        temp_path = Path(temp_directory)
+        temp_path.mkdir(parents=True, exist_ok=True)
+        escaped_temp_directory = str(temp_path).replace("'", "''")
+        client.execute(f"SET temp_directory = '{escaped_temp_directory}'")
+
+
+def validate_bronze_sources(specs: list[BronzeTableSpec]) -> None:
+    """Fail before any warehouse mutation when required bronze inputs are unsafe."""
+
+    missing_required = [
+        f"{spec.source_name}={spec.source_path}"
+        for spec in specs
+        if spec.required and not spec.source_path.exists()
+    ]
+    if missing_required:
+        raise MissingRequiredBronzeSourceError(
+            "Missing required bronze sources: " + ", ".join(missing_required)
+        )
+
+    empty_required = [
+        f"{spec.source_name}={spec.source_path}"
+        for spec in specs
+        if spec.required
+        and not spec.allow_empty
+        and spec.source_path.exists()
+        and spec.source_path.stat().st_size == 0
+    ]
+    if empty_required:
+        raise EmptyRequiredBronzeSourceError(
+            "Empty required bronze sources: " + ", ".join(empty_required)
+        )
 
 
 def _backup_target_path(backup_root: Path, spec: BronzeTableSpec) -> Path:
@@ -187,6 +246,58 @@ def _backup_is_current(source_path: Path, backup_path: Path) -> bool:
 def _write_backup_manifest(backup_root: Path, payload: dict[str, object]) -> Path:
     manifest_path = backup_root / "bronze_backup_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8"
+    )
+    return manifest_path
+
+
+def _source_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source_file:
+        for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_manifest_entry(
+    spec: BronzeTableSpec,
+    *,
+    row_counts: dict[str, int],
+) -> dict[str, object]:
+    exists = spec.source_path.exists()
+    stat = spec.source_path.stat() if exists else None
+    return {
+        "source_name": spec.source_name,
+        "table_name": spec.table_name,
+        "source_path": str(spec.source_path),
+        "required": spec.required,
+        "allow_empty": spec.allow_empty,
+        "partition_keys": list(spec.partition_keys),
+        "source_policy_id": spec.source_policy_id,
+        "exists": exists,
+        "size_bytes": int(stat.st_size) if stat is not None else None,
+        "mtime_ns": int(stat.st_mtime_ns) if stat is not None else None,
+        "sha256": _source_sha256(spec.source_path) if exists else None,
+        "loaded_rows": row_counts.get(spec.source_name),
+    }
+
+
+def write_bronze_source_manifest(
+    *,
+    specs: list[BronzeTableSpec],
+    row_counts: dict[str, int],
+) -> Path:
+    """Write a deterministic source manifest for the bronze replacement load."""
+
+    manifest_path = WAREHOUSE_RUNTIME_DIR / "bronze_source_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "created_at": _utc_now().isoformat(),
+        "sources": [
+            _source_manifest_entry(spec, row_counts=row_counts) for spec in specs
+        ],
+    }
     manifest_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8"
     )
@@ -293,6 +404,16 @@ def _quote_identifier(name: str) -> str:
     return f'"{escaped}"'
 
 
+def _table_column_names(
+    client: DuckDBConnectionProtocol,
+    *,
+    schema_name: str,
+    table_name: str,
+) -> set[str]:
+    result: Any = client.execute(f"PRAGMA table_info('{schema_name}.{table_name}')")
+    return {str(row[1]) for row in result.fetchall()}
+
+
 def recreate_table(
     client: DuckDBConnectionProtocol, *, schema_name: str, table_name: str
 ) -> None:
@@ -315,10 +436,23 @@ def _insert_batch(
     batch: pd.DataFrame,
 ) -> None:
     temp_view_name = "__praedixa_bronze_batch"
-    column_list = ", ".join(
-        _quote_identifier(column_name) for column_name in batch.columns
+    table_columns = _table_column_names(
+        client,
+        schema_name=schema_name,
+        table_name=table_name,
     )
-    client.register(temp_view_name, batch)
+    insert_columns = [column for column in batch.columns if column in table_columns]
+    ignored_columns = sorted(set(batch.columns).difference(insert_columns))
+    if ignored_columns:
+        logger.debug(
+            "Ignoring source columns absent from bronze table: table=%s ignored_columns=%s",
+            table_name,
+            ignored_columns,
+        )
+    column_list = ", ".join(
+        _quote_identifier(column_name) for column_name in insert_columns
+    )
+    client.register(temp_view_name, batch.loc[:, insert_columns])
     try:
         client.execute(
             f"""
@@ -432,11 +566,28 @@ def load_bronze_tables_into_target(
 
     row_counts: dict[str, int] = {}
     for table_name, table_specs in _group_specs_by_table(specs).items():
+        existing_specs = [spec for spec in table_specs if spec.source_path.exists()]
         recreate_table(client, schema_name=schema_name, table_name=table_name)
         ensure_table(client, table_specs[0])
 
+        if not existing_specs:
+            for spec in table_specs:
+                row_counts[spec.source_name] = 0
+            logger.warning(
+                "No local files for optional bronze table %s.%s; recreated empty table.",
+                schema_name,
+                table_name,
+            )
+            continue
+
         for spec in table_specs:
             if not spec.source_path.exists():
+                row_counts[spec.source_name] = 0
+                logger.warning(
+                    "Skipping missing optional bronze source %s at %s",
+                    spec.source_name,
+                    spec.source_path,
+                )
                 continue
 
             inserted_rows = 0
@@ -500,6 +651,7 @@ def load_selected_bronze_specs(
 ) -> dict[str, object]:
     """Load a selected subset of bronze specs into local/cloud DuckDB targets and/or local backup."""
 
+    validate_bronze_sources(specs)
     runtime_config = build_runtime_config_from_env()
     result: dict[str, object] = {
         "local_warehouse_enabled": runtime_config.local_warehouse_enabled,
@@ -536,6 +688,13 @@ def load_selected_bronze_specs(
     else:
         logger.info("Cloud DuckDB warehouse disabled.")
 
+    local_row_counts = cast(dict[str, int], result["local_warehouse_row_counts"])
+    manifest_path = write_bronze_source_manifest(
+        specs=specs,
+        row_counts=local_row_counts,
+    )
+    result["source_manifest_path"] = str(manifest_path)
+
     return result
 
 
@@ -551,4 +710,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-PARQUET_API: Any = pq

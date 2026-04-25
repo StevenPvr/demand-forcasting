@@ -42,10 +42,10 @@ def _build_bakery_grouped_frame(frame: pd.DataFrame, *, location_id: str) -> pd.
     normalized = _normalize_bakery_article(frame)
     normalized["dt"] = pd.to_datetime(normalized["date"], errors="coerce").dt.date
     normalized["quantity"] = pd.to_numeric(normalized["Quantity"], errors="coerce")
-    normalized["avg_selling_price"] = normalized["unit_price"].map(parse_bakery_unit_price)
-    normalized["observed_revenue_net"] = normalized["quantity"] * normalized["avg_selling_price"]
+    unit_price = normalized["unit_price"].map(parse_bakery_unit_price)
+    normalized["observed_revenue_net"] = normalized["quantity"] * unit_price
     normalized["location_id"] = location_id
-    grouped = (
+    return (
         normalized.groupby(["dt", "location_id", "product_id"], dropna=False)
         .agg(
             observed_demand_qty=("quantity", "sum"),
@@ -53,8 +53,6 @@ def _build_bakery_grouped_frame(frame: pd.DataFrame, *, location_id: str) -> pd.
         )
         .reset_index()
     )
-    grouped["avg_selling_price"] = grouped["observed_revenue_net"] / grouped["observed_demand_qty"].replace(0, pd.NA)
-    return grouped
 
 
 def _attach_bakery_canonical_columns(
@@ -81,9 +79,7 @@ def _attach_bakery_canonical_columns(
     enriched["observed_stockout_flag"] = None
     enriched["observed_stockout_available"] = False
     enriched["observed_stockout_intensity"] = None
-    enriched["location_open_flag"] = None
     enriched["day_complete_flag"] = None
-    enriched["missing_sales_flag"] = False
     dt_series = pd.to_datetime(enriched["dt"])
     enriched["calendar_weekday_name"] = dt_series.dt.day_name()
     enriched["calendar_day_of_week"] = dt_series.dt.dayofweek.astype("int8")
@@ -98,7 +94,6 @@ def _attach_bakery_canonical_columns(
     enriched["weather_temperature"] = None
     enriched["weather_humidity"] = None
     enriched["weather_wind_level"] = None
-    enriched["anomaly_flag"] = False
     return enriched
 
 

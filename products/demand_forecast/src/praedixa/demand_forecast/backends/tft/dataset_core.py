@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import Lock
 from typing import Any, cast
 
 import pandas as pd
@@ -26,39 +25,6 @@ class TimeSeriesDatasetCore:
     preprocessed_frame: pd.DataFrame
 
 
-_DATA_TO_TENSORS_CAPTURE_LOCK = Lock()
-
-
-def _capturing_data_to_tensors(
-    original_method: Any,
-) -> Any:
-    def capturing_method(self: Any, data: pd.DataFrame) -> dict[str, Any]:
-        self._praedixa_preprocessed_frame = data
-        return original_method(self, data)
-
-    return capturing_method
-
-
-def _build_dataset_with_captured_preprocessed_frame(
-    dataset_class: type[Any],
-    build_fn: Any,
-) -> TimeSeriesDatasetCore:
-    with _DATA_TO_TENSORS_CAPTURE_LOCK:
-        original_data_to_tensors = dataset_class._data_to_tensors
-        dataset_class._data_to_tensors = _capturing_data_to_tensors(
-            original_data_to_tensors
-        )
-        try:
-            with suppress_tft_dataframe_fragmentation_warnings():
-                dataset = build_fn()
-        finally:
-            dataset_class._data_to_tensors = original_data_to_tensors
-    return TimeSeriesDatasetCore(
-        dataset=dataset,
-        preprocessed_frame=cast(pd.DataFrame, dataset._praedixa_preprocessed_frame),
-    )
-
-
 def build_training_dataset_core(
     imports: dict[str, Any],
     *,
@@ -71,10 +37,10 @@ def build_training_dataset_core(
     real_feature_scalers: dict[str, Any] | None,
 ) -> TimeSeriesDatasetCore:
     dataset_class = cast(type[Any], imports["TimeSeriesDataSet"])
-    return _build_dataset_with_captured_preprocessed_frame(
-        dataset_class,
-        lambda: dataset_class(
-            defragment_frame(training_frame),
+    prepared_frame = defragment_frame(training_frame)
+    with suppress_tft_dataframe_fragmentation_warnings():
+        dataset = dataset_class(
+            prepared_frame,
             time_idx=TIME_IDX_COL,
             target=target_col,
             group_ids=[GROUP_COL],
@@ -87,15 +53,22 @@ def build_training_dataset_core(
             static_reals=layout["static_reals"],
             time_varying_known_categoricals=layout["time_varying_known_categoricals"],
             time_varying_known_reals=layout["time_varying_known_reals"],
-            time_varying_unknown_categoricals=layout["time_varying_unknown_categoricals"],
-            time_varying_unknown_reals=[*layout["time_varying_unknown_reals"], target_col],
+            time_varying_unknown_categoricals=layout[
+                "time_varying_unknown_categoricals"
+            ],
+            time_varying_unknown_reals=[
+                *layout["time_varying_unknown_reals"],
+                target_col,
+            ],
             allow_missing_timesteps=False,
             add_target_scales=True,
-            target_normalizer=imports["GroupNormalizer"](groups=[GROUP_COL], method="standard"),
+            target_normalizer=imports["GroupNormalizer"](
+                groups=[GROUP_COL], method="standard"
+            ),
             categorical_encoders=categorical_encoders,
             scalers=real_feature_scalers,
-        ),
-    )
+        )
+    return TimeSeriesDatasetCore(dataset=dataset, preprocessed_frame=prepared_frame)
 
 
 def build_validation_dataset_core(
@@ -104,16 +77,15 @@ def build_validation_dataset_core(
     validation_frame: pd.DataFrame,
     min_prediction_idx: int,
 ) -> TimeSeriesDatasetCore:
-    dataset_class = training_core.dataset.__class__
-    return _build_dataset_with_captured_preprocessed_frame(
-        dataset_class,
-        lambda: dataset_class.from_dataset(
+    prepared_frame = defragment_frame(validation_frame)
+    with suppress_tft_dataframe_fragmentation_warnings():
+        dataset = training_core.dataset.__class__.from_dataset(
             training_core.dataset,
-            validation_frame,
+            prepared_frame,
             min_prediction_idx=min_prediction_idx,
             stop_randomization=True,
-        ),
-    )
+        )
+    return TimeSeriesDatasetCore(dataset=dataset, preprocessed_frame=prepared_frame)
 
 
 def clone_training_dataset_from_core(
@@ -121,12 +93,11 @@ def clone_training_dataset_from_core(
     core: TimeSeriesDatasetCore,
     max_encoder_length: int,
 ) -> Any:
-    return _clone_dataset_from_core(
+    return _dataset_from_core_parameters(
         core=core,
-        preprocessed_frame=core.preprocessed_frame,
+        frame=core.preprocessed_frame,
         max_encoder_length=max_encoder_length,
         min_prediction_idx=None,
-        reuse_data=True,
     )
 
 
@@ -143,37 +114,33 @@ def clone_validation_dataset_from_core(
         kept_prediction_row_ids=kept_prediction_row_ids,
         valid_weight_by_row_id=valid_weight_by_row_id,
     )
-    return _clone_dataset_from_core(
+    return _dataset_from_core_parameters(
         core=core,
-        preprocessed_frame=trimmed_frame,
+        frame=trimmed_frame,
         max_encoder_length=max_encoder_length,
         min_prediction_idx=max_encoder_length,
-        reuse_data=False,
     )
 
 
-def _clone_dataset_from_core(
+def _dataset_from_core_parameters(
     *,
     core: TimeSeriesDatasetCore,
-    preprocessed_frame: pd.DataFrame,
+    frame: pd.DataFrame,
     max_encoder_length: int,
     min_prediction_idx: int | None,
-    reuse_data: bool,
 ) -> Any:
-    cloned = object.__new__(core.dataset.__class__)
-    cloned.__dict__ = core.dataset.__dict__.copy()
-    cloned.max_encoder_length = max_encoder_length
-    cloned.min_encoder_length = max_encoder_length
+    parameters = dict(cast(dict[str, Any], core.dataset.get_parameters()))
+    parameters["max_encoder_length"] = max_encoder_length
+    parameters["min_encoder_length"] = max_encoder_length
+    kwargs: dict[str, object] = {"stop_randomization": True}
     if min_prediction_idx is not None:
-        cloned.min_prediction_idx = min_prediction_idx
-    cloned._praedixa_preprocessed_frame = preprocessed_frame
+        kwargs["min_prediction_idx"] = min_prediction_idx
     with suppress_tft_dataframe_fragmentation_warnings():
-        if reuse_data:
-            cloned.data = core.dataset.data
-        else:
-            cloned.data = cloned._data_to_tensors(preprocessed_frame)
-        cloned.index = cloned._construct_index(preprocessed_frame, predict_mode=cloned.predict_mode)
-    return cloned
+        return core.dataset.__class__.from_parameters(
+            parameters,
+            defragment_frame(frame),
+            **kwargs,
+        )
 
 
 def _trim_validation_preprocessed_frame(
@@ -186,11 +153,19 @@ def _trim_validation_preprocessed_frame(
     grouped_parts: list[pd.DataFrame] = []
     for _, group_frame in preprocessed_frame.groupby(GROUP_COL, sort=False):
         valid_rows = group_frame.loc[group_frame[SPLIT_COL] == "valid"].copy()
-        valid_rows = valid_rows.loc[valid_rows[PREDICTION_ROW_ID_COL].isin(kept_prediction_row_ids)].copy()
+        valid_rows = valid_rows.loc[
+            valid_rows[PREDICTION_ROW_ID_COL].isin(kept_prediction_row_ids)
+        ].copy()
         if valid_rows.empty:
             continue
-        history_rows = group_frame.loc[group_frame[SPLIT_COL] == "train"].tail(max_encoder_length).copy()
-        valid_rows[WEIGHT_COL] = valid_rows[PREDICTION_ROW_ID_COL].map(valid_weight_by_row_id).astype(float)
+        history_rows = (
+            group_frame.loc[group_frame[SPLIT_COL] == "train"]
+            .tail(max_encoder_length)
+            .copy()
+        )
+        valid_rows[WEIGHT_COL] = (
+            valid_rows[PREDICTION_ROW_ID_COL].map(valid_weight_by_row_id).astype(float)
+        )
         grouped_parts.append(pd.concat([history_rows, valid_rows], ignore_index=True))
     if not grouped_parts:
         return pd.DataFrame(columns=preprocessed_frame.columns)

@@ -31,12 +31,17 @@ class EvaluationReferenceModeTests(unittest.TestCase):
         reference_train = pd.DataFrame({"date": pd.to_datetime(["2024-03-30"]), "product": ["croissant"], "quantity": [9.0], "is_missing_day": [0]})
         reference_val = pd.DataFrame({"date": pd.to_datetime(["2024-03-31"]), "product": ["croissant"], "quantity": [10.0], "is_missing_day": [0]})
         scored_reference_test = pd.DataFrame({"date": pd.to_datetime(["2024-04-01"]), "product": ["croissant"], "quantity": [11.0], "is_missing_day": [0]})
+        gold_feature_df = pd.DataFrame({"dataset_source": ["bakery"]})
 
         with (
             patch(
                 "praedixa.demand_forecast.evaluation.reference_mode.load_gold_train_tuning_frames",
                 return_value=(train_frame, valid_frame, "location_id", {}, {}),
             ) as mocked_load_gold,
+            patch(
+                "praedixa.demand_forecast.evaluation.reference_mode._load_gold_bakery_feature_frame",
+                return_value=gold_feature_df,
+            ),
             patch(
                 "praedixa.demand_forecast.evaluation.reference_mode.build_bakery_reference_splits_from_gold",
                 return_value=SimpleNamespace(
@@ -63,6 +68,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
                 gold_table="gold.gold_daily_product_forecast_panel_d1",
                 train_sample_fraction=0.05,
                 tuning_sample_fraction=0.07,
+                model_backend="xgboost",
             )
 
         mocked_load_gold.assert_called_once_with(
@@ -73,6 +79,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             dataset_source_col="dataset_source",
             train_sample_fraction=0.05,
             tuning_sample_fraction=0.07,
+            excluded_dataset_sources=("bakery",),
         )
         mocked_reference_bundle.assert_called_once_with(
             duckdb_path="warehouse.duckdb",
@@ -82,18 +89,20 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             duckdb_path="warehouse.duckdb",
             reference_full_df=ANY,
             reference_test_df=scored_reference_test,
+            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_feature_df=gold_feature_df,
         )
         self.assertIs(resolved_train_frame, train_frame)
         self.assertIs(resolved_valid_frame, valid_frame)
         self.assertIs(resolved_test_frame, overlap_test_frame)
+        self.assertEqual(overlap_metadata["reference_test_rows"], 1)
+        self.assertEqual(overlap_metadata["overlap_test_rows"], 1)
         self.assertEqual(
-            overlap_metadata,
-            {
-                "reference_protocol": "bakery_product_arima_equivalent_from_gold",
-                "reference_test_rows": 1,
-                "overlap_test_rows": 1,
-            },
+            overlap_metadata["model_training_protocol"],
+            "freshretail_transfer_holdout_with_bakery_test_refits",
         )
+        self.assertEqual(overlap_metadata["model_training_excluded_dataset_sources"], ["bakery"])
+        self.assertEqual(overlap_metadata["bakery_pretest_rows_used_for_model_training"], 0)
 
 
 if __name__ == "__main__":

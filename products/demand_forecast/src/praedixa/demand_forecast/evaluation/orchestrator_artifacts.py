@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import FrozenInstanceError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -31,7 +32,7 @@ from praedixa.demand_forecast.evaluation.reporting import (
     json_dump,
 )
 from praedixa.demand_forecast.training_bundle.manifest import sha256_file
-from praedixa.demand_forecast.training.constants import (
+from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_EXCLUDED_RISKY_FEATURE_COLS,
 )
 
@@ -58,27 +59,43 @@ class EvaluationRunArtifacts:
     promotable_bundle_manifest_payload: dict[str, Any]
 
 
-def evaluation_output_paths(target_dir: Path) -> dict[str, Path]:
+def _context_model_family(context: EvaluationPreparedContext) -> str:
+    return "xgboost" if context.model_backend == "xgboost" else "foundation_tft"
+
+
+def evaluation_output_paths(
+    target_dir: Path,
+    *,
+    model_family: str = "foundation_tft",
+) -> dict[str, Path]:
+    prefix = model_family.lower()
+    final_model_name = (
+        f"{prefix}_final_model.json"
+        if prefix == "xgboost"
+        else f"{prefix}_final_model.pt"
+    )
     return {
-        "metrics_json": target_dir / "foundation_tft_test_metrics.json",
-        "probabilistic_metrics_json": target_dir / "foundation_tft_probabilistic_metrics.json",
-        "statistical_baselines_json": target_dir / "foundation_tft_statistical_baselines.json",
-        "predictions_csv": target_dir / "foundation_tft_test_predictions.csv",
-        "probabilistic_predictions_csv": target_dir / "foundation_tft_probabilistic_predictions.csv",
-        "diagnostics_json": target_dir / "foundation_tft_test_diagnostics.json",
-        "model_card_json": target_dir / "foundation_tft_model_card.json",
-        "final_model": target_dir / "foundation_tft_final_model.pt",
-        "feature_manifest_json": target_dir / "foundation_tft_feature_manifest.json",
-        "feature_roles_json": target_dir / "foundation_tft_feature_roles.json",
-        "split_manifest_json": target_dir / "foundation_tft_split_manifest.json",
-        "target_contract_json": target_dir / "foundation_tft_target_contract.json",
-        "interpretability_json": target_dir / "foundation_tft_interpretability.json",
-        "promotable_bundle_manifest_json": target_dir / "foundation_tft_promotable_bundle_manifest.json",
-        "evaluation_metadata": target_dir / "foundation_tft_evaluation_metadata.json",
-        "economic_gain_json": target_dir / "foundation_tft_economic_gain_vs_best_baseline.json",
-        "daily_refit_metrics_csv": target_dir / "foundation_tft_daily_refit_metrics.csv",
-        "actual_vs_predicted_plot": target_dir / "foundation_tft_actual_vs_predicted.png",
-        "residuals_plot": target_dir / "foundation_tft_residuals.png",
+        "metrics_json": target_dir / f"{prefix}_test_metrics.json",
+        "probabilistic_metrics_json": target_dir / f"{prefix}_probabilistic_metrics.json",
+        "statistical_baselines_json": target_dir / f"{prefix}_statistical_baselines.json",
+        "predictions_csv": target_dir / f"{prefix}_test_predictions.csv",
+        "probabilistic_predictions_csv": target_dir / f"{prefix}_probabilistic_predictions.csv",
+        "diagnostics_json": target_dir / f"{prefix}_test_diagnostics.json",
+        "model_card_json": target_dir / f"{prefix}_model_card.json",
+        "final_model": target_dir / final_model_name,
+        "feature_manifest_json": target_dir / f"{prefix}_feature_manifest.json",
+        "feature_roles_json": target_dir / f"{prefix}_feature_roles.json",
+        "split_manifest_json": target_dir / f"{prefix}_split_manifest.json",
+        "target_contract_json": target_dir / f"{prefix}_target_contract.json",
+        "interpretability_json": target_dir / f"{prefix}_interpretability.json",
+        "promotable_bundle_manifest_json": target_dir / f"{prefix}_promotable_bundle_manifest.json",
+        "evaluation_metadata": target_dir / f"{prefix}_evaluation_metadata.json",
+        "economic_gain_json": target_dir / f"{prefix}_economic_gain_vs_best_baseline.json",
+        "daily_refit_metrics_csv": target_dir / f"{prefix}_daily_refit_metrics.csv",
+        "actual_vs_predicted_plot": target_dir / f"{prefix}_actual_vs_predicted.png",
+        "residuals_plot": target_dir / f"{prefix}_residuals.png",
+        "residuals_qq_plot": target_dir / f"{prefix}_residuals_qq.png",
+        "residuals_acf_pacf_plot": target_dir / f"{prefix}_residuals_acf_pacf.png",
     }
 
 
@@ -86,7 +103,13 @@ def build_evaluation_feature_manifest_payload(
     *,
     context: EvaluationPreparedContext,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    feature_roles = build_feature_contract(context.feature_cols)
+    decision_profile = str(
+        context.best_params.get("decision_profile", "post_close_d_plus_1")
+    )
+    feature_roles = build_feature_contract(
+        context.feature_cols,
+        decision_profile=cast(Any, decision_profile),
+    )
     return (
         {
             "feature_columns": context.feature_cols,
@@ -94,6 +117,7 @@ def build_evaluation_feature_manifest_payload(
             "constant_feature_cols": context.constant_feature_cols,
             "identifier_feature_cols": context.identifier_feature_cols,
             "missing_in_test_feature_cols": context.missing_in_test_feature_cols,
+            "requested_decision_profile": decision_profile,
         },
         feature_roles,
     )
@@ -112,6 +136,23 @@ def build_evaluation_split_manifest_payload(
     }
 
 
+def _source_feature_availability_profile(
+    *,
+    context: EvaluationPreparedContext,
+) -> str | None:
+    profiles: set[str] = set()
+    for frame in (context.train_frame, context.valid_frame, context.test_frame):
+        if "feature_availability_profile" not in frame.columns:
+            continue
+        values = frame["feature_availability_profile"].dropna().astype(str).unique()
+        profiles.update(str(value) for value in values)
+    if not profiles:
+        return None
+    if len(profiles) == 1:
+        return next(iter(profiles))
+    return "mixed:" + ",".join(sorted(profiles))
+
+
 def _evaluation_metrics_payload(
     *,
     context: EvaluationPreparedContext,
@@ -119,7 +160,7 @@ def _evaluation_metrics_payload(
     baseline_savings_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     metrics_payload = {
-        "model_family": "foundation_tft",
+        "model_family": _context_model_family(context),
         **compute_metrics_payload(context.history_reference, canonical_predictions_df),
     }
     if baseline_savings_payload is not None:
@@ -207,6 +248,7 @@ def build_evaluation_payloads(
     economic_gain_payload = build_simple_economic_gain_payload(
         canonical_predictions_df,
         metrics_payload,
+        model_family=_context_model_family(context),
         duckdb_path=duckdb_path,
     )
     return (
@@ -229,6 +271,8 @@ def build_evaluation_metadata_payload(
     final_model: Any,
 ) -> dict[str, Any]:
     return {
+        "model_backend": context.model_backend,
+        "model_family": _context_model_family(context),
         "evaluation_mode": context.evaluation_mode,
         "feature_cols": context.feature_cols,
         "constant_feature_cols": context.constant_feature_cols,
@@ -251,6 +295,25 @@ def build_evaluation_metadata_payload(
         "final_model_git_sha": getattr(final_model, "git_sha", None),
         "final_model_normalization_strategy": getattr(final_model, "normalization_strategy", {}),
         "final_model_artifact_bundle_version": getattr(final_model, "artifact_bundle_version", None),
+        "requested_decision_profile": str(
+            context.best_params.get("decision_profile", "post_close_d_plus_1")
+        ),
+        "source_feature_availability_profile": _source_feature_availability_profile(
+            context=context,
+        ),
+        "test_labels_used_for_training": True,
+        "test_label_usage_policy": (
+            "walk_forward_refit_uses_only_test_window_rows strictly before each "
+            "evaluation date; current/future test labels are never used"
+        ),
+        "monitor_metric": str(
+            context.best_params.get("validation_monitor_metric", "business_val_wape")
+        ),
+        "training_eligibility_policy": {
+            "usable_for_training_flag": "must_be_true_when_present",
+            "censor_flag": "must_be_false_when_present",
+            "label_quality_score": "must_be_at_least_0.75_when_present",
+        },
         **build_target_contract_metadata(context.target_contract),
         "reference_overlap": context.overlap_metadata,
     }
@@ -268,7 +331,7 @@ def build_evaluation_model_card_payload(
     interpretability_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return {
-        "model_family": "foundation_tft",
+        "model_family": _context_model_family(context),
         "feature_count": int(len(context.feature_cols)),
         "feature_columns": context.feature_cols,
         "metrics": metrics_payload,
@@ -311,10 +374,13 @@ def log_evaluation_completion(
 ) -> None:
     overall_metrics = metrics_payload["overall_metrics"]
     logger.info(
-        "Evaluation complete: mode=%s test_rows=%s mae=%.6f rmse=%.6f smape=%.6f coverage_80=%s coverage_95=%s best_baseline=%s estimated_savings=%.2f",
+        "Evaluation complete: mode=%s test_rows=%s mae=%.6f wape=%.6f bias=%.6f "
+        "rmse=%.6f smape=%.6f coverage_80=%s coverage_95=%s best_baseline=%s estimated_savings=%.2f",
         evaluation_mode,
         overall_metrics["test_rows"],
         overall_metrics["mae"],
+        overall_metrics["wape"],
+        overall_metrics["bias"],
         overall_metrics["rmse"],
         overall_metrics["smape"],
         overall_metrics.get("coverage_80"),
@@ -324,7 +390,8 @@ def log_evaluation_completion(
     )
     for product_name, product_gain in economic_gain_payload["per_product_gain"].items():
         logger.info(
-            "Economic gain by product: product=%s best_baseline=%s model_mae=%.6f baseline_mae=%.6f absolute_mae_saved=%.6f estimated_savings_eur=%.2f",
+            "Economic gain by product: product=%s best_baseline=%s model_mae=%.6f "
+            "baseline_mae=%.6f absolute_mae_saved=%.6f estimated_savings_eur=%.2f",
             product_name,
             product_gain["best_baseline_name"],
             product_gain["model_mae"],
@@ -332,6 +399,11 @@ def log_evaluation_completion(
             product_gain["absolute_mae_saved_vs_best_baseline"],
             product_gain["estimated_savings_eur_vs_best_baseline"],
         )
+    logger.info(
+        "Evaluation final global summary: global_mae=%.6f global_estimated_savings_eur=%.2f",
+        overall_metrics["mae"],
+        economic_gain_payload["total_estimated_savings_eur_vs_best_baselines"],
+    )
 
 
 def build_promotable_bundle_manifest_payload(
@@ -340,9 +412,24 @@ def build_promotable_bundle_manifest_payload(
     context: EvaluationPreparedContext,
     final_model: Any,
 ) -> dict[str, Any]:
+    requested_profile = str(
+        context.best_params.get("decision_profile", "post_close_d_plus_1")
+    )
+    source_profile = _source_feature_availability_profile(context=context)
+    promotion_eligible = (
+        requested_profile == "post_close_d_plus_1"
+        and source_profile in {None, "post_close_d_plus_1"}
+    )
     return {
         "bundle_version": 2,
-        "model_family": "foundation_tft",
+        "model_family": _context_model_family(context),
+        "promotion_eligible": promotion_eligible,
+        "requested_decision_profile": requested_profile,
+        "source_feature_availability_profile": source_profile,
+        "test_labels_used_for_training": False,
+        "monitor_metric": str(
+            context.best_params.get("validation_monitor_metric", "business_val_wape")
+        ),
         "runtime_profile": getattr(final_model, "runtime_profile", None),
         "normalization_strategy": getattr(final_model, "normalization_strategy", {}),
         "system_info": getattr(final_model, "system_info", {}),
@@ -359,6 +446,8 @@ def persist_evaluation_outputs(
     save_model_fn: Callable[[Any, Path], Path],
     plot_actual_vs_predicted_fn: Callable[[pd.DataFrame, Path], None],
     plot_residuals_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_qq_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_acf_pacf_fn: Callable[[pd.DataFrame, Path], None],
 ) -> dict[str, Path]:
     output_paths = artifacts.output_paths
     json_dump(output_paths["feature_manifest_json"], artifacts.feature_manifest_payload)
@@ -376,6 +465,8 @@ def persist_evaluation_outputs(
     json_dump(output_paths["evaluation_metadata"], artifacts.evaluation_metadata_payload)
     plot_actual_vs_predicted_fn(artifacts.predictions_df, output_paths["actual_vs_predicted_plot"])
     plot_residuals_fn(artifacts.predictions_df, output_paths["residuals_plot"])
+    plot_residuals_qq_fn(artifacts.predictions_df, output_paths["residuals_qq_plot"])
+    plot_residuals_acf_pacf_fn(artifacts.predictions_df, output_paths["residuals_acf_pacf_plot"])
     json_dump(output_paths["interpretability_json"], artifacts.interpretability_payload or {})
     json_dump(output_paths["model_card_json"], artifacts.model_card_payload)
     promotable_manifest = {
@@ -390,10 +481,13 @@ def persist_evaluation_outputs(
         output_paths["promotable_bundle_manifest_json"],
         cast(dict[str, object], promotable_manifest),
     )
-    artifacts.final_model.bundle_manifest = promotable_manifest
-    artifacts.final_model.data_hashes = cast(
-        dict[str, str],
-        promotable_manifest.get("artifact_hashes", {}),
-    )
+    try:
+        artifacts.final_model.bundle_manifest = promotable_manifest
+        artifacts.final_model.data_hashes = cast(
+            dict[str, str],
+            promotable_manifest.get("artifact_hashes", {}),
+        )
+    except (AttributeError, FrozenInstanceError):
+        pass
     save_model_fn(artifacts.final_model, output_paths["final_model"])
     return output_paths

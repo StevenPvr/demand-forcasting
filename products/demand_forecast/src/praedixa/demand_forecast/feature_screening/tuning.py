@@ -20,21 +20,38 @@ from praedixa.demand_forecast.feature_screening.constants import (
 from praedixa.demand_forecast.feature_screening.tft_fold_cache import (
     cached_screening_fold_artifacts,
 )
-from praedixa.demand_forecast.feature_screening.metrics import compute_wape, compute_wape_improvement_pct
+from praedixa.demand_forecast.feature_screening.metrics import (
+    compute_wape,
+    compute_wape_improvement_pct,
+)
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
-from praedixa.demand_forecast.backends.tft.model_utils import DEFAULT_TFT_MODEL_PARAMS, fit_tft_model, predict_with_tft_model
+from praedixa.demand_forecast.backends.tft.model_utils import (
+    DEFAULT_TFT_MODEL_PARAMS,
+    fit_tft_model,
+    predict_with_tft_model,
+)
 
 
-def sample_trial_params(trial_index: int, random_seed: int = DEFAULT_RANDOM_SEED) -> dict[str, object]:
+def sample_trial_params(
+    trial_index: int, random_seed: int = DEFAULT_RANDOM_SEED
+) -> dict[str, object]:
     rng = np.random.default_rng(random_seed + trial_index)
     return {
         "max_epochs": int(rng.integers(10, 41)),
-        "learning_rate": float(math.exp(float(rng.uniform(math.log(1e-3), math.log(5e-2))))),
-        "hidden_size": int(rng.choice(np.asarray([8, 16, 24, 32, 48, 64], dtype=np.int32))),
-        "hidden_continuous_size": int(rng.choice(np.asarray([4, 8, 12, 16, 24, 32], dtype=np.int32))),
+        "learning_rate": float(
+            math.exp(float(rng.uniform(math.log(1e-3), math.log(5e-2))))
+        ),
+        "hidden_size": int(
+            rng.choice(np.asarray([8, 16, 24, 32, 48, 64], dtype=np.int32))
+        ),
+        "hidden_continuous_size": int(
+            rng.choice(np.asarray([4, 8, 12, 16, 24, 32], dtype=np.int32))
+        ),
         "attention_head_size": int(rng.choice(np.asarray([1, 2, 4], dtype=np.int32))),
         "dropout": float(rng.uniform(0.05, 0.30)),
-        "weight_decay": float(math.exp(float(rng.uniform(math.log(1e-6), math.log(1e-2))))),
+        "weight_decay": float(
+            math.exp(float(rng.uniform(math.log(1e-6), math.log(1e-2))))
+        ),
         "random_state": int(random_seed + trial_index),
     }
 
@@ -46,9 +63,15 @@ def sample_optuna_params(
     return {
         "max_epochs": trial.suggest_int("max_epochs", 10, 40),
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 5e-2, log=True),
-        "hidden_size": trial.suggest_categorical("hidden_size", [8, 16, 24, 32, 48, 64]),
-        "hidden_continuous_size": trial.suggest_categorical("hidden_continuous_size", [4, 8, 12, 16, 24, 32]),
-        "attention_head_size": trial.suggest_categorical("attention_head_size", [1, 2, 4]),
+        "hidden_size": trial.suggest_categorical(
+            "hidden_size", [8, 16, 24, 32, 48, 64]
+        ),
+        "hidden_continuous_size": trial.suggest_categorical(
+            "hidden_continuous_size", [4, 8, 12, 16, 24, 32]
+        ),
+        "attention_head_size": trial.suggest_categorical(
+            "attention_head_size", [1, 2, 4]
+        ),
         "dropout": trial.suggest_float("dropout", 0.05, 0.30),
         "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True),
         "random_state": int(random_seed + trial.number + 1),
@@ -61,7 +84,10 @@ def _resolve_fold_workers(
     resolved_params: dict[str, object],
     num_threads_override: int | None,
 ) -> int:
-    num_threads = int(num_threads_override or cast(Any, resolved_params.get("n_jobs", os.cpu_count() or 1)))
+    num_threads = int(
+        num_threads_override
+        or cast(Any, resolved_params.get("n_jobs", os.cpu_count() or 1))
+    )
     return max(1, min(len(folds), num_threads))
 
 
@@ -90,7 +116,12 @@ def _fit_single_screening_fold(
         valid_frame=cached_fold.valid_frame,
         dataset_artifacts=cached_fold.dataset_artifacts,
     )
-    predictions = predict_with_tft_model(model, cached_fold.valid_frame, feature_cols)
+    predictions = predict_with_tft_model(
+        model,
+        cached_fold.valid_frame,
+        feature_cols,
+        fallback_policy="raise",
+    )
     return compute_wape(cached_fold.valid_frame[target_col], predictions)
 
 
@@ -188,7 +219,10 @@ def _objective_improvement(
     base_model_params: dict[str, object] | None,
     total_threads: int,
 ) -> tuple[float, float, list[float]]:
-    trial_params = {**(base_model_params or {}), **sample_optuna_params(trial=trial, random_seed=random_seed)}
+    trial_params = {
+        **(base_model_params or {}),
+        **sample_optuna_params(trial=trial, random_seed=random_seed),
+    }
     fold_scores = fit_and_score_tft_model(
         frame=frame,
         folds=folds,
@@ -199,14 +233,20 @@ def _objective_improvement(
         num_threads_override=total_threads,
     )
     mean_wape = float(np.mean(fold_scores))
-    return mean_wape, compute_wape_improvement_pct(baseline_wape, mean_wape), fold_scores
+    return (
+        mean_wape,
+        compute_wape_improvement_pct(baseline_wape, mean_wape),
+        fold_scores,
+    )
 
 
 def _trial_rows(study: optuna.study.Study) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for trial in study.trials:
         if trial.value is None:
-            raise ValueError(f"Optuna trial {trial.number} completed without an objective value.")
+            raise ValueError(
+                f"Optuna trial {trial.number} completed without an objective value."
+            )
         rows.append(
             {
                 "trial": trial.number,
@@ -247,7 +287,10 @@ def _log_tuning_progress(
         "Tuning progress: trial=%s/%s current_best_improvement_pct=%.6f",
         completed,
         n_trials,
-        max((t.value for t in study.trials if t.value is not None), default=improvement_pct),
+        max(
+            (t.value for t in study.trials if t.value is not None),
+            default=improvement_pct,
+        ),
     )
 
 
@@ -289,12 +332,21 @@ def optimize_non_lag_model_params(
     num_workers: int | None = None,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     del num_workers
-    raise_if_tft_backend_required("features_selection_lag.optimize_non_lag_model_params")
+    raise_if_tft_backend_required(
+        "features_selection_lag.optimize_non_lag_model_params"
+    )
     _validate_screening_tuning_args(n_trials=n_trials, baseline_wape=baseline_wape)
     assert baseline_wape is not None
-    total_threads = int(cast(Any, (base_model_params or {}).get("n_jobs", os.cpu_count() or 1)))
+    total_threads = int(
+        cast(Any, (base_model_params or {}).get("n_jobs", os.cpu_count() or 1))
+    )
     study = _configure_optuna_study(random_seed)
-    log_tuning_start(logger=logger, n_trials=n_trials, feature_count=len(feature_cols), baseline_wape=baseline_wape)
+    log_tuning_start(
+        logger=logger,
+        n_trials=n_trials,
+        feature_count=len(feature_cols),
+        baseline_wape=baseline_wape,
+    )
     run_optuna_search(
         study=study,
         frame=frame,
@@ -445,7 +497,11 @@ def _objective_for_search(
 
 
 def tuning_report_frame(study: optuna.study.Study) -> pd.DataFrame:
-    return pd.DataFrame(_trial_rows(study)).sort_values(
-        by="baseline_wape_improvement_pct",
-        ascending=False,
-    ).reset_index(drop=True)
+    return (
+        pd.DataFrame(_trial_rows(study))
+        .sort_values(
+            by="baseline_wape_improvement_pct",
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )

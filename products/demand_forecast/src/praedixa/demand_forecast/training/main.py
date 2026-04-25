@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import json
-import logging
-import os
 from pathlib import Path
 import sys
 
@@ -32,263 +28,27 @@ def _bootstrap_import_paths() -> None:
 
 _bootstrap_import_paths()
 
+from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
+    OFFICIAL_OPTIMISATION_MAIN_CONFIG,
+    OptimisationMainConfig,
+    build_default_optimisation_main_config,
+    build_tft_optimisation_main_config,
+    build_xgboost_optimisation_main_config,
+)
+from praedixa.demand_forecast.training.entrypoints.main_runner import (  # noqa: E402
+    main,
+    run_optimisation_main,
+)
 
-def _load_optimisation_main_defaults() -> tuple[
-    str, str, int, int, str, float, float, int, int, str, float, float
-]:
-    from praedixa.demand_forecast.training.constants import (
-        DEFAULT_H100_OPTIMISATION_MAIN_MAX_TRIALS,
-        DEFAULT_H100_OPTIMISATION_MAIN_N_FOLDS,
-        DEFAULT_H100_OPTIMISATION_MAIN_STAGE_BUDGET,
-        DEFAULT_H100_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
-        DEFAULT_H100_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
-        DEFAULT_OPTIMISATION_MAIN_MAX_TRIALS,
-        DEFAULT_OPTIMISATION_MAIN_N_FOLDS,
-        DEFAULT_OPTIMISATION_MAIN_RUNTIME_PROFILE,
-        DEFAULT_OPTIMISATION_MAIN_STAGE_BUDGET,
-        DEFAULT_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
-        DEFAULT_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
-    )
-    from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR
-
-    return (
-        str(TRAINING_BUNDLE_DIR),
-        DEFAULT_OPTIMISATION_MAIN_RUNTIME_PROFILE,
-        DEFAULT_OPTIMISATION_MAIN_N_FOLDS,
-        DEFAULT_OPTIMISATION_MAIN_MAX_TRIALS,
-        DEFAULT_OPTIMISATION_MAIN_STAGE_BUDGET,
-        DEFAULT_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
-        DEFAULT_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
-        DEFAULT_H100_OPTIMISATION_MAIN_N_FOLDS,
-        DEFAULT_H100_OPTIMISATION_MAIN_MAX_TRIALS,
-        DEFAULT_H100_OPTIMISATION_MAIN_STAGE_BUDGET,
-        DEFAULT_H100_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
-        DEFAULT_H100_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
-    )
-
-
-(
-    DEFAULT_BUNDLE_DIR,
-    DEFAULT_RUNTIME_PROFILE,
-    DEFAULT_N_FOLDS,
-    DEFAULT_MAX_TRIALS,
-    DEFAULT_STAGE_BUDGET,
-    DEFAULT_TRAIN_SAMPLE_FRACTION,
-    DEFAULT_TUNING_SAMPLE_FRACTION,
-    DEFAULT_H100_N_FOLDS,
-    DEFAULT_H100_MAX_TRIALS,
-    DEFAULT_H100_STAGE_BUDGET,
-    DEFAULT_H100_TRAIN_SAMPLE_FRACTION,
-    DEFAULT_H100_TUNING_SAMPLE_FRACTION,
-) = _load_optimisation_main_defaults()
-
-DEFAULT_TENSORBOARD_LOGDIR: Path | None = None
-
-
-def _cuda_available() -> bool:
-    try:
-        import torch
-    except ImportError:
-        return False
-    return bool(torch.cuda.is_available())
-
-
-def _cuda_device_name() -> str | None:
-    try:
-        import torch
-    except ImportError:
-        return None
-    if not torch.cuda.is_available():
-        return None
-    try:
-        return str(torch.cuda.get_device_name(0))
-    except RuntimeError:
-        return None
-
-
-def _mps_available() -> bool:
-    try:
-        import torch
-    except ImportError:
-        return False
-    mps_backend = getattr(torch.backends, "mps", None)
-    if mps_backend is None:
-        return False
-    is_available = getattr(mps_backend, "is_available", None)
-    return bool(is_available()) if callable(is_available) else False
-
-
-def _validate_runtime_profile(requested_profile: str) -> None:
-    if requested_profile == "local_cpu":
-        return
-    if requested_profile == "mac_metal":
-        if _mps_available():
-            return
-        raise RuntimeError(
-            "The official optimisation run is configured with `mac_metal`, but MPS is unavailable on this machine. "
-            "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
-        )
-    if requested_profile in {"scaleway_l40s", "nvidia_h100"}:
-        if _cuda_available():
-            return
-        raise RuntimeError(
-            f"The official optimisation run is configured with `{requested_profile}`, but CUDA is unavailable on this machine. "
-            "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
-        )
-    raise RuntimeError(
-        f"Unknown official optimisation runtime profile `{requested_profile}`. "
-        "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
-    )
-
-
-def _default_output_dir() -> Path:
-    from praedixa.platform.runtime.paths import OPTIMISATION_DIR
-
-    return OPTIMISATION_DIR
-
-
-def _is_h100_cuda_device() -> bool:
-    device_name = _cuda_device_name()
-    return device_name is not None and "H100" in device_name.upper()
-
-
-def _default_runtime_profile() -> str:
-    if _is_h100_cuda_device():
-        return "nvidia_h100"
-    if _cuda_available():
-        return "scaleway_l40s"
-    return DEFAULT_RUNTIME_PROFILE
-
-
-def _default_budget_for_runtime(
-    runtime_profile: str,
-) -> tuple[int, int, str, float, float]:
-    if runtime_profile == "nvidia_h100":
-        return (
-            DEFAULT_H100_N_FOLDS,
-            DEFAULT_H100_MAX_TRIALS,
-            DEFAULT_H100_STAGE_BUDGET,
-            DEFAULT_H100_TRAIN_SAMPLE_FRACTION,
-            DEFAULT_H100_TUNING_SAMPLE_FRACTION,
-        )
-    return (
-        DEFAULT_N_FOLDS,
-        DEFAULT_MAX_TRIALS,
-        DEFAULT_STAGE_BUDGET,
-        DEFAULT_TRAIN_SAMPLE_FRACTION,
-        DEFAULT_TUNING_SAMPLE_FRACTION,
-    )
-
-
-@dataclass(frozen=True)
-class OptimisationMainConfig:
-    bundle_dir: Path = Path(DEFAULT_BUNDLE_DIR)
-    runtime_profile: str = field(default_factory=_default_runtime_profile)
-    output_dir: Path = field(default_factory=_default_output_dir)
-    n_folds: int = DEFAULT_N_FOLDS
-    max_trials: int = DEFAULT_MAX_TRIALS
-    stage_budget: str = DEFAULT_STAGE_BUDGET
-    train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION
-    tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION
-    tensorboard_logdir: Path | None = DEFAULT_TENSORBOARD_LOGDIR
-
-
-def build_default_optimisation_main_config() -> OptimisationMainConfig:
-    runtime_profile = _default_runtime_profile()
-    (
-        n_folds,
-        max_trials,
-        stage_budget,
-        train_sample_fraction,
-        tuning_sample_fraction,
-    ) = _default_budget_for_runtime(runtime_profile)
-    return OptimisationMainConfig(
-        runtime_profile=runtime_profile,
-        n_folds=n_folds,
-        max_trials=max_trials,
-        stage_budget=stage_budget,
-        train_sample_fraction=train_sample_fraction,
-        tuning_sample_fraction=tuning_sample_fraction,
-    )
-
-
-OFFICIAL_OPTIMISATION_MAIN_CONFIG = build_default_optimisation_main_config()
-
-
-def _validate_bundle_dir(bundle_dir: Path) -> tuple[Path, Path, Path]:
-    optimisation_train_input_path = bundle_dir / "optimisation_train.parquet"
-    optimisation_tuning_input_path = bundle_dir / "optimisation_tuning.parquet"
-    if (
-        optimisation_train_input_path.exists()
-        and optimisation_tuning_input_path.exists()
-    ):
-        return optimisation_train_input_path, optimisation_tuning_input_path, bundle_dir
-    train_input_path = bundle_dir / "train.parquet"
-    tuning_input_path = bundle_dir / "tuning.parquet"
-    if not train_input_path.exists():
-        raise FileNotFoundError(f"Training bundle is missing `{train_input_path}`.")
-    if not tuning_input_path.exists():
-        raise FileNotFoundError(f"Training bundle is missing `{tuning_input_path}`.")
-    return train_input_path, tuning_input_path, bundle_dir
-
-
-def _resolve_official_bundle_inputs(bundle_dir: Path) -> tuple[Path, Path, Path]:
-    return _validate_bundle_dir(bundle_dir)
-
-
-def main() -> None:
-    from praedixa.demand_forecast.backends.tft.backend import TFTBackendNotReadyError
-    from praedixa.demand_forecast.training.pipeline import (
-        OptimisationBuildRequest,
-        build_optimisation_outputs,
-    )
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
-    config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
-    logging.getLogger(__name__).info(
-        "Selected official optimisation runtime profile: runtime_profile=%s cuda_available=%s mps_available=%s",
-        config.runtime_profile,
-        _cuda_available(),
-        _mps_available(),
-    )
-    train_input_path, tuning_input_path, resolved_bundle_dir = (
-        _resolve_official_bundle_inputs(config.bundle_dir)
-    )
-    _validate_runtime_profile(config.runtime_profile)
-    model_params: dict[str, object] = {
-        "n_jobs": os.cpu_count() or 1,
-        "runtime_profile": config.runtime_profile,
-        "stage_budget": config.stage_budget,
-    }
-    if config.tensorboard_logdir is not None:
-        model_params["tensorboard_logdir"] = str(config.tensorboard_logdir)
-    try:
-        outputs = build_optimisation_outputs(
-            OptimisationBuildRequest(
-                train_input_path=train_input_path,
-                tuning_input_path=tuning_input_path,
-                output_dir=config.output_dir,
-                n_folds=config.n_folds,
-                tuning_trials=config.max_trials,
-                train_sample_fraction=config.train_sample_fraction,
-                tuning_sample_fraction=config.tuning_sample_fraction,
-                model_params=model_params,
-                bundle_dir=resolved_bundle_dir,
-            ),
-        )
-    except TFTBackendNotReadyError as exc:
-        logging.getLogger(__name__).error(
-            "Optimisation aborted because the TFT backend is unavailable: %s",
-            exc,
-        )
-        raise
-    logging.getLogger(__name__).info(
-        "Optimisation artifacts written: %s",
-        json.dumps({name: str(path) for name, path in outputs.items()}, indent=2),
-    )
+__all__ = [
+    "OFFICIAL_OPTIMISATION_MAIN_CONFIG",
+    "OptimisationMainConfig",
+    "build_default_optimisation_main_config",
+    "build_tft_optimisation_main_config",
+    "build_xgboost_optimisation_main_config",
+    "main",
+    "run_optimisation_main",
+]
 
 
 if __name__ == "__main__":

@@ -20,10 +20,6 @@ location_calendar as (
     select *
     from {{ ref("silver_location_calendar") }}
 ),
-location_capacity_daily as (
-    select *
-    from {{ ref("silver_location_capacity_daily") }}
-),
 source_policy as (
     select
         dataset_source,
@@ -38,10 +34,6 @@ source_policy as (
 country_calendar as (
     select *
     from {{ ref("silver_open_public_holiday_calendar_daily") }}
-),
-school_calendar as (
-    select *
-    from {{ ref("silver_open_school_holidays_daily") }}
 ),
 open_weather as (
     select *
@@ -78,18 +70,17 @@ location_day_context as (
         location_id,
         dt,
         true as location_has_activity_flag,
-        bool_or(day_complete_flag) as day_complete_flag,
-        bool_or(missing_sales_flag) as missing_sales_flag,
-        bool_or(holiday_flag) as holiday_flag,
-        bool_or(activity_flag) as activity_flag,
+        bool_or(coalesce(try_cast(day_complete_flag as boolean), false)) as day_complete_flag,
+        bool_or(coalesce(try_cast(holiday_flag as boolean), false)) as holiday_flag,
+        bool_or(coalesce(try_cast(activity_flag as boolean), false)) as activity_flag,
         max(event_name_1) as event_name_1,
         max(event_type_1) as event_type_1,
         max(event_name_2) as event_name_2,
         max(event_type_2) as event_type_2,
-        avg(weather_precipitation) as weather_precipitation,
-        avg(weather_temperature) as weather_temperature,
-        avg(weather_humidity) as weather_humidity,
-        avg(weather_wind_level) as weather_wind_level,
+        avg(try_cast(weather_precipitation as double)) as weather_precipitation,
+        avg(try_cast(weather_temperature as double)) as weather_temperature,
+        avg(try_cast(weather_humidity as double)) as weather_humidity,
+        avg(try_cast(weather_wind_level as double)) as weather_wind_level,
         max(source_partition) as source_partition
     from source_rows
     group by
@@ -121,30 +112,17 @@ dense_panel as (
         bounds.category_level_1,
         bounds.category_level_2,
         bounds.category_level_3,
-        profile.site_format,
-        profile.service_model,
         profile.drive_through_flag,
         profile.delivery_flag,
         profile.pickup_flag,
-        profile.late_night_flag,
-        profile.trade_area_type,
-        profile.office_density_bucket,
-        profile.residential_density_bucket,
-        profile.competition_intensity_bucket,
         product_profile.product_family,
         product_profile.product_subfamily,
-        product_profile.menu_role,
-        product_profile.price_band,
         observed.dt is not null as is_observed_row,
-        coalesce(context.location_has_activity_flag, false) as location_open_flag,
-        true as product_active_flag,
-        coalesce(context.day_complete_flag, observed.dt is not null) as day_complete_flag,
-        coalesce(context.missing_sales_flag, false) as missing_sales_flag,
-        observed.observed_stockout_flag,
-        coalesce(observed.observed_stockout_available, false) as observed_stockout_available,
-        coalesce(observed.anomaly_flag, false) as anomaly_flag,
+        coalesce(try_cast(context.day_complete_flag as boolean), observed.dt is not null) as day_complete_flag,
+        try_cast(observed.observed_stockout_flag as boolean) as observed_stockout_flag,
+        coalesce(try_cast(observed.observed_stockout_available as boolean), false) as observed_stockout_available,
         case
-            when observed.dt is not null then observed.observed_demand_qty
+            when observed.dt is not null then try_cast(observed.observed_demand_qty as double)
             when coalesce(context.location_has_activity_flag, false) then 0.0
             else null
         end as current_day_demand_qty,
@@ -152,42 +130,76 @@ dense_panel as (
             when observed.dt is null and coalesce(context.location_has_activity_flag, false) then true
             else false
         end as true_zero_demand_flag,
-        case
-            when observed.dt is null and not coalesce(context.location_has_activity_flag, false) then true
-            else false
-        end as location_closed_flag,
-        observed.observed_revenue_net,
-        observed.avg_selling_price,
-        observed.observed_discount_amount,
-        observed.promo_flag,
-        coalesce(observed.holiday_flag, context.holiday_flag, country_calendar.holiday_flag, false) as holiday_flag,
-        coalesce(context.activity_flag, observed.activity_flag, observed.dt is not null) as activity_flag,
-        country_calendar.holiday_name as holiday_name,
-        coalesce(school_calendar.school_holiday_flag, false) as school_holiday_flag,
-        school_calendar.school_holiday_name as school_holiday_name,
-        coalesce(country_calendar.bridge_day_flag, false) as bridge_day_flag,
-        coalesce(country_calendar.pre_holiday_flag, false) as pre_holiday_flag,
-        coalesce(country_calendar.post_holiday_flag, false) as post_holiday_flag,
-        location_calendar.holiday_name as holiday_name_local,
-        coalesce(location_calendar.school_holiday_flag_local, false) as school_holiday_flag_local,
-        location_calendar.school_holiday_name as school_holiday_name_local,
-        coalesce(location_calendar.payday_flag, false) as payday_flag,
-        coalesce(location_calendar.month_start_flag, false) as month_start_flag,
-        coalesce(location_calendar.month_end_flag, false) as month_end_flag,
-        coalesce(observed.weather_precipitation, context.weather_precipitation, open_weather.weather_precipitation_sum) as weather_precipitation,
-        coalesce(observed.weather_temperature, context.weather_temperature, open_weather.weather_temperature_mean) as weather_temperature,
-        open_weather.weather_temperature_min as weather_temperature_min,
-        open_weather.weather_temperature_max as weather_temperature_max,
-        coalesce(observed.weather_humidity, context.weather_humidity, open_weather.weather_relative_humidity_mean) as weather_humidity,
-        coalesce(observed.weather_wind_level, context.weather_wind_level, open_weather.weather_wind_speed_mean) as weather_wind_level,
-        macro_country.lending_interest_rate_latest,
-        case
-            when dense.dataset_source = 'freshretail' then 'public_freshretailnet'
-            when dense.dataset_source = 'freshretail_lt' then 'public_freshretailnet_lt'
-            when dense.dataset_source = 'bakery' then 'public_bakery_sales'
-            when dense.dataset_source = 'first_party_daily' then 'first_party_client'
-            else 'unknown_public_dataset'
-        end as client_id,
+        coalesce(observed.target_semantics, 'observed_sales') as target_semantics,
+        coalesce(
+            try_cast(observed.censor_flag as boolean),
+            coalesce(try_cast(observed.observed_stockout_flag as boolean), false),
+            false
+        ) as censor_flag,
+        coalesce(
+            observed.target_source,
+            case
+                when observed.dt is not null then 'observed_sales'
+                when coalesce(context.location_has_activity_flag, false) then 'dense_calendar_zero_fill'
+                else 'closed_or_missing_observation'
+            end
+        ) as target_source,
+        coalesce(
+            try_cast(observed.label_quality_score as double),
+            case
+                when coalesce(try_cast(observed.observed_stockout_flag as boolean), false) then 0.5
+                when observed.dt is null and coalesce(context.location_has_activity_flag, false) then 0.8
+                when observed.dt is null then 0.0
+                else 1.0
+            end
+        ) as label_quality_score,
+        coalesce(
+            try_cast(observed.usable_for_training_flag as boolean),
+            not coalesce(try_cast(observed.observed_stockout_flag as boolean), false),
+            false
+        ) as usable_for_training_flag,
+        try_cast(observed.observed_revenue_net as double) as observed_revenue_net,
+        try_cast(observed.observed_discount_amount as double) as observed_discount_amount,
+        try_cast(observed.promo_flag as boolean) as promo_flag,
+        coalesce(
+            try_cast(observed.holiday_flag as boolean),
+            try_cast(context.holiday_flag as boolean),
+            try_cast(country_calendar.holiday_flag as boolean),
+            false
+        ) as holiday_flag,
+        coalesce(
+            try_cast(context.activity_flag as boolean),
+            try_cast(observed.activity_flag as boolean),
+            observed.dt is not null
+        ) as activity_flag,
+        coalesce(try_cast(country_calendar.bridge_day_flag as boolean), false) as bridge_day_flag,
+        coalesce(try_cast(country_calendar.pre_holiday_flag as boolean), false) as pre_holiday_flag,
+        coalesce(try_cast(country_calendar.post_holiday_flag as boolean), false) as post_holiday_flag,
+        coalesce(try_cast(location_calendar.month_start_flag as boolean), false) as month_start_flag,
+        coalesce(try_cast(location_calendar.month_end_flag as boolean), false) as month_end_flag,
+        coalesce(
+            try_cast(observed.weather_precipitation as double),
+            try_cast(context.weather_precipitation as double),
+            try_cast(open_weather.weather_precipitation_sum as double)
+        ) as weather_precipitation,
+        coalesce(
+            try_cast(observed.weather_temperature as double),
+            try_cast(context.weather_temperature as double),
+            try_cast(open_weather.weather_temperature_mean as double)
+        ) as weather_temperature,
+        try_cast(open_weather.weather_temperature_min as double) as weather_temperature_min,
+        try_cast(open_weather.weather_temperature_max as double) as weather_temperature_max,
+        coalesce(
+            try_cast(observed.weather_humidity as double),
+            try_cast(context.weather_humidity as double),
+            try_cast(open_weather.weather_relative_humidity_mean as double)
+        ) as weather_humidity,
+        coalesce(
+            try_cast(observed.weather_wind_level as double),
+            try_cast(context.weather_wind_level as double),
+            try_cast(open_weather.weather_wind_speed_mean as double)
+        ) as weather_wind_level,
+        try_cast(macro_country.lending_interest_rate_latest as double) as lending_interest_rate_latest,
         case
             when dense.dataset_source = 'bakery' then 'bakery'
             when dense.dataset_source = 'first_party_daily' then 'food_service'
@@ -215,8 +227,10 @@ dense_panel as (
         coalesce(source_policy.source_license_type, 'unknown') as source_license_type,
         coalesce(source_policy.source_review_status, 'unknown') as source_review_status,
         coalesce(source_policy.source_review_status, 'unknown') as source_legal_status_snapshot,
-        false as freshretail_rescaled_flag,
-        'native_observed' as target_scale_assumption,
+        case
+            when dense.dataset_source = 'first_party_daily' then 'pilot'
+            else 'benchmark'
+        end as source_role,
         '{{ env_var("PRAEDIXA_GOLD_RUN_ID", "manual") }}' as gold_run_id
     from dense_dates as dense
     inner join series_bounds as bounds
@@ -245,10 +259,6 @@ dense_panel as (
       on dense.dataset_source = location_calendar.dataset_source
      and dense.location_id = location_calendar.location_id
      and dense.dt = location_calendar.dt
-    left join location_capacity_daily as capacity
-      on dense.dataset_source = capacity.dataset_source
-     and dense.location_id = capacity.location_id
-     and dense.dt = capacity.dt
     left join source_policy
       on dense.dataset_source = source_policy.dataset_source
     left join country_calendar
@@ -262,10 +272,6 @@ dense_panel as (
             end
          ) = country_calendar.country_code
      and dense.dt = country_calendar.dt
-    left join school_calendar
-      on dense.dataset_source = school_calendar.dataset_source
-     and dense.location_id = school_calendar.location_id
-     and dense.dt = school_calendar.dt
     left join open_weather
       on dense.dataset_source = open_weather.dataset_source
      and dense.location_id = open_weather.location_id
@@ -285,8 +291,6 @@ dense_panel as (
 imputation_windows as (
     select
         dense_panel.*,
-        last_value(case when avg_selling_price is not null then avg_selling_price end ignore nulls) over price_window as price_ffill_value,
-        last_value(case when avg_selling_price is not null then dt end ignore nulls) over price_window as price_ffill_dt,
         last_value(case when weather_temperature is not null then weather_temperature end ignore nulls) over location_window as weather_temperature_ffill_value,
         last_value(case when weather_temperature is not null then dt end ignore nulls) over location_window as weather_temperature_ffill_dt,
         last_value(case when weather_temperature_min is not null then weather_temperature_min end ignore nulls) over location_window as weather_temperature_min_ffill_value,
@@ -299,11 +303,6 @@ imputation_windows as (
         last_value(case when weather_wind_level is not null then dt end ignore nulls) over location_window as weather_wind_level_ffill_dt
     from dense_panel
     window
-        price_window as (
-            partition by dataset_source, location_id, product_id
-            order by dt
-            rows between unbounded preceding and current row
-        ),
         location_window as (
             partition by dataset_source, location_id
             order by dt
@@ -324,53 +323,30 @@ imputed_panel as (
         category_level_1,
         category_level_2,
         category_level_3,
-        site_format,
-        service_model,
         drive_through_flag,
         delivery_flag,
         pickup_flag,
-        late_night_flag,
-        trade_area_type,
-        office_density_bucket,
-        residential_density_bucket,
-        competition_intensity_bucket,
         product_family,
         product_subfamily,
-        menu_role,
-        price_band,
         is_observed_row,
-        location_open_flag,
-        product_active_flag,
         day_complete_flag,
-        missing_sales_flag,
         observed_stockout_flag,
         observed_stockout_available,
-        anomaly_flag,
         current_day_demand_qty,
         true_zero_demand_flag,
-        location_closed_flag,
+        target_semantics,
+        censor_flag,
+        target_source,
+        label_quality_score,
+        usable_for_training_flag,
         observed_revenue_net,
-        case
-            when avg_selling_price is not null then avg_selling_price
-            when price_ffill_value is not null
-             and date_diff('day', price_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_PRICE_FFILL_LIMIT_DAYS", "28") | int }}
-            then price_ffill_value
-            else avg_selling_price
-        end as avg_selling_price,
         observed_discount_amount,
         promo_flag,
         holiday_flag,
-        holiday_name,
         activity_flag,
-        school_holiday_flag,
-        school_holiday_name,
         bridge_day_flag,
         pre_holiday_flag,
         post_holiday_flag,
-        holiday_name_local,
-        school_holiday_flag_local,
-        school_holiday_name_local,
-        payday_flag,
         month_start_flag,
         month_end_flag,
         case
@@ -410,7 +386,6 @@ imputed_panel as (
             else weather_wind_level
         end as weather_wind_level,
         lending_interest_rate_latest,
-        client_id,
         vertical_level_1,
         vertical_level_2,
         country_code,
@@ -420,13 +395,11 @@ imputed_panel as (
         source_license_type,
         source_review_status,
         source_legal_status_snapshot,
-        freshretail_rescaled_flag,
-        target_scale_assumption,
+        source_role,
         gold_run_id
     from imputation_windows
 )
 select
     *,
-    dt + interval 1 day as target_dt,
-    avg_selling_price is not null as price_available
+    dt + interval 1 day as target_dt
 from imputed_panel

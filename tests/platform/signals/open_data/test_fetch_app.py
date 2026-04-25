@@ -118,8 +118,8 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertEqual(bakery_row["country_code"], "FR")
         self.assertEqual(bakery_row["school_zone"], DEFAULT_BAKERY_SCHOOL_ZONE)
         self.assertAlmostEqual(float(bakery_row["latitude"]), DEFAULT_BAKERY_LATITUDE)
-        self.assertEqual(bakery_row["site_format"], "bakery")
-        self.assertEqual(bakery_row["service_model"], "counter_service")
+        self.assertNotIn("site_format", metadata.columns)
+        self.assertNotIn("service_model", metadata.columns)
 
         freshretail_row = metadata.loc[metadata["dataset_source"].eq("freshretail")].iloc[0]
         self.assertEqual(freshretail_row["country_code"], "CN")
@@ -128,8 +128,8 @@ class FetchOpenExogenousTests(unittest.TestCase):
 
         freshretail_lt_row = metadata.loc[metadata["dataset_source"].eq("freshretail_lt")].iloc[0]
         self.assertEqual(freshretail_lt_row["country_code"], "CN")
-        self.assertEqual(freshretail_lt_row["site_format"], "grocery")
-        self.assertEqual(freshretail_lt_row["service_model"], "store_pick_pack")
+        self.assertTrue(bool(freshretail_lt_row["delivery_flag"]))
+        self.assertTrue(bool(freshretail_lt_row["pickup_flag"]))
 
     def test_build_location_metadata_frame_returns_empty_contract_for_empty_input(
         self,

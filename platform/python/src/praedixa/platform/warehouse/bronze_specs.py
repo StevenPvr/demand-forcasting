@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+
 @dataclass(frozen=True)
 class BronzeTableSpec:
     """Definition of one local bronze table to load into DuckDB."""
@@ -11,6 +12,11 @@ class BronzeTableSpec:
     source_path: Path
     ddl: str
     source_name: str
+    required: bool = True
+    allow_empty: bool = False
+    partition_keys: tuple[str, ...] = ()
+    expected_columns: tuple[str, ...] = ()
+    source_policy_id: str | None = None
 
 
 def _open_location_metadata_ddl(schema_name: str) -> str:
@@ -27,19 +33,12 @@ def _open_location_metadata_ddl(schema_name: str) -> str:
         school_zone VARCHAR,
         weather_location_label VARCHAR,
         assumption_source VARCHAR,
-        site_format VARCHAR,
-        service_model VARCHAR,
         drive_through_flag BOOLEAN,
         delivery_flag BOOLEAN,
         pickup_flag BOOLEAN,
-        late_night_flag BOOLEAN,
-        trade_area_type VARCHAR,
         mall_flag BOOLEAN,
         transit_hub_flag BOOLEAN,
         tourism_flag BOOLEAN,
-        office_density_bucket VARCHAR,
-        residential_density_bucket VARCHAR,
-        competition_intensity_bucket VARCHAR,
         source_file_path VARCHAR,
         loaded_at TIMESTAMP
     );
@@ -221,16 +220,13 @@ def _supplemental_corpus_daily_ddl(schema_name: str) -> str:
         usable_for_training_flag BOOLEAN,
         observed_revenue_net DOUBLE,
         observed_discount_amount DOUBLE,
-        avg_selling_price DOUBLE,
         promo_flag BOOLEAN,
         holiday_flag BOOLEAN,
         activity_flag BOOLEAN,
         observed_stockout_flag BOOLEAN,
         observed_stockout_available BOOLEAN,
         observed_stockout_intensity DOUBLE,
-        location_open_flag BOOLEAN,
         day_complete_flag BOOLEAN,
-        missing_sales_flag BOOLEAN,
         calendar_weekday_name VARCHAR,
         calendar_day_of_week SMALLINT,
         calendar_month SMALLINT,
@@ -244,7 +240,6 @@ def _supplemental_corpus_daily_ddl(schema_name: str) -> str:
         weather_temperature DOUBLE,
         weather_humidity DOUBLE,
         weather_wind_level DOUBLE,
-        anomaly_flag BOOLEAN,
         silver_run_id VARCHAR,
         source_file_path VARCHAR,
         loaded_at TIMESTAMP
@@ -285,18 +280,21 @@ def default_core_bronze_specs(data_dir: str | Path, schema_name: str) -> list[Br
             source_path=root / "bakery_sales" / "data_train.parquet",
             ddl=_freshretail_ddl(schema_name),
             source_name="freshretail_train",
+            source_policy_id="freshretail_lt",
         ),
         BronzeTableSpec(
             table_name="bronze_freshretail_daily",
             source_path=root / "bakery_sales" / "data_val.parquet",
             ddl=_freshretail_ddl(schema_name),
             source_name="freshretail_val",
+            source_policy_id="freshretail_lt",
         ),
         BronzeTableSpec(
             table_name="bronze_bakery_order_lines",
             source_path=root / "bakery_sales" / "Bakery sales.csv",
             ddl=_bakery_ddl(schema_name),
             source_name="bakery",
+            source_policy_id="bakery_sales",
         ),
     ]
 
@@ -314,18 +312,21 @@ def default_active_core_bronze_specs(
             source_path=root / "bakery_sales" / "data_train.parquet",
             ddl=_freshretail_ddl(schema_name),
             source_name="freshretail_train",
+            source_policy_id="freshretail_lt",
         ),
         BronzeTableSpec(
             table_name="bronze_freshretail_daily",
             source_path=root / "bakery_sales" / "data_val.parquet",
             ddl=_freshretail_ddl(schema_name),
             source_name="freshretail_val",
+            source_policy_id="freshretail_lt",
         ),
         BronzeTableSpec(
             table_name="bronze_bakery_order_lines",
             source_path=root / "bakery_sales" / "Bakery sales.csv",
             ddl=_bakery_ddl(schema_name),
             source_name="bakery",
+            source_policy_id="bakery_sales",
         ),
     ]
 
@@ -353,6 +354,9 @@ def default_open_exogenous_bronze_specs(
             source_path=source_path,
             ddl=ddl_builder(schema_name),
             source_name=source_name,
+            required=False,
+            allow_empty=True,
+            source_policy_id=source_name,
         )
         for table_name, source_path, ddl_builder, source_name in spec_definitions
     ]

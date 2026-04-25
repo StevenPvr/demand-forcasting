@@ -29,7 +29,7 @@ class TFTCheckpointIOTests(unittest.TestCase):
             for index, dt in enumerate(dates):
                 rows.append(
                     {
-                        "series_id": series_id,
+                        "client_id": series_id,
                         "dt": dt,
                         "target": float(signal[index]),
                         "location_id": f"store_{series_offset + 1}",
@@ -37,10 +37,10 @@ class TFTCheckpointIOTests(unittest.TestCase):
                         "target_day_of_week": int(dt.dayofweek),
                         "target_holiday_flag": bool(dt.dayofweek >= 5),
                         "current_day_demand_qty": float(signal[index]),
-                        "avg_selling_price": 2.5 + (series_offset * 0.25),
+                        "rolling_mean_7": float(signal[index]),
                     }
                 )
-        frame = pd.DataFrame(rows).sort_values(["series_id", "dt"]).reset_index(drop=True)
+        frame = pd.DataFrame(rows).sort_values(["client_id", "dt"]).reset_index(drop=True)
         train_frame = frame[frame["dt"] < "2024-01-25"].copy().reset_index(drop=True)
         valid_frame = frame[frame["dt"] >= "2024-01-25"].copy().reset_index(drop=True)
         return train_frame, valid_frame

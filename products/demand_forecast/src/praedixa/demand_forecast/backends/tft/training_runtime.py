@@ -276,9 +276,10 @@ def _early_stopping_callbacks(
     *,
     resolved_params: dict[str, object],
 ) -> list[Any]:
+    monitor_metric = _validation_monitor_metric(resolved_params)
     callbacks = [
         imports["EarlyStopping"](
-            monitor="val_wape",
+            monitor=monitor_metric,
             mode="min",
             patience=int(cast(Any, resolved_params["patience"])),
             strict=True,
@@ -301,16 +302,28 @@ def _early_stopping_callbacks(
     return callbacks
 
 
+def _validation_monitor_metric(resolved_params: dict[str, object]) -> str:
+    monitor_metric = str(
+        cast(Any, resolved_params.get("validation_monitor_metric", "business_val_wape"))
+    )
+    if monitor_metric == "business_val_wape" and not bool(
+        cast(Any, resolved_params.get("enable_business_validation_metrics", True))
+    ):
+        return "val_wape"
+    return monitor_metric
+
+
 def _validation_callbacks(
     imports: dict[str, Any],
     *,
     checkpoint_dir: str,
     resolved_params: dict[str, object],
 ) -> tuple[list[Any], Any]:
+    monitor_metric = _validation_monitor_metric(resolved_params)
     checkpoint_callback = imports["ModelCheckpoint"](
         dirpath=checkpoint_dir,
-        filename="{epoch:03d}-{val_wape:.4f}",
-        monitor="val_wape",
+        filename="{epoch:03d}-{" + monitor_metric + ":.4f}",
+        monitor=monitor_metric,
         mode="min",
         save_top_k=3,
         save_last=True,

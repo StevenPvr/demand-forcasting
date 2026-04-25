@@ -6,7 +6,6 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
 from praedixa.demand_forecast.evaluation.orchestrator_artifacts import (
     EvaluationRunArtifacts,
     build_evaluation_feature_manifest_payload,
@@ -24,6 +23,7 @@ from praedixa.demand_forecast.evaluation.orchestrator_context import (
     load_evaluation_frames,
     prepare_evaluation_context,
 )
+from praedixa.demand_forecast.training.validation.eligibility import filter_training_eligible_rows
 
 
 EvaluationPayloads = tuple[
@@ -61,12 +61,14 @@ def _fit_final_model(
     best_iteration: int,
     fit_final_model_fn: Callable[..., Any],
 ) -> Any:
-    fit_history_frame = pd.concat(
+    fit_frame = pd.concat(
         [context.train_frame, context.valid_frame],
         ignore_index=True,
     )
-    aligned_test_frame = context.test_frame.reindex(columns=fit_history_frame.columns)
-    fit_frame = pd.concat([fit_history_frame, aligned_test_frame], ignore_index=True)
+    fit_frame = filter_training_eligible_rows(
+        fit_frame,
+        label="evaluation_final_model_train_valid",
+    )
     return fit_final_model_fn(
         fit_frame=fit_frame,
         feature_cols=context.feature_cols,
@@ -90,12 +92,15 @@ def _loaded_evaluation_context(
         gold_table=request.gold_table,
         train_sample_fraction=request.train_sample_fraction,
         tuning_sample_fraction=request.tuning_sample_fraction,
+        evaluation_dataset_source=request.evaluation_dataset_source,
+        model_backend=request.model_backend,
         logger=logger,
     )
     return prepare_evaluation_context(
         loaded=loaded,
         requested_target_col=request.target_col,
         best_params_path=request.best_params_path,
+        model_backend=request.model_backend,
         logger=logger,
     )
 
@@ -143,7 +148,10 @@ def _evaluation_run_artifacts(
     final_model: Any,
 ) -> EvaluationRunArtifacts:
     baselines_payload, predictions_df, probabilistic_predictions_df, baseline_savings_payload, metrics_payload, probabilistic_metrics_payload, diagnostics_payload, economic_gain_payload = payloads
-    output_paths = evaluation_output_paths(target_dir)
+    output_paths = evaluation_output_paths(
+        target_dir,
+        model_family="xgboost" if context.model_backend == "xgboost" else "foundation_tft",
+    )
     feature_manifest_payload, feature_roles_payload = build_evaluation_feature_manifest_payload(context=context)
     split_manifest_payload = build_evaluation_split_manifest_payload(context=context)
     target_contract_payload = build_target_contract_metadata(context.target_contract)
@@ -226,10 +234,13 @@ def run_evaluation_pipeline(
     evaluate_daily_refit_fn: Callable[..., tuple[pd.DataFrame, pd.DataFrame, int]],
     fit_final_model_fn: Callable[..., Any],
     save_model_fn: Callable[[Any, Path], Path],
+    require_backend_available_fn: Callable[[str], None],
     plot_actual_vs_predicted_fn: Callable[[pd.DataFrame, Path], None],
     plot_residuals_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_qq_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_acf_pacf_fn: Callable[[pd.DataFrame, Path], None],
 ) -> dict[str, Path]:
-    raise_if_tft_backend_required("evaluation.build_evaluation_outputs")
+    require_backend_available_fn("evaluation.build_evaluation_outputs")
     context = _loaded_evaluation_context(request=request, logger=logger)
     predictions_df, daily_report_df, best_iteration = _run_daily_refit(
         context=context,
@@ -250,6 +261,8 @@ def run_evaluation_pipeline(
         save_model_fn=save_model_fn,
         plot_actual_vs_predicted_fn=plot_actual_vs_predicted_fn,
         plot_residuals_fn=plot_residuals_fn,
+        plot_residuals_qq_fn=plot_residuals_qq_fn,
+        plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf_fn,
     )
     log_evaluation_completion(
         evaluation_mode=context.evaluation_mode,

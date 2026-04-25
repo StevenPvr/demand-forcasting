@@ -63,7 +63,7 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertAlmostEqual(float(cast(Any, payload["business_val_wape"])), 2.0 / 27.0)
         self.assertAlmostEqual(float(cast(Any, payload["business_val_abs_bias"])), 1.0)
 
-    def test_fit_tft_model_skips_business_callback_when_validation_metric_logging_disabled(
+    def test_fit_tft_model_skips_business_callback_when_business_metrics_disabled(
         self,
     ) -> None:
         train_frame = pd.DataFrame({"target": [1.0]})
@@ -89,7 +89,7 @@ class TFTModelUtilsTests(unittest.TestCase):
                     ["feature_a"],
                     {"Callback": object},
                     {
-                        "enable_validation_metric_logging": False,
+                        "enable_business_validation_metrics": False,
                         "batch_size": 8,
                         "quantiles": [0.1, 0.5, 0.9],
                         "runtime_profile": "local_cpu",
@@ -129,7 +129,7 @@ class TFTModelUtilsTests(unittest.TestCase):
             for index, dt in enumerate(dates):
                 rows.append(
                     {
-                        "series_id": series_id,
+                        "client_id": series_id,
                         "dt": dt,
                         "target": float(signal[index]),
                         "location_id": f"store_{series_offset + 1}",
@@ -137,10 +137,10 @@ class TFTModelUtilsTests(unittest.TestCase):
                         "target_day_of_week": int(dt.dayofweek),
                         "target_holiday_flag": bool(dt.dayofweek >= 5),
                         "current_day_demand_qty": float(signal[index]),
-                        "avg_selling_price": 2.5 + (series_offset * 0.25),
+                        "rolling_mean_7": float(signal[index]),
                     }
                 )
-        frame = pd.DataFrame(rows).sort_values(["series_id", "dt"]).reset_index(drop=True)
+        frame = pd.DataFrame(rows).sort_values(["client_id", "dt"]).reset_index(drop=True)
         train_frame = frame[frame["dt"] < "2024-01-25"].copy().reset_index(drop=True)
         valid_frame = frame[frame["dt"] >= "2024-01-25"].copy().reset_index(drop=True)
         return train_frame, valid_frame
@@ -150,7 +150,7 @@ class TFTModelUtilsTests(unittest.TestCase):
             {
                 "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
                 "target": [1.0, 2.0, 3.0],
-                "series_id": ["store_1__sku_1"] * 3,
+                "client_id": ["store_1__sku_1"] * 3,
                 "location_id": ["store_1"] * 3,
                 "product_id": ["sku_1"] * 3,
                 "rolling_mean_7": [10.0, 11.0, 12.0],
@@ -167,7 +167,7 @@ class TFTModelUtilsTests(unittest.TestCase):
             {
                 "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
                 "target": [1.0, 2.0, 3.0],
-                "series_id": ["store_1__sku_1"] * 3,
+                "client_id": ["store_1__sku_1"] * 3,
                 "feature_a": [10.0, 11.0, 12.0],
             }
         )
@@ -287,7 +287,7 @@ class TFTModelUtilsTests(unittest.TestCase):
 
         scalers = model.dataset_parameters.get("scalers", {})
 
-        self.assertIn("avg_selling_price", scalers)
+        self.assertIn("rolling_mean_7", scalers)
         self.assertIn("current_day_demand_qty", scalers)
         self.assertNotIn("location_id", scalers)
         self.assertIsNone(model.target_scaler)
@@ -365,7 +365,7 @@ class TFTModelUtilsTests(unittest.TestCase):
     def test_data_quality_counts_are_treated_as_known_reals(self) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["store_1__sku_1"] * 4,
+                "client_id": ["store_1__sku_1"] * 4,
                 "location_id": ["store_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dt": pd.date_range("2024-01-01", periods=4, freq="D"),
@@ -400,7 +400,7 @@ class TFTModelUtilsTests(unittest.TestCase):
     def test_precomputed_time_idx_is_rebased_after_slicing_gaps(self) -> None:
         frame = pd.DataFrame(
             {
-                "series_id": ["store_1__sku_1"] * 4,
+                "client_id": ["store_1__sku_1"] * 4,
                 "location_id": ["store_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-05", "2024-01-06"]),

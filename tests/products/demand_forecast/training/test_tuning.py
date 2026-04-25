@@ -24,16 +24,16 @@ if str(PRODUCT_SRC) not in sys.path:
     sys.path.insert(0, str(PRODUCT_SRC))
 
 from praedixa.demand_forecast.contracts.targets import resolve_target_contract  # noqa: E402
-from praedixa.demand_forecast.training.tuning import (  # noqa: E402
+from praedixa.demand_forecast.training.tft.tuning import (  # noqa: E402
     fit_and_score_tft_model_on_tuning,
     optimize_tft_model_params,
     resolve_hpo_execution_policy,
 )
-from praedixa.demand_forecast.training.tuning_policy import (  # noqa: E402
+from praedixa.demand_forecast.training.tft.policy import (  # noqa: E402
     resolved_trial_status_name,
 )
-import praedixa.demand_forecast.training.tuning_scoring as tuning_scoring_module  # noqa: E402
-from praedixa.demand_forecast.training.tuning_scoring import (  # noqa: E402
+import praedixa.demand_forecast.training.tft.scoring as tuning_scoring_module  # noqa: E402
+from praedixa.demand_forecast.training.tft.scoring import (  # noqa: E402
     clear_tuning_fold_caches,
     filter_predictable_validation_rows,
     prewarm_tft_fold_cores_for_optuna,
@@ -99,7 +99,7 @@ class TuningPolicyTests(unittest.TestCase):
 
     def test_local_cpu_runtime_profile_forces_single_fold_worker_on_macos(self) -> None:
         with patch(
-            "praedixa.demand_forecast.training.tuning_policy.should_serialize_local_cpu_folds",
+            "praedixa.demand_forecast.training.tft.policy.should_serialize_local_cpu_folds",
             return_value=True,
         ):
             plan = resolve_hpo_execution_policy(
@@ -169,7 +169,7 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertFalse(bool(resolved_params["enable_lr_monitor"]))
         self.assertFalse(bool(resolved_params["enable_validation_metric_logging"]))
         self.assertFalse(bool(resolved_params["enable_device_stats_monitor"]))
-        self.assertEqual(int(cast(Any, resolved_params["log_every_n_steps"])), 50)
+        self.assertEqual(int(resolved_params["log_every_n_steps"]), 50)
         self.assertEqual(resolved_params["dataset_core_max_encoder_length"], 14)
         self.assertEqual(execution_plan["fold_workers"], 1)
 
@@ -177,7 +177,7 @@ class TuningPolicyTests(unittest.TestCase):
         train_frame, tuning_frame, target_contract = self._build_target_contract()
 
         with patch(
-            "praedixa.demand_forecast.training.tuning_scoring.build_training_dataset_core",
+            "praedixa.demand_forecast.training.tft.scoring.build_training_dataset_core",
         ) as mocked_build_training_core:
             result = prewarm_tft_fold_cores_for_optuna(
                 train_frame=train_frame,
@@ -196,6 +196,101 @@ class TuningPolicyTests(unittest.TestCase):
             "variable_encoder_length",
         )
         mocked_build_training_core.assert_not_called()
+
+    def test_prewarm_skips_multi_fold_sequential_execution_in_memory_safe_mode(
+        self,
+    ) -> None:
+        train_frame, tuning_frame, target_contract = self._build_target_contract()
+
+        with patch(
+            "praedixa.demand_forecast.training.tft.scoring.build_training_dataset_core",
+        ) as mocked_build_training_core:
+            result = prewarm_tft_fold_cores_for_optuna(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[
+                    {"fold": 0, "train_idx": [0], "valid_idx": [1]},
+                    {"fold": 1, "train_idx": [0, 1], "valid_idx": [2]},
+                ],
+                feature_cols=["series_id"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={
+                    "runtime_profile": "scaleway_l40s",
+                    "n_jobs": 8,
+                    "dataset_core_max_encoder_length": 14,
+                    "max_encoder_length": 14,
+                },
+            )
+
+        self.assertEqual(result["cached_cores"], 0)
+        self.assertEqual(
+            cast(dict[str, Any], result["execution_policy"])["reason"],
+            "memory_safe_sequential_folds",
+        )
+        mocked_build_training_core.assert_not_called()
+
+    def test_fit_and_score_uses_memory_safe_path_for_multi_fold_serial_execution(
+        self,
+    ) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a", "a"],
+                "location_id": ["loc_1"] * 3,
+                "product_id": ["sku_1"] * 3,
+                "dataset_source": ["source_a"] * 3,
+                "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
+                "rolling_mean_7": [1.0, 2.0, 3.0],
+                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0],
+            }
+        )
+        tuning_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a", "a"],
+                "location_id": ["loc_1"] * 3,
+                "product_id": ["sku_1"] * 3,
+                "dataset_source": ["source_a"] * 3,
+                "dt": pd.date_range("2024-01-04", periods=3, freq="D"),
+                "rolling_mean_7": [4.0, 5.0, 6.0],
+                "target_demand_qty_d_plus_1": [13.0, 14.0, 15.0],
+            }
+        )
+        target_contract = resolve_target_contract(
+            train_frame,
+            tuning_frame,
+            requested_target_col="target_demand_qty_d_plus_1",
+        )
+
+        with (
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring._cached_fold_artifacts"
+            ) as mocked_cached_fold_artifacts,
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring._iterative_trial_scoring_memory_safe",
+                return_value=([], 2, 0.001),
+            ) as mocked_memory_safe_scoring,
+        ):
+            result = fit_and_score_tft_model_on_tuning(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[
+                    {"fold": 0, "train_idx": [0], "valid_idx": [1]},
+                    {"fold": 1, "train_idx": [0, 1], "valid_idx": [2]},
+                ],
+                feature_cols=["rolling_mean_7"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={
+                    "runtime_profile": "scaleway_l40s",
+                    "n_jobs": 8,
+                    "max_encoder_length": 1,
+                },
+            )
+
+        mocked_cached_fold_artifacts.assert_not_called()
+        mocked_memory_safe_scoring.assert_called_once()
+        self.assertEqual(result["folds_completed"], 2)
+        self.assertEqual(float(cast(Any, result["selected_learning_rate"])), 0.001)
 
     def test_optuna_hpo_returns_stage_and_runtime_metadata(self) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
@@ -216,11 +311,11 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning.fit_and_score_tft_model_on_tuning",
+                "praedixa.demand_forecast.training.tft.tuning.fit_and_score_tft_model_on_tuning",
                 side_effect=_fake_fit_and_score,
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning.prewarm_tft_fold_cores_for_optuna",
+                "praedixa.demand_forecast.training.tft.tuning.prewarm_tft_fold_cores_for_optuna",
                 return_value={},
             ) as mocked_prewarm,
         ):
@@ -257,7 +352,7 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("stage_b", stage_policy)
         mocked_prewarm.assert_called_once()
 
-    def test_optuna_hpo_uses_best_scored_rejected_trial_when_all_trials_are_rejected(
+    def test_optuna_hpo_refuses_to_promote_rejected_trials(
         self,
     ) -> None:
         train_frame, tuning_frame, target_contract = self._build_target_contract()
@@ -276,36 +371,28 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning.fit_and_score_tft_model_on_tuning",
+                "praedixa.demand_forecast.training.tft.tuning.fit_and_score_tft_model_on_tuning",
                 side_effect=_always_rejected,
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning.prewarm_tft_fold_cores_for_optuna",
+                "praedixa.demand_forecast.training.tft.tuning.prewarm_tft_fold_cores_for_optuna",
                 return_value={},
             ) as mocked_prewarm,
         ):
-            best_params, tuning_report, hpo_metadata = optimize_tft_model_params(
-                train_frame=train_frame,
-                tuning_frame=tuning_frame,
-                folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
-                feature_cols=["series_id"],
-                baseline_wape=0.5,
-                target_contract=target_contract,
-                logger=__import__("logging").getLogger(__name__),
-                tuning_trials=2,
-                random_seed=7,
-                model_params={"runtime_profile": "local_cpu", "n_jobs": 2},
-            )
+            with self.assertRaises(RuntimeError):
+                optimize_tft_model_params(
+                    train_frame=train_frame,
+                    tuning_frame=tuning_frame,
+                    folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
+                    feature_cols=["series_id"],
+                    baseline_wape=0.5,
+                    target_contract=target_contract,
+                    logger=__import__("logging").getLogger(__name__),
+                    tuning_trials=2,
+                    random_seed=7,
+                    model_params={"runtime_profile": "local_cpu", "n_jobs": 2},
+                )
 
-        self.assertIn("random_state", best_params)
-        self.assertEqual(float(cast(Any, best_params["learning_rate"])), 0.0025)
-        self.assertFalse(bool(best_params["use_learning_rate_finder"]))
-        self.assertEqual(len(tuning_report), 2)
-        self.assertTrue((tuning_report["trial_status"] == "REJECTED").all())
-        self.assertEqual(
-            cast(dict[str, Any], hpo_metadata)["trial_status_counts"],
-            {"REJECTED": 2},
-        )
         mocked_prewarm.assert_called_once()
 
     def test_fold_completion_log_reports_business_metrics(self) -> None:
@@ -372,15 +459,15 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.fit_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.fit_tft_model",
                 side_effect=_fake_fit_tft_model,
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_with_tft_model",
                 return_value=np.array([15.0, 16.0], dtype=float),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_quantiles_with_tft_model",
                 return_value=pd.DataFrame(
                     {
                         "prediction_p2_5": [14.0, 15.0],
@@ -411,6 +498,100 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("mean_abs_bias", result)
         self.assertIn("mean_coverage_80", result)
         self.assertIn("mean_coverage_95", result)
+
+    def test_fit_and_score_filters_unusable_tuning_rows_from_fold_train(self) -> None:
+        train_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a"],
+                "location_id": ["loc_1"] * 2,
+                "product_id": ["sku_1"] * 2,
+                "dataset_source": ["source_a"] * 2,
+                "dt": pd.date_range("2024-01-01", periods=2, freq="D"),
+                "rolling_mean_7": [1.0, 2.0],
+                "target_demand_qty_d_plus_1": [10.0, 11.0],
+                "usable_for_training_flag": [True, True],
+                "censor_flag": [False, False],
+                "label_quality_score": [1.0, 1.0],
+            }
+        )
+        tuning_frame = pd.DataFrame(
+            {
+                "series_id": ["a", "a", "a"],
+                "location_id": ["loc_1"] * 3,
+                "product_id": ["sku_1"] * 3,
+                "dataset_source": ["source_a"] * 3,
+                "dt": pd.date_range("2024-01-03", periods=3, freq="D"),
+                "rolling_mean_7": [3.0, 4.0, 5.0],
+                "target_demand_qty_d_plus_1": [12.0, 13.0, 14.0],
+                "usable_for_training_flag": [False, True, True],
+                "censor_flag": [False, False, False],
+                "label_quality_score": [1.0, 1.0, 1.0],
+            }
+        )
+        target_contract = resolve_target_contract(
+            train_frame,
+            tuning_frame,
+            requested_target_col="target_demand_qty_d_plus_1",
+        )
+        training_targets_seen: list[float] = []
+
+        def _fake_build_training_dataset_core(
+            *_args: object,
+            **kwargs: object,
+        ) -> object:
+            training_frame = cast(pd.DataFrame, kwargs["training_frame"])
+            training_targets_seen.extend(
+                training_frame["target_demand_qty_d_plus_1"].astype(float).tolist()
+            )
+            return object()
+
+        with (
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.build_training_dataset_core",
+                side_effect=_fake_build_training_dataset_core,
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.build_validation_dataset_core",
+                return_value=cast(Any, object()),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.clone_training_dataset_from_core",
+                return_value=cast(Any, object()),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.clone_validation_dataset_from_core",
+                return_value=cast(Any, object()),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.fit_tft_model",
+                return_value=object(),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.predict_with_tft_model",
+                return_value=np.array([14.0], dtype=float),
+            ),
+            patch(
+                "praedixa.demand_forecast.training.tft.scoring.predict_quantiles_with_tft_model",
+                return_value=pd.DataFrame({"prediction_p50": [14.0]}),
+            ),
+        ):
+            fit_and_score_tft_model_on_tuning(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                folds=[{"fold": 0, "train_idx": [0, 1], "valid_idx": [2]}],
+                feature_cols=["rolling_mean_7"],
+                target_contract=target_contract,
+                logger=__import__("logging").getLogger(__name__),
+                model_params={
+                    "runtime_profile": "local_cpu",
+                    "n_jobs": 2,
+                    "max_encoder_length": 1,
+                    "dataset_core_max_encoder_length": 1,
+                },
+            )
+
+        self.assertIn(13.0, training_targets_seen)
+        self.assertNotIn(12.0, training_targets_seen)
 
     def test_fit_and_score_reuses_fold_cores_across_encoder_lengths(self) -> None:
         train_frame = pd.DataFrame(
@@ -443,31 +624,31 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.build_training_dataset_core",
+                "praedixa.demand_forecast.training.tft.scoring.build_training_dataset_core",
                 return_value=cast(Any, object()),
             ) as mocked_build_training_core,
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.build_validation_dataset_core",
+                "praedixa.demand_forecast.training.tft.scoring.build_validation_dataset_core",
                 return_value=cast(Any, object()),
             ) as mocked_build_validation_core,
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.clone_training_dataset_from_core",
+                "praedixa.demand_forecast.training.tft.scoring.clone_training_dataset_from_core",
                 return_value=cast(Any, object()),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.clone_validation_dataset_from_core",
+                "praedixa.demand_forecast.training.tft.scoring.clone_validation_dataset_from_core",
                 return_value=cast(Any, object()),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.fit_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.fit_tft_model",
                 return_value=object(),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_with_tft_model",
                 return_value=np.array([15.0, 16.0], dtype=float),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_quantiles_with_tft_model",
                 return_value=pd.DataFrame(
                     {
                         "prediction_p2_5": [14.0, 15.0],
@@ -542,31 +723,31 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.build_training_dataset_core",
+                "praedixa.demand_forecast.training.tft.scoring.build_training_dataset_core",
                 return_value=cast(Any, object()),
             ) as mocked_build_training_core,
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.build_validation_dataset_core",
+                "praedixa.demand_forecast.training.tft.scoring.build_validation_dataset_core",
                 return_value=cast(Any, object()),
             ) as mocked_build_validation_core,
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.clone_training_dataset_from_core",
+                "praedixa.demand_forecast.training.tft.scoring.clone_training_dataset_from_core",
                 return_value=cast(Any, object()),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.clone_validation_dataset_from_core",
+                "praedixa.demand_forecast.training.tft.scoring.clone_validation_dataset_from_core",
                 return_value=cast(Any, object()),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.fit_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.fit_tft_model",
                 return_value=object(),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_with_tft_model",
                 return_value=np.array([15.0, 16.0], dtype=float),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_quantiles_with_tft_model",
                 return_value=pd.DataFrame(
                     {
                         "prediction_p2_5": [14.0, 15.0],
@@ -672,7 +853,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
 
         with patch(
-            "praedixa.demand_forecast.training.tuning_scoring._build_combined_frame_with_polars",
+            "praedixa.demand_forecast.training.tft.scoring._build_combined_frame_with_polars",
             side_effect=RuntimeError("boom"),
         ):
             with self.assertRaisesRegex(
@@ -689,7 +870,9 @@ class TuningPolicyTests(unittest.TestCase):
                     logger=__import__("logging").getLogger(__name__),
                 )
 
-    def test_fit_and_score_uses_absolute_target_quantiles_without_reconstruction(self) -> None:
+    def test_fit_and_score_uses_absolute_target_quantiles_without_reconstruction(
+        self,
+    ) -> None:
         train_frame = pd.DataFrame(
             {
                 "series_id": ["a", "a", "a"],
@@ -723,15 +906,15 @@ class TuningPolicyTests(unittest.TestCase):
 
         with (
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.fit_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.fit_tft_model",
                 return_value=object(),
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_with_tft_model",
                 return_value=valid_raw_predictions,
             ),
             patch(
-                "praedixa.demand_forecast.training.tuning_scoring.predict_quantiles_with_tft_model",
+                "praedixa.demand_forecast.training.tft.scoring.predict_quantiles_with_tft_model",
                 return_value=pd.DataFrame(
                     {
                         "prediction_p2_5": valid_raw_predictions - 0.03,

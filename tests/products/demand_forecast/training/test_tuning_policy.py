@@ -22,15 +22,15 @@ if str(PLATFORM_SRC) not in sys.path:
 if str(PRODUCT_SRC) not in sys.path:
     sys.path.insert(0, str(PRODUCT_SRC))
 
-import praedixa.demand_forecast.training.tuning_policy as tuning_policy_module  # noqa: E402
-from praedixa.demand_forecast.training.constants import (  # noqa: E402
+import praedixa.demand_forecast.training.tft.policy as tuning_policy_module  # noqa: E402
+from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
     DEFAULT_TUNING_BATCH_SIZE_CHOICES,
     DEFAULT_TUNING_GPU_BATCH_SIZE_CHOICES,
     DEFAULT_TUNING_LEARNING_RATE_HIGH,
     DEFAULT_TUNING_LEARNING_RATE_LOW,
     DEFAULT_TUNING_MAX_BATCH_SCALED_LEARNING_RATE_SCALE,
 )
-from praedixa.demand_forecast.training.tuning_policy import (  # noqa: E402
+from praedixa.demand_forecast.training.tft.policy import (  # noqa: E402
     resolve_stage_policy,
     sample_optuna_params,
 )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 import sys
 import unittest
@@ -28,14 +29,18 @@ from praedixa.demand_forecast.backends.tft.runtime_profile import (  # noqa: E40
 class TFTRuntimeProfileTests(unittest.TestCase):
     def test_resolve_runtime_profile_returns_local_cpu_defaults(self) -> None:
         profile = resolve_runtime_profile(DEFAULT_RUNTIME_PROFILE_NAME, cpu_count=8)
+        expected_num_workers = 0 if platform.system() == "Darwin" else 4
 
         self.assertEqual(profile["accelerator"], "cpu")
         self.assertEqual(profile["devices"], 1)
         self.assertEqual(profile["precision"], "32-true")
-        self.assertEqual(profile["num_workers"], 4)
+        self.assertEqual(profile["num_workers"], expected_num_workers)
         self.assertFalse(profile["pin_memory"])
-        self.assertTrue(profile["persistent_workers"])
-        self.assertEqual(profile["prefetch_factor"], 2)
+        self.assertEqual(profile["persistent_workers"], expected_num_workers > 0)
+        self.assertEqual(
+            profile["prefetch_factor"],
+            2 if expected_num_workers > 0 else None,
+        )
         self.assertEqual(profile["compile_mode"], "off")
         self.assertEqual(profile["determinism_mode"], "strict")
         self.assertFalse(profile["torch_compile"])

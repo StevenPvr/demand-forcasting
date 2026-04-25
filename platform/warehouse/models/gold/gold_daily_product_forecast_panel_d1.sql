@@ -1,4 +1,4 @@
-{{ config(tags=["gold", "d1"], materialized="view", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1"], materialized="table", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
 
 {% set data_quality_metadata_bases = [
     "country_code",
@@ -10,13 +10,9 @@
     "category_level_3",
 ] %}
 {% set data_quality_pricing_promo_bases = [
-    "avg_selling_price",
     "observed_discount_amount",
     "promo_flag",
     "activity_flag",
-    "avg_selling_price_lag_1",
-    "avg_selling_price_lag_7",
-    "avg_selling_price_lag_28",
     "observed_discount_amount_lag_1",
     "observed_discount_amount_lag_7",
     "observed_discount_amount_lag_28",
@@ -70,6 +66,30 @@
     "current_day_demand_qty",
     "observed_stockout_flag",
 ] %}
+{% set data_quality_revenue_history_bases = [
+    "observed_revenue_net_lag_1",
+    "observed_revenue_net_lag_7",
+    "observed_revenue_net_lag_28",
+] %}
+{% set data_quality_label_history_bases = [
+    "censor_flag_lag_1",
+    "censor_flag_lag_7",
+    "censor_flag_lag_28",
+    "censor_rate_7",
+    "censor_rate_28",
+    "label_quality_score_lag_1",
+    "label_quality_score_lag_7",
+    "label_quality_score_lag_28",
+    "label_quality_score_rolling_mean_7",
+    "label_quality_score_rolling_mean_28",
+] %}
+{% set data_quality_operational_history_bases = [
+    "day_complete_flag_lag_1",
+    "day_complete_flag_lag_7",
+    "day_complete_flag_lag_28",
+    "day_complete_rate_7",
+    "day_complete_rate_28",
+] %}
 {% set data_quality_history_bases = [
     "lag_1",
     "lag_7",
@@ -95,7 +115,29 @@
     "target_seasonal_naive_d7",
     "moving_average_7",
     "moving_average_28",
+] + data_quality_revenue_history_bases + data_quality_label_history_bases + data_quality_operational_history_bases %}
+{% set lagged_boolean_bases = [
+    "censor_flag_lag_1",
+    "censor_flag_lag_7",
+    "censor_flag_lag_28",
+    "day_complete_flag_lag_1",
+    "day_complete_flag_lag_7",
+    "day_complete_flag_lag_28",
 ] %}
+{% set lagged_numeric_bases = (
+    data_quality_revenue_history_bases
+    + [
+        "censor_rate_7",
+        "censor_rate_28",
+        "label_quality_score_lag_1",
+        "label_quality_score_lag_7",
+        "label_quality_score_lag_28",
+        "label_quality_score_rolling_mean_7",
+        "label_quality_score_rolling_mean_28",
+        "day_complete_rate_7",
+        "day_complete_rate_28",
+    ]
+) %}
 {% set data_quality_families = [
     ("metadata", data_quality_metadata_bases),
     ("pricing_promo", data_quality_pricing_promo_bases),
@@ -121,13 +163,11 @@ features as (
     select
         raw_features.* exclude (
             holiday_flag,
-            school_holiday_flag,
             bridge_day_flag,
             pre_holiday_flag,
             post_holiday_flag
         ),
-        raw_features.holiday_flag as current_holiday_flag,
-        raw_features.school_holiday_flag as current_school_holiday_flag
+        raw_features.holiday_flag as current_holiday_flag
     from raw_features
 ),
 source_weights as (
@@ -147,7 +187,6 @@ dataset_applicability as (
         max(case when target_delta_log_wow_d_plus_1 is not null then 1 else 0 end) as target_delta_log_wow_d_plus_1_applicable_flag,
         max(case when current_day_demand_qty is not null then 1 else 0 end) as current_day_demand_qty_applicable_flag,
         max(case when observed_stockout_flag is not null then 1 else 0 end) as observed_stockout_flag_applicable_flag,
-        max(case when avg_selling_price is not null then 1 else 0 end) as avg_selling_price_applicable_flag,
         max(case when observed_discount_amount is not null then 1 else 0 end) as observed_discount_amount_applicable_flag,
         max(case when promo_flag is not null then 1 else 0 end) as promo_flag_applicable_flag,
         max(case when activity_flag is not null then 1 else 0 end) as activity_flag_applicable_flag,
@@ -191,9 +230,6 @@ dataset_applicability as (
         max(case when rolling_mean_14 is not null then 1 else 0 end) as rolling_mean_14_applicable_flag,
         max(case when rolling_mean_28 is not null then 1 else 0 end) as rolling_mean_28_applicable_flag,
         max(case when rolling_std_28 is not null then 1 else 0 end) as rolling_std_28_applicable_flag,
-        max(case when avg_selling_price_lag_1 is not null then 1 else 0 end) as avg_selling_price_lag_1_applicable_flag,
-        max(case when avg_selling_price_lag_7 is not null then 1 else 0 end) as avg_selling_price_lag_7_applicable_flag,
-        max(case when avg_selling_price_lag_28 is not null then 1 else 0 end) as avg_selling_price_lag_28_applicable_flag,
         max(case when observed_discount_amount_lag_1 is not null then 1 else 0 end) as observed_discount_amount_lag_1_applicable_flag,
         max(case when observed_discount_amount_lag_7 is not null then 1 else 0 end) as observed_discount_amount_lag_7_applicable_flag,
         max(case when observed_discount_amount_lag_28 is not null then 1 else 0 end) as observed_discount_amount_lag_28_applicable_flag,
@@ -220,7 +256,10 @@ dataset_applicability as (
         max(case when seasonal_naive_d7 is not null then 1 else 0 end) as seasonal_naive_d7_applicable_flag,
         max(case when target_seasonal_naive_d7 is not null then 1 else 0 end) as target_seasonal_naive_d7_applicable_flag,
         max(case when moving_average_7 is not null then 1 else 0 end) as moving_average_7_applicable_flag,
-        max(case when moving_average_28 is not null then 1 else 0 end) as moving_average_28_applicable_flag
+        max(case when moving_average_28 is not null then 1 else 0 end) as moving_average_28_applicable_flag,
+{% for base in lagged_numeric_bases + lagged_boolean_bases %}
+        max(case when {{ base }} is not null then 1 else 0 end) as {{ base }}_applicable_flag{{ "," if not loop.last }}
+{% endfor %}
     from features
     group by dataset_source
 ),
@@ -256,24 +295,14 @@ select
     case when weighted.city_name_applicable_flag = 1 and weighted.city_name is null then 1 else 0 end as city_name_missing_flag,
     weighted.history_available_days,
     weighted.cold_start_bucket,
-    weighted.site_format,
-    weighted.service_model,
     weighted.drive_through_flag,
     weighted.delivery_flag,
     weighted.pickup_flag,
-    weighted.late_night_flag,
-    weighted.trade_area_type,
-    weighted.office_density_bucket,
-    weighted.residential_density_bucket,
-    weighted.competition_intensity_bucket,
     weighted.product_family,
     weighted.product_subfamily_applicable_flag as product_subfamily_applicable_flag,
 
     coalesce(weighted.product_subfamily, '0') as product_subfamily,
     case when weighted.product_subfamily_applicable_flag = 1 and weighted.product_subfamily is null then 1 else 0 end as product_subfamily_missing_flag,
-    weighted.menu_role,
-    weighted.price_band,
-    weighted.series_id,
     weighted.location_id,
     weighted.product_id,
     weighted.category_level_1_applicable_flag as category_level_1_applicable_flag,
@@ -288,8 +317,15 @@ select
     case when weighted.category_level_3_applicable_flag = 1 and weighted.category_level_3 is null then 1 else 0 end as category_level_3_missing_flag,
     weighted.dt,
     weighted.target_dt,
+    weighted.decision_timestamp,
+    weighted.feature_availability_profile,
     weighted.split_bucket,
     weighted.target_demand_qty_d_plus_1,
+    weighted.target_semantics,
+    weighted.censor_flag,
+    weighted.target_source,
+    weighted.label_quality_score,
+    weighted.usable_for_training_flag,
     weighted.target_delta_log_wow_d_plus_1_applicable_flag as target_delta_log_wow_d_plus_1_applicable_flag,
 
     coalesce(weighted.target_delta_log_wow_d_plus_1, 0) as target_delta_log_wow_d_plus_1,
@@ -299,30 +335,18 @@ select
     case when weighted.current_day_demand_qty_applicable_flag = 1 and weighted.current_day_demand_qty is null then 1 else 0 end as current_day_demand_qty_missing_flag,
     weighted.is_observed_row,
     weighted.true_zero_demand_flag,
-    weighted.location_closed_flag,
-    weighted.location_open_flag,
-    weighted.product_active_flag,
     weighted.day_complete_flag,
-    weighted.missing_sales_flag,
     weighted.observed_stockout_flag_applicable_flag as observed_stockout_flag_applicable_flag,
 
     coalesce(weighted.observed_stockout_flag, false) as observed_stockout_flag,
     case when weighted.observed_stockout_flag_applicable_flag = 1 and weighted.observed_stockout_flag is null then 1 else 0 end as observed_stockout_flag_missing_flag,
     weighted.observed_stockout_available,
-    weighted.anomaly_flag,
-    weighted.freshretail_rescaled_flag,
-    weighted.target_scale_assumption,
-    weighted.avg_selling_price_applicable_flag as avg_selling_price_applicable_flag,
-
-    coalesce(weighted.avg_selling_price, 0) as avg_selling_price,
-    case when weighted.avg_selling_price_applicable_flag = 1 and weighted.avg_selling_price is null then 1 else 0 end as avg_selling_price_missing_flag,
     weighted.observed_discount_amount_applicable_flag as observed_discount_amount_applicable_flag,
     coalesce(weighted.observed_discount_amount, 0) as observed_discount_amount,
     case when weighted.observed_discount_amount_applicable_flag = 1 and weighted.observed_discount_amount is null then 1 else 0 end as observed_discount_amount_missing_flag,
     weighted.promo_flag_applicable_flag as promo_flag_applicable_flag,
     coalesce(weighted.promo_flag, false) as promo_flag,
     case when weighted.promo_flag_applicable_flag = 1 and weighted.promo_flag is null then 1 else 0 end as promo_flag_missing_flag,
-    weighted.price_available,
     weighted.activity_flag_applicable_flag as activity_flag_applicable_flag,
 
     coalesce(weighted.activity_flag, false) as activity_flag,
@@ -334,23 +358,10 @@ select
     weighted.target_quarter,
     weighted.target_year,
     weighted.current_holiday_flag,
-    weighted.current_holiday_name,
-    weighted.current_school_holiday_flag,
-    weighted.current_school_holiday_name,
-    weighted.holiday_name_local as current_holiday_name_local,
-    weighted.school_holiday_flag_local,
-    case
-        when weighted.school_holiday_flag_local then coalesce(weighted.school_holiday_name_local, 'school_holiday_unspecified')
-        else 'no_school_holiday'
-    end as current_school_holiday_name_local,
-    weighted.payday_flag,
     weighted.month_start_flag,
     weighted.month_end_flag,
     weighted.target_weekend_flag,
     weighted.target_holiday_flag,
-    weighted.target_holiday_name,
-    weighted.target_school_holiday_flag,
-    weighted.target_school_holiday_name,
     weighted.sin_target_day_of_week,
     weighted.cos_target_day_of_week,
     weighted.sin_target_week_of_year,
@@ -446,6 +457,7 @@ select
     weighted.source_license_type,
     weighted.source_review_status,
     weighted.source_legal_status_snapshot,
+    weighted.source_role,
     weighted.lag_1_applicable_flag as lag_1_applicable_flag,
 
     coalesce(weighted.lag_1, 0) as lag_1,
@@ -483,15 +495,6 @@ select
     weighted.rolling_std_28_applicable_flag as rolling_std_28_applicable_flag,
     coalesce(weighted.rolling_std_28, 0) as rolling_std_28,
     case when weighted.rolling_std_28_applicable_flag = 1 and weighted.rolling_std_28 is null then 1 else 0 end as rolling_std_28_missing_flag,
-    weighted.avg_selling_price_lag_1_applicable_flag as avg_selling_price_lag_1_applicable_flag,
-    coalesce(weighted.avg_selling_price_lag_1, 0) as avg_selling_price_lag_1,
-    case when weighted.avg_selling_price_lag_1_applicable_flag = 1 and weighted.avg_selling_price_lag_1 is null then 1 else 0 end as avg_selling_price_lag_1_missing_flag,
-    weighted.avg_selling_price_lag_7_applicable_flag as avg_selling_price_lag_7_applicable_flag,
-    coalesce(weighted.avg_selling_price_lag_7, 0) as avg_selling_price_lag_7,
-    case when weighted.avg_selling_price_lag_7_applicable_flag = 1 and weighted.avg_selling_price_lag_7 is null then 1 else 0 end as avg_selling_price_lag_7_missing_flag,
-    weighted.avg_selling_price_lag_28_applicable_flag as avg_selling_price_lag_28_applicable_flag,
-    coalesce(weighted.avg_selling_price_lag_28, 0) as avg_selling_price_lag_28,
-    case when weighted.avg_selling_price_lag_28_applicable_flag = 1 and weighted.avg_selling_price_lag_28 is null then 1 else 0 end as avg_selling_price_lag_28_missing_flag,
     weighted.observed_discount_amount_lag_1_applicable_flag as observed_discount_amount_lag_1_applicable_flag,
     coalesce(weighted.observed_discount_amount_lag_1, 0) as observed_discount_amount_lag_1,
     case when weighted.observed_discount_amount_lag_1_applicable_flag = 1 and weighted.observed_discount_amount_lag_1 is null then 1 else 0 end as observed_discount_amount_lag_1_missing_flag,
@@ -573,6 +576,16 @@ select
     weighted.moving_average_28_applicable_flag as moving_average_28_applicable_flag,
     coalesce(weighted.moving_average_28, 0) as moving_average_28,
     case when weighted.moving_average_28_applicable_flag = 1 and weighted.moving_average_28 is null then 1 else 0 end as moving_average_28_missing_flag,
+{% for base in lagged_numeric_bases %}
+    weighted.{{ base }}_applicable_flag as {{ base }}_applicable_flag,
+    coalesce(weighted.{{ base }}, 0) as {{ base }},
+    case when weighted.{{ base }}_applicable_flag = 1 and weighted.{{ base }} is null then 1 else 0 end as {{ base }}_missing_flag,
+{% endfor %}
+{% for base in lagged_boolean_bases %}
+    weighted.{{ base }}_applicable_flag as {{ base }}_applicable_flag,
+    coalesce(weighted.{{ base }}, false) as {{ base }},
+    case when weighted.{{ base }}_applicable_flag = 1 and weighted.{{ base }} is null then 1 else 0 end as {{ base }}_missing_flag,
+{% endfor %}
     weighted.sample_weight_source,
     weighted.sample_weight_business,
     weighted.is_primary_eval_dataset,

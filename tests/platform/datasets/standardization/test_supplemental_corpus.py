@@ -52,9 +52,7 @@ class SupplementalCorpusTests(unittest.TestCase):
             records.filter(pl.col("product_id") == "sku_1").select("target_semantics").item(),
             "observed_sales",
         )
-        self.assertIsNone(
-            records.filter(pl.col("product_id") == "sku_1").select("location_open_flag").item()
-        )
+        self.assertNotIn("location_open_flag", records.columns)
 
     def test_build_supplemental_corpus_dataset_accepts_first_party_canonical_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir_name:

@@ -14,11 +14,12 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from praedixa.demand_forecast.training.sampling_models import (  # noqa: E402
+from praedixa.demand_forecast.training.sampling.models import (  # noqa: E402
     RelationSamplingQuery,
     RelationSamplingSpec,
 )
-from praedixa.demand_forecast.training.sampling_queries import (  # noqa: E402
+from praedixa.demand_forecast.training.sampling.queries import (  # noqa: E402
+    build_gold_split_sampling_query,
     build_sampling_query_for_relation,
 )
 
@@ -35,7 +36,7 @@ class SamplingQueriesTests(unittest.TestCase):
                     sample_fraction=0.1,
                     allow_top_up=False,
                 ),
-                selected_columns=["dataset_source", "dt", "location_id", "product_id", "series_id"],
+                selected_columns=["dataset_source", "dt", "location_id", "product_id", "client_id"],
             )
         )
 
@@ -54,12 +55,53 @@ class SamplingQueriesTests(unittest.TestCase):
                     sample_fraction=0.1,
                     allow_top_up=True,
                 ),
-                selected_columns=["dataset_source", "dt", "location_id", "product_id", "series_id"],
+                selected_columns=["dataset_source", "dt", "location_id", "product_id", "client_id"],
             )
         )
 
         self.assertIn("__row_id", query)
         self.assertIn("topup_candidates", query)
+
+    def test_gold_train_sampling_requires_training_eligible_rows(self) -> None:
+        query = build_gold_split_sampling_query(
+            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            split_bucket="train",
+            date_col="dt",
+            dataset_source_col="dataset_source",
+            sample_store_col="location_id",
+            sample_fraction=1.0,
+            selected_columns=[
+                "dataset_source",
+                "dt",
+                "location_id",
+                "product_id",
+                "client_id",
+                "usable_for_training_flag",
+                "censor_flag",
+                "label_quality_score",
+            ],
+        )
+
+        self.assertIn("coalesce(usable_for_training_flag, false)", query)
+        self.assertIn("not coalesce(censor_flag, false)", query)
+        self.assertIn("coalesce(label_quality_score, 0.0) >= 0.750000", query)
+        self.assertIn("dataset_source not in ('bakery')", query)
+
+    def test_gold_train_sampling_allows_legacy_projection_without_label_quality(
+        self,
+    ) -> None:
+        query = build_gold_split_sampling_query(
+            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            split_bucket="train",
+            date_col="dt",
+            dataset_source_col="dataset_source",
+            sample_store_col="location_id",
+            sample_fraction=1.0,
+            selected_columns=["dataset_source", "dt", "location_id", "client_id"],
+        )
+
+        self.assertIn("or true", query)
+        self.assertNotIn("coalesce(usable_for_training_flag, false)", query)
 
 
 if __name__ == "__main__":
