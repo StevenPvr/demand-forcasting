@@ -12,7 +12,6 @@ models:
                     "freshretail",
                     "freshretail_lt",
                     "bakery",
-                    "first_party_daily",
                   ]
       - name: dt
       - name: split_bucket
@@ -66,6 +65,10 @@ models:
   - name: gold_daily_product_forecast_panel_d1
     columns:
       - name: dataset_source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["freshretail", "freshretail_lt", "bakery"]
       - name: dt
       - name: target_dt
       - name: split_bucket
@@ -97,19 +100,62 @@ models:
               - feature_availability_profile
 
   - name: gold_model_training_panel_d1
+    description: "Contrat consommable par le bundle d'entraînement D+1. Les colonnes de contrat sont projetées explicitement; les features dérivées restent extensibles."
     columns:
       - name: dataset_source
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["freshretail", "freshretail_lt", "bakery"]
       - name: dt
+        tests:
+          - not_null
       - name: target_dt
+        tests:
+          - not_null
+      - name: forecast_horizon_days
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1]
       - name: split_bucket
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["train", "val", "test"]
       - name: target_demand_qty_d_plus_1
+        tests:
+          - not_null
       - name: target_semantics
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["observed_sales", "latent_demand_estimated"]
       - name: censor_flag
+        tests:
+          - not_null
       - name: target_source
+        tests:
+          - not_null
       - name: label_quality_score
+        tests:
+          - not_null
       - name: usable_for_training_flag
+        tests:
+          - not_null
+      - name: target_true_zero_demand_flag
+        tests:
+          - not_null
       - name: decision_timestamp
+        tests:
+          - not_null
       - name: feature_availability_profile
+        tests:
+          - not_null
       - name: target_delta_log_wow_d_plus_1
 
     tests:
@@ -126,5 +172,13 @@ models:
               - target_source
               - label_quality_score
               - usable_for_training_flag
+              - target_true_zero_demand_flag
               - decision_timestamp
               - feature_availability_profile
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - dt
+              - location_id
+              - product_id

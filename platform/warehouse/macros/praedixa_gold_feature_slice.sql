@@ -74,6 +74,7 @@ window_inputs as (
         product_id,
         is_observed_row,
         current_day_demand_qty,
+        true_zero_demand_flag,
         observed_revenue_net,
         day_complete_flag,
         target_semantics,
@@ -107,6 +108,7 @@ window_lagged as (
         lead(target_source, 1) over series_window as target_source_d_plus_1,
         lead(label_quality_score, 1) over series_window as label_quality_score_d_plus_1,
         lead(usable_for_training_flag, 1) over series_window as usable_for_training_flag_d_plus_1,
+        lead(true_zero_demand_flag, 1) over series_window as target_true_zero_demand_flag,
         sum(case when is_observed_row then 1 else 0 end) over series_window as history_available_days,
         lag(current_day_demand_qty, 1) over series_window as lag_1,
         lag(current_day_demand_qty, 7) over series_window as lag_7,
@@ -215,6 +217,7 @@ window_features as (
         target_source_d_plus_1,
         label_quality_score_d_plus_1,
         usable_for_training_flag_d_plus_1,
+        target_true_zero_demand_flag,
         history_available_days,
         lag_1,
         lag_7,
@@ -416,7 +419,7 @@ final_panel as (
         base_panel.series_id as client_id,
         split_labeled.dt,
         split_labeled.target_dt,
-        split_labeled.dt + interval 1 day as decision_timestamp,
+        cast(split_labeled.dt as timestamp) + interval 23 hours + interval 59 minutes + interval 59 seconds as decision_timestamp,
         'post_close_d_plus_1' as feature_availability_profile,
         base_panel.location_id,
         base_panel.product_id,
@@ -442,7 +445,13 @@ final_panel as (
         split_labeled.censor_flag_d_plus_1 as censor_flag,
         split_labeled.target_source_d_plus_1 as target_source,
         split_labeled.label_quality_score_d_plus_1 as label_quality_score,
-        split_labeled.usable_for_training_flag_d_plus_1 as usable_for_training_flag,
+        coalesce(split_labeled.target_true_zero_demand_flag, false) as target_true_zero_demand_flag,
+        case
+            when coalesce(split_labeled.censor_flag_d_plus_1, false) then false
+            when coalesce(split_labeled.label_quality_score_d_plus_1, 0.0) < 0.75 then false
+            when split_labeled.target_source_d_plus_1 in ('closed_or_missing_observation', 'dense_calendar_zero_fill') then false
+            else coalesce(split_labeled.usable_for_training_flag_d_plus_1, false)
+        end as usable_for_training_flag,
         base_panel.observed_revenue_net,
         base_panel.observed_discount_amount,
         base_panel.promo_flag,

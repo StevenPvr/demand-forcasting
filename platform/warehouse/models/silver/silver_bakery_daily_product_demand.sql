@@ -1,4 +1,4 @@
-{{ config(tags=["silver", "bakery"], unique_key=["dataset_source", "dt", "location_id", "product_id"]) }}
+{{ config(tags=["silver", "bakery"], materialized="table", unique_key=["dataset_source", "dt", "location_id", "product_id"]) }}
 
 select
     dataset_source,

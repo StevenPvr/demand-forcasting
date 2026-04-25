@@ -37,6 +37,9 @@ from praedixa.demand_forecast.training.shared.hpo import (
     create_optuna_study,
     resolved_trial_status_name,
 )
+from praedixa.demand_forecast.training.validation.eligibility import (
+    filter_training_eligible_rows,
+)
 from praedixa.demand_forecast.training.xgboost.scoring import (
     fit_and_score_xgboost_model_on_tuning,
     xgboost_execution_policy,
@@ -125,7 +128,9 @@ def _tuning_report_row(trial: optuna.trial.FrozenTrial) -> dict[str, object]:
         "coverage_80": float("nan"),
         "coverage_95": float("nan"),
         "objective_score": _trial_user_attr_float(trial, "objective_score"),
-        "selected_learning_rate": _trial_user_attr_float(trial, "selected_learning_rate"),
+        "selected_learning_rate": _trial_user_attr_float(
+            trial, "selected_learning_rate"
+        ),
         "selected_n_estimators": _trial_user_attr_float(
             trial,
             "selected_n_estimators",
@@ -208,6 +213,16 @@ def _build_objective(
     study: optuna.study.Study,
 ) -> Callable[[optuna.trial.Trial], float]:
     completed = {"count": 0}
+    base_train_frame = filter_training_eligible_rows(
+        train_frame,
+        label="xgboost_optuna_shared_train",
+        logger=logger,
+    )
+    logger.debug(
+        "XGBoost Optuna shared train frame filtered once: rows_before=%s rows_after=%s",
+        len(train_frame),
+        len(base_train_frame),
+    )
 
     def objective(trial: optuna.trial.Trial) -> float:
         objective_start = time.perf_counter()
@@ -254,7 +269,7 @@ def _build_objective(
         )
         try:
             result = fit_and_score_xgboost_model_on_tuning(
-                train_frame=train_frame,
+                train_frame=base_train_frame,
                 tuning_frame=tuning_frame,
                 folds=folds,
                 feature_cols=feature_cols,
@@ -263,6 +278,7 @@ def _build_objective(
                 model_params=trial_params,
                 total_threads=total_threads,
                 trial=trial,
+                train_frame_is_eligible=True,
             )
             objective_score = _record_trial_result(
                 trial=trial,
@@ -319,7 +335,9 @@ def _record_trial_result(
     trial.set_user_attr("mean_wape", mean_wape)
     trial.set_user_attr("dataset_mean_wape", tuning_result["dataset_mean_wape"])
     trial.set_user_attr("mean_abs_bias", tuning_result.get("mean_abs_bias"))
-    trial.set_user_attr("selected_learning_rate", tuning_result["selected_learning_rate"])
+    trial.set_user_attr(
+        "selected_learning_rate", tuning_result["selected_learning_rate"]
+    )
     trial.set_user_attr("selected_n_estimators", tuning_result["selected_n_estimators"])
     trial.set_user_attr("native_best_score", tuning_result["native_best_score"])
     trial.set_user_attr("objective_score", objective_score)
@@ -378,7 +396,9 @@ def optimize_xgboost_model_params(
     target_transform: str = DEFAULT_TARGET_TRANSFORM,
 ) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
     _ = target_transform
-    total_threads = int(cast(Any, (model_params or {}).get("n_jobs", os.cpu_count() or 1)))
+    total_threads = int(
+        cast(Any, (model_params or {}).get("n_jobs", os.cpu_count() or 1))
+    )
     resolved_base_params = resolve_xgboost_model_params(
         {**(model_params or {}), "n_jobs": total_threads}
     )

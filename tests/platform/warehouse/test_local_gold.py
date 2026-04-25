@@ -6,12 +6,15 @@ import unittest
 from unittest import mock
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists()
+)
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
 for path in (PROJECT_ROOT, PLATFORM_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from praedixa.platform.warehouse.dbt_runner import DbtStageResult  # noqa: E402
 from praedixa.platform.warehouse.local_gold import (  # noqa: E402
     DEFAULT_GOLD_BAKERY_TEST_MONTHS,
     DEFAULT_GOLD_HORIZON_DAYS,
@@ -39,74 +42,88 @@ class RunLocalGoldTests(unittest.TestCase):
         self.assertEqual(env["PRAEDIXA_ENABLE_CLOUD_WAREHOUSE"], "false")
         self.assertEqual(env["PRAEDIXA_DUCKDB_GOLD_SCHEMA"], DEFAULT_GOLD_SCHEMA)
         self.assertEqual(env["PRAEDIXA_GOLD_HORIZON_DAYS"], DEFAULT_GOLD_HORIZON_DAYS)
-        self.assertEqual(env["PRAEDIXA_GOLD_BAKERY_TEST_MONTHS"], DEFAULT_GOLD_BAKERY_TEST_MONTHS)
+        self.assertEqual(
+            env["PRAEDIXA_GOLD_BAKERY_TEST_MONTHS"],
+            DEFAULT_GOLD_BAKERY_TEST_MONTHS,
+        )
 
-    def test_run_local_gold_calls_dbt_run_and_test(self) -> None:
-        config = LocalGoldRunConfig(dbt_select="tag:gold", refresh_open_exogenous=True, run_dbt_tests=True)
+    def test_run_local_gold_calls_dbt_stage(self) -> None:
+        config = LocalGoldRunConfig(
+            dbt_select="tag:gold",
+            refresh_open_exogenous=True,
+            run_dbt_tests=True,
+        )
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs", return_value={"fetch": {}, "bronze_load": {}}),
-            mock.patch("praedixa.platform.warehouse.local_gold.resolve_dbt_executable", return_value=".venv/bin/dbt"),
-            mock.patch("praedixa.platform.warehouse.local_gold.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
-            mock.patch("praedixa.platform.warehouse.local_gold.dbt_packages_installed", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_gold.run_dbt_command") as run_dbt_command_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs",
+                return_value={"fetch": {}, "bronze_load": {}},
+            ),
+            mock.patch("praedixa.platform.warehouse.local_gold.DbtStageRunner") as runner_cls,
         ):
+            runner_cls.return_value.run_stage.return_value = DbtStageResult(
+                deps=False,
+                seed=True,
+                run=True,
+                test=True,
+            )
             result = run_local_gold(config)
 
-        self.assertEqual(run_dbt_command_mock.call_count, 3)
-        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "seed")
-        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "run")
-        self.assertEqual(run_dbt_command_mock.call_args_list[1].kwargs["select"], "+tag:gold")
-        self.assertEqual(run_dbt_command_mock.call_args_list[2].args[1], "test")
-        self.assertEqual(run_dbt_command_mock.call_args_list[2].kwargs["select"], "tag:gold")
+        runner_cls.return_value.run_stage.assert_called_once()
+        stage_config = runner_cls.return_value.run_stage.call_args.kwargs["config"]
+        self.assertEqual(stage_config.selector, "tag:gold")
+        self.assertEqual(stage_config.test_selector, "tag:gold")
+        self.assertTrue(stage_config.run_tests)
         self.assertTrue(result["dbt_run"])
         self.assertTrue(result["dbt_test"])
 
     def test_run_local_gold_can_skip_dbt_tests(self) -> None:
-        config = LocalGoldRunConfig(dbt_select="tag:gold", refresh_open_exogenous=True, run_dbt_tests=False)
+        config = LocalGoldRunConfig(
+            dbt_select="tag:gold",
+            refresh_open_exogenous=True,
+            run_dbt_tests=False,
+        )
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs", return_value={"fetch": {}, "bronze_load": {}}),
-            mock.patch("praedixa.platform.warehouse.local_gold.resolve_dbt_executable", return_value=".venv/bin/dbt"),
-            mock.patch("praedixa.platform.warehouse.local_gold.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
-            mock.patch("praedixa.platform.warehouse.local_gold.dbt_packages_installed", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_gold.run_dbt_command") as run_dbt_command_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs",
+                return_value={"fetch": {}, "bronze_load": {}},
+            ),
+            mock.patch("praedixa.platform.warehouse.local_gold.DbtStageRunner") as runner_cls,
         ):
+            runner_cls.return_value.run_stage.return_value = DbtStageResult(
+                deps=False,
+                seed=True,
+                run=True,
+                test=False,
+            )
             result = run_local_gold(config)
 
-        self.assertEqual(run_dbt_command_mock.call_count, 2)
-        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "seed")
-        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "run")
+        stage_config = runner_cls.return_value.run_stage.call_args.kwargs["config"]
+        self.assertFalse(stage_config.run_tests)
         self.assertTrue(result["dbt_run"])
         self.assertFalse(result["dbt_test"])
 
-    def test_run_local_gold_bootstraps_dbt_packages_when_missing(self) -> None:
-        config = LocalGoldRunConfig(dbt_select="tag:gold", refresh_open_exogenous=True, run_dbt_tests=False)
-
-        with (
-            mock.patch("praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs", return_value={"fetch": {}, "bronze_load": {}}),
-            mock.patch("praedixa.platform.warehouse.local_gold.resolve_dbt_executable", return_value=".venv/bin/dbt"),
-            mock.patch("praedixa.platform.warehouse.local_gold.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
-            mock.patch("praedixa.platform.warehouse.local_gold.dbt_packages_installed", return_value=False),
-            mock.patch("praedixa.platform.warehouse.local_gold.run_dbt_command") as run_dbt_command_mock,
-        ):
-            run_local_gold(config)
-
-        self.assertEqual(run_dbt_command_mock.call_count, 3)
-        self.assertEqual(run_dbt_command_mock.call_args_list[0].args[1], "deps")
-        self.assertEqual(run_dbt_command_mock.call_args_list[1].args[1], "seed")
-        self.assertEqual(run_dbt_command_mock.call_args_list[2].args[1], "run")
-
     def test_run_local_gold_refreshes_open_exogenous_by_default(self) -> None:
-        config = LocalGoldRunConfig(dbt_select="tag:gold", refresh_open_exogenous=True, run_dbt_tests=False)
+        config = LocalGoldRunConfig(
+            dbt_select="tag:gold",
+            refresh_open_exogenous=True,
+            run_dbt_tests=False,
+        )
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs", return_value={"fetch": {}, "bronze_load": {}}) as refresh_mock,
-            mock.patch("praedixa.platform.warehouse.local_gold.resolve_dbt_executable", return_value=".venv/bin/dbt"),
-            mock.patch("praedixa.platform.warehouse.local_gold.ensure_dbt_profiles_file", return_value=PROJECT_ROOT / "platform" / "warehouse" / "profiles.yml"),
-            mock.patch("praedixa.platform.warehouse.local_gold.dbt_packages_installed", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_gold.run_dbt_command"),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.refresh_open_exogenous_inputs",
+                return_value={"fetch": {}, "bronze_load": {}},
+            ) as refresh_mock,
+            mock.patch("praedixa.platform.warehouse.local_gold.DbtStageRunner") as runner_cls,
         ):
+            runner_cls.return_value.run_stage.return_value = DbtStageResult(
+                deps=False,
+                seed=True,
+                run=True,
+                test=False,
+            )
             result = run_local_gold(config)
 
         refresh_mock.assert_called_once()
@@ -116,11 +133,29 @@ class RunLocalGoldTests(unittest.TestCase):
         env = build_local_gold_env(base_env={})
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_gold.assert_silver_ready_for_open_exogenous"),
-            mock.patch("praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data", return_value={"manifest_path": Path("var/datasets/open_exogenous/open_exogenous_manifest.json")}) as fetch_mock,
-            mock.patch("praedixa.platform.warehouse.local_gold.build_open_exogenous_runtime_config_from_env", return_value=mock.sentinel.runtime_config),
-            mock.patch("praedixa.platform.warehouse.local_gold.default_open_exogenous_bronze_specs", return_value=["spec_a", "spec_b"]) as specs_mock,
-            mock.patch("praedixa.platform.warehouse.local_gold.load_selected_bronze_specs", return_value={"local_warehouse_row_counts": {"open_weather_daily": 123}}) as load_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.assert_silver_ready_for_open_exogenous"
+            ),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data",
+                return_value={
+                    "manifest_path": Path(
+                        "var/datasets/open_exogenous/open_exogenous_manifest.json"
+                    )
+                },
+            ) as fetch_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.build_open_exogenous_runtime_config_from_env",
+                return_value=mock.sentinel.runtime_config,
+            ),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.default_open_exogenous_bronze_specs",
+                return_value=["spec_a", "spec_b"],
+            ) as specs_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.load_selected_bronze_specs",
+                return_value={"local_warehouse_row_counts": {"open_weather_daily": 123}},
+            ) as load_mock,
         ):
             result = refresh_open_exogenous_inputs(env)
 
@@ -134,12 +169,29 @@ class RunLocalGoldTests(unittest.TestCase):
         env = build_local_gold_env(base_env={})
 
         with (
-            mock.patch("praedixa.platform.warehouse.local_gold.assert_silver_ready_for_open_exogenous"),
-            mock.patch("praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data", side_effect=RuntimeError("world bank unavailable")) as fetch_mock,
-            mock.patch("praedixa.platform.warehouse.local_gold.build_open_exogenous_runtime_config_from_env", return_value=mock.sentinel.runtime_config),
-            mock.patch("praedixa.platform.warehouse.local_gold.default_open_exogenous_bronze_specs", return_value=["spec_a"]) as specs_mock,
-            mock.patch("praedixa.platform.warehouse.local_gold._all_open_exogenous_sources_available", return_value=True),
-            mock.patch("praedixa.platform.warehouse.local_gold.load_selected_bronze_specs", return_value={"local_warehouse_row_counts": {"open_macro_annual": 303}}) as load_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.assert_silver_ready_for_open_exogenous"
+            ),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data",
+                side_effect=RuntimeError("world bank unavailable"),
+            ) as fetch_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.build_open_exogenous_runtime_config_from_env",
+                return_value=mock.sentinel.runtime_config,
+            ),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.default_open_exogenous_bronze_specs",
+                return_value=["spec_a"],
+            ) as specs_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold._all_open_exogenous_sources_available",
+                return_value=True,
+            ),
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.load_selected_bronze_specs",
+                return_value={"local_warehouse_row_counts": {"open_macro_annual": 303}},
+            ) as load_mock,
         ):
             result = refresh_open_exogenous_inputs(env)
 
@@ -164,7 +216,9 @@ class RunLocalGoldTests(unittest.TestCase):
                 "praedixa.platform.warehouse.local_gold.assert_silver_ready_for_open_exogenous",
                 side_effect=MissingSilverDependencyError("silver missing"),
             ),
-            mock.patch("praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data") as fetch_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_gold.fetch_open_exogenous_data"
+            ) as fetch_mock,
         ):
             with self.assertRaises(MissingSilverDependencyError):
                 refresh_open_exogenous_inputs(env)

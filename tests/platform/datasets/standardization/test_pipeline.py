@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 import sys
 import unittest
+from typing import cast
 from unittest import mock
 
 import pandas as pd
@@ -14,6 +16,29 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from praedixa.platform.datasets.standardization.pipeline import build_global_daily_standardization  # noqa: E402
+
+
+def _mapping_value(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value = payload[key]
+    if not isinstance(value, Mapping):
+        raise AssertionError(f"Expected mapping payload for `{key}`.")
+    return cast(Mapping[str, object], value)
+
+
+def _int_value(payload: Mapping[str, object], key: str) -> int:
+    value = payload[key]
+    if not isinstance(value, int):
+        raise AssertionError(f"Expected integer value for `{key}`.")
+    return value
+
+
+def _source_rows(source_summaries: Mapping[str, object], source_name: str) -> int:
+    return _int_value(_mapping_value(source_summaries, source_name), "rows")
+
+
+def _quality_error_count(data_quality: Mapping[str, object], source_name: str) -> int:
+    sources = _mapping_value(data_quality, "sources")
+    return _int_value(_mapping_value(sources, source_name), "error_count")
 
 
 def _canonical_fixture(dataset_source: str) -> pl.DataFrame:
@@ -78,11 +103,11 @@ class GlobalDatasetPipelineTests(unittest.TestCase):
         ):
             artifacts = build_global_daily_standardization(bakery_input_path=None)
 
-        self.assertEqual(artifacts.source_summaries["freshretail"]["rows"], 1)
-        self.assertEqual(artifacts.source_summaries["supplemental_corpus"]["rows"], 1)
-        self.assertEqual(artifacts.source_summaries["combined"]["rows"], 2)
-        self.assertEqual(artifacts.data_quality["sources"]["freshretail"]["error_count"], 0)
-        self.assertEqual(artifacts.data_quality["combined"]["error_count"], 0)
+        self.assertEqual(_source_rows(artifacts.source_summaries, "freshretail"), 1)
+        self.assertEqual(_source_rows(artifacts.source_summaries, "supplemental_corpus"), 1)
+        self.assertEqual(_source_rows(artifacts.source_summaries, "combined"), 2)
+        self.assertEqual(_quality_error_count(artifacts.data_quality, "freshretail"), 0)
+        self.assertEqual(_int_value(_mapping_value(artifacts.data_quality, "combined"), "error_count"), 0)
 
     def test_build_global_daily_standardization_fails_on_duplicate_canonical_grain(self) -> None:
         duplicated_fresh = pl.concat(

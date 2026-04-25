@@ -19,13 +19,13 @@ DEFAULT_XGBOOST_MODEL_PARAMS: dict[str, object] = {
     "tree_method": "hist",
     "enable_categorical": True,
     "n_estimators": DEFAULT_XGBOOST_N_ESTIMATORS,
-    "learning_rate": 0.05,
-    "max_depth": 6,
-    "min_child_weight": 5.0,
-    "subsample": 0.90,
-    "colsample_bytree": 0.90,
-    "reg_alpha": 1e-3,
-    "reg_lambda": 1.0,
+    "learning_rate": 0.04,
+    "max_depth": 5,
+    "min_child_weight": 64.0,
+    "subsample": 0.85,
+    "colsample_bytree": 0.75,
+    "reg_alpha": 1e-2,
+    "reg_lambda": 20.0,
     "max_bin": 256,
     "max_cat_to_onehot": DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT,
     "max_cat_threshold": DEFAULT_XGBOOST_MAX_CAT_THRESHOLD,
@@ -67,7 +67,10 @@ def resolve_xgboost_model_params(
 ) -> dict[str, object]:
     """Resolve les parametres runtime en ignorant les cles d'orchestration non XGBoost."""
 
-    resolved = {**(default_params or DEFAULT_XGBOOST_MODEL_PARAMS), **(model_params or {})}
+    resolved = {
+        **(default_params or DEFAULT_XGBOOST_MODEL_PARAMS),
+        **(model_params or {}),
+    }
     resolved["model_backend"] = "xgboost"
     return resolved
 
@@ -100,6 +103,10 @@ def xgboost_train_params(model_params: dict[str, object]) -> dict[str, object]:
         train_params.pop("max_cat_to_onehot", None)
         train_params.pop("max_cat_threshold", None)
         return train_params
-    train_params["max_cat_to_onehot"] = int(cast(Any, train_params["max_cat_to_onehot"]))
-    train_params["max_cat_threshold"] = int(cast(Any, train_params["max_cat_threshold"]))
+    train_params["max_cat_to_onehot"] = int(
+        cast(Any, train_params["max_cat_to_onehot"])
+    )
+    train_params["max_cat_threshold"] = int(
+        cast(Any, train_params["max_cat_threshold"])
+    )
     return train_params

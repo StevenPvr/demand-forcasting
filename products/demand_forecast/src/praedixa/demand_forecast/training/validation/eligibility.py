@@ -8,11 +8,16 @@ import pandas as pd
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE: float = 0.75
+NON_TRAINABLE_TARGET_SOURCES: tuple[str, ...] = (
+    "closed_or_missing_observation",
+    "dense_calendar_zero_fill",
+)
 TRAINING_ELIGIBILITY_COLUMNS: tuple[str, ...] = (
     "usable_for_training_flag",
     "censor_flag",
     "label_quality_score",
     "target_semantics",
+    "target_source",
 )
 
 
@@ -32,6 +37,8 @@ def training_eligibility_mask(
     if "label_quality_score" in frame.columns:
         label_quality = pd.to_numeric(frame["label_quality_score"], errors="coerce")
         mask &= label_quality.ge(float(min_label_quality_score)).fillna(False)
+    if "target_source" in frame.columns:
+        mask &= ~frame["target_source"].astype("string").isin(NON_TRAINABLE_TARGET_SOURCES)
     if expected_target_semantics is not None and "target_semantics" in frame.columns:
         mask &= frame["target_semantics"].astype("string").eq(expected_target_semantics)
     return mask

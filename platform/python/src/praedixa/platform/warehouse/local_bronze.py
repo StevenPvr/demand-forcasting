@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from praedixa.platform.runtime.paths import (
 )
 from praedixa.platform.warehouse.bronze_specs import (
     BronzeTableSpec,
+    bronze_source_manifest_ddl,
     default_active_bronze_specs,
     default_bronze_specs,
 )
@@ -38,6 +40,7 @@ PARQUET_API: Any = pq
 __all__ = [
     "BronzeTableSpec",
     "EmptyRequiredBronzeSourceError",
+    "MissingBronzeColumnsError",
     "MissingRequiredBronzeSourceError",
     "prepare_bronze_batch",
     "backup_local_bronze_sources",
@@ -94,6 +97,10 @@ class MissingRequiredBronzeSourceError(FileNotFoundError):
 
 class EmptyRequiredBronzeSourceError(ValueError):
     """Raised before warehouse mutation when a required bronze source file is empty."""
+
+
+class MissingBronzeColumnsError(ValueError):
+    """Raised when a bronze source is missing columns required by its contract."""
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -363,6 +370,10 @@ def _iter_csv_batches(path: Path, batch_rows: int) -> Iterator[pd.DataFrame]:
 
 def prepare_bronze_batch(spec: BronzeTableSpec, batch: pd.DataFrame) -> pd.DataFrame:
     prepared = batch.copy(deep=False)
+    if "source_name" not in prepared.columns:
+        prepared["source_name"] = spec.source_name
+    if "source_policy_id" not in prepared.columns:
+        prepared["source_policy_id"] = spec.source_policy_id or spec.source_name
     prepared["source_file_path"] = str(spec.source_path)
     prepared["loaded_at"] = _utc_now()
 
@@ -387,6 +398,18 @@ def prepare_bronze_batch(spec: BronzeTableSpec, batch: pd.DataFrame) -> pd.DataF
     return prepared
 
 
+def _validate_expected_columns(spec: BronzeTableSpec, prepared: pd.DataFrame) -> None:
+    if not spec.expected_columns:
+        return
+    missing_columns = [
+        column for column in spec.expected_columns if column not in prepared.columns
+    ]
+    if missing_columns:
+        raise MissingBronzeColumnsError(
+            f"Bronze source `{spec.source_name}` is missing required columns after preparation: {missing_columns}"
+        )
+
+
 def _iter_prepared_batches(
     spec: BronzeTableSpec, batch_rows: int
 ) -> Iterator[pd.DataFrame]:
@@ -396,7 +419,9 @@ def _iter_prepared_batches(
         iterator = _iter_csv_batches(spec.source_path, batch_rows=batch_rows)
 
     for batch in iterator:
-        yield prepare_bronze_batch(spec, batch)
+        prepared = prepare_bronze_batch(spec, batch)
+        _validate_expected_columns(spec, prepared)
+        yield prepared
 
 
 def _quote_identifier(name: str) -> str:
@@ -442,6 +467,10 @@ def _insert_batch(
         table_name=table_name,
     )
     insert_columns = [column for column in batch.columns if column in table_columns]
+    if not insert_columns:
+        raise MissingBronzeColumnsError(
+            f"No insertable columns found for bronze table `{schema_name}.{table_name}`."
+        )
     ignored_columns = sorted(set(batch.columns).difference(insert_columns))
     if ignored_columns:
         logger.debug(
@@ -469,8 +498,11 @@ def _prepare_inline_bronze_batch(
     frame: pd.DataFrame,
     *,
     source_label: str,
+    source_policy_id: str,
 ) -> pd.DataFrame:
     prepared = frame.copy(deep=False)
+    prepared["source_name"] = source_label
+    prepared["source_policy_id"] = source_policy_id
     prepared["source_file_path"] = source_label
     prepared["loaded_at"] = _utc_now()
     return prepared
@@ -484,27 +516,44 @@ def _load_inline_frame_target(
     ddl: str,
     frame: pd.DataFrame,
     source_name: str,
+    source_policy_id: str,
 ) -> int:
     client = build_duckdb_client(target_config)
     try:
-        recreate_table(client, schema_name=target_config.schema_name, table_name=table_name)
-        ensure_table(
-            client,
-            BronzeTableSpec(
-                table_name=table_name,
-                source_path=Path(source_name),
-                ddl=ddl,
-                source_name=source_name,
-            ),
-        )
-        prepared = _prepare_inline_bronze_batch(frame, source_label=source_name)
-        _insert_batch(
-            client,
-            schema_name=target_config.schema_name,
+        loaded_rows = 0
+        spec = BronzeTableSpec(
             table_name=table_name,
-            batch=prepared,
+            source_path=Path(source_name),
+            ddl=ddl,
+            source_name=source_name,
+            source_policy_id=source_policy_id,
         )
-        return len(prepared)
+
+        def operation() -> None:
+            nonlocal loaded_rows
+            recreate_table(client, schema_name=target_config.schema_name, table_name=table_name)
+            ensure_table(client, spec)
+            prepared = _prepare_inline_bronze_batch(
+                frame,
+                source_label=source_name,
+                source_policy_id=source_policy_id,
+            )
+            _insert_batch(
+                client,
+                schema_name=target_config.schema_name,
+                table_name=table_name,
+                batch=prepared,
+            )
+            loaded_rows = len(prepared)
+            _persist_manifest_to_target(
+                client,
+                specs=[spec],
+                row_counts={source_name: loaded_rows},
+                schema_name=target_config.schema_name,
+            )
+
+        _run_transaction(client, operation)
+        return loaded_rows
     finally:
         client.close()
         logger.info(
@@ -518,11 +567,13 @@ def load_inline_bronze_frame(
     ddl: str,
     frame: pd.DataFrame,
     source_name: str,
+    source_policy_id: str | None = None,
 ) -> dict[str, int]:
     """Load one in-memory bronze frame into the enabled DuckDB targets without persisting a source file."""
 
     runtime_config = build_runtime_config_from_env()
     row_counts: dict[str, int] = {}
+    resolved_source_policy_id = source_policy_id or source_name
     if runtime_config.local_warehouse_enabled:
         local_config = build_local_duckdb_config_from_env()
         row_counts["local"] = _load_inline_frame_target(
@@ -532,6 +583,7 @@ def load_inline_bronze_frame(
             ddl=ddl,
             frame=frame,
             source_name=source_name,
+            source_policy_id=resolved_source_policy_id,
         )
     if runtime_config.cloud_warehouse_enabled:
         cloud_config = build_cloud_duckdb_config_from_env()
@@ -542,6 +594,7 @@ def load_inline_bronze_frame(
             ddl=ddl,
             frame=frame,
             source_name=source_name,
+            source_policy_id=resolved_source_policy_id,
         )
     return row_counts
 
@@ -555,17 +608,30 @@ def _group_specs_by_table(
     return dict(grouped_specs)
 
 
-def load_bronze_tables_into_target(
+def _run_transaction(
+    client: DuckDBConnectionProtocol,
+    operation: Callable[[], None],
+) -> None:
+    client.execute("BEGIN TRANSACTION")
+    try:
+        operation()
+    except Exception:
+        client.execute("ROLLBACK")
+        raise
+    client.execute("COMMIT")
+
+
+def _load_bronze_table_group(
     client: DuckDBConnectionProtocol,
     *,
-    specs: list[BronzeTableSpec],
+    table_name: str,
+    table_specs: list[BronzeTableSpec],
     schema_name: str,
-    batch_rows: int = DEFAULT_BATCH_ROWS,
+    batch_rows: int,
 ) -> dict[str, int]:
-    """Load all local bronze sources into one DuckDB target."""
-
     row_counts: dict[str, int] = {}
-    for table_name, table_specs in _group_specs_by_table(specs).items():
+
+    def operation() -> None:
         existing_specs = [spec for spec in table_specs if spec.source_path.exists()]
         recreate_table(client, schema_name=schema_name, table_name=table_name)
         ensure_table(client, table_specs[0])
@@ -578,7 +644,7 @@ def load_bronze_tables_into_target(
                 schema_name,
                 table_name,
             )
-            continue
+            return
 
         for spec in table_specs:
             if not spec.source_path.exists():
@@ -593,7 +659,10 @@ def load_bronze_tables_into_target(
             inserted_rows = 0
             for batch in _iter_prepared_batches(spec, batch_rows=batch_rows):
                 _insert_batch(
-                    client, schema_name=schema_name, table_name=table_name, batch=batch
+                    client,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    batch=batch,
                 )
                 inserted_rows += len(batch)
             row_counts[spec.source_name] = inserted_rows
@@ -603,6 +672,88 @@ def load_bronze_tables_into_target(
                 f"{schema_name}.{table_name}",
                 spec.source_path,
             )
+
+    operation()
+    return row_counts
+
+
+def _persist_manifest_to_target(
+    client: DuckDBConnectionProtocol,
+    *,
+    specs: list[BronzeTableSpec],
+    row_counts: dict[str, int],
+    schema_name: str,
+) -> None:
+    client.execute(bronze_source_manifest_ddl(schema_name))
+    loaded_at = _utc_now()
+    source_run_id = f"bronze_{loaded_at.strftime('%Y%m%d_%H%M%S')}"
+    rows: list[dict[str, object]] = []
+    for spec in specs:
+        exists = spec.source_path.exists()
+        stat = spec.source_path.stat() if exists else None
+        rows.append(
+            {
+                "source_run_id": source_run_id,
+                "source_name": spec.source_name,
+                "source_policy_id": spec.source_policy_id or spec.source_name,
+                "table_name": spec.table_name,
+                "source_path": str(spec.source_path),
+                "required": spec.required,
+                "allow_empty": spec.allow_empty,
+                "size_bytes": int(stat.st_size) if stat is not None else None,
+                "mtime_ns": int(stat.st_mtime_ns) if stat is not None else None,
+                "sha256": _source_sha256(spec.source_path) if exists else None,
+                "loaded_rows": row_counts.get(spec.source_name, 0),
+                "loaded_at": loaded_at,
+            }
+        )
+    if not rows:
+        return
+    manifest_frame = pd.DataFrame(rows)
+    temp_view_name = "__praedixa_bronze_source_manifest"
+    client.register(temp_view_name, manifest_frame)
+    try:
+        client.execute(
+            f"""
+            INSERT INTO {schema_name}.bronze_source_manifest
+            SELECT *
+            FROM {temp_view_name}
+            """
+        )
+    finally:
+        client.unregister(temp_view_name)
+
+
+def load_bronze_tables_into_target(
+    client: DuckDBConnectionProtocol,
+    *,
+    specs: list[BronzeTableSpec],
+    schema_name: str,
+    batch_rows: int = DEFAULT_BATCH_ROWS,
+) -> dict[str, int]:
+    """Load all local bronze sources into one DuckDB target."""
+
+    row_counts: dict[str, int] = {}
+
+    def operation() -> None:
+        for table_name, table_specs in _group_specs_by_table(specs).items():
+            row_counts.update(
+                _load_bronze_table_group(
+                    client,
+                    table_name=table_name,
+                    table_specs=table_specs,
+                    schema_name=schema_name,
+                    batch_rows=batch_rows,
+                )
+            )
+        _persist_manifest_to_target(
+            client,
+            specs=specs,
+            row_counts=row_counts,
+            schema_name=schema_name,
+        )
+
+    _run_transaction(client, operation)
     return row_counts
 
 

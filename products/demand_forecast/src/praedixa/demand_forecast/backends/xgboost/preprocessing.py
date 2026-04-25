@@ -36,6 +36,16 @@ class XGBoostMatrices:
     feature_spec: XGBoostFeatureSpec
 
 
+@dataclass(frozen=True)
+class XGBoostPreparedMatrixData:
+    train_x: pd.DataFrame | np.ndarray
+    valid_x: pd.DataFrame | np.ndarray
+    train_y: np.ndarray
+    valid_y: np.ndarray
+    train_sample_weight: np.ndarray | None
+    feature_spec: XGBoostFeatureSpec
+
+
 def _is_categorical_feature(series: pd.Series) -> bool:
     return bool(
         isinstance(series.dtype, pd.CategoricalDtype)
@@ -133,15 +143,25 @@ def transform_xgboost_features(
         else:
             prepared_columns[column] = _prepared_numeric_column(frame[column])
     transformed = pd.DataFrame(prepared_columns, index=frame.index)
-    return transformed.reset_index(drop=True).copy()
+    return transformed.reset_index(drop=True)
 
 
 def to_xgboost_feature_data(
-    features: pd.DataFrame,
+    features: pd.DataFrame | np.ndarray,
     feature_spec: XGBoostFeatureSpec,
 ) -> pd.DataFrame | np.ndarray:
     if feature_spec.native_categorical:
-        return features.copy()
+        if not isinstance(features, pd.DataFrame):
+            raise TypeError(
+                "Native categorical XGBoost features must remain a DataFrame."
+            )
+        return features
+    if isinstance(features, np.ndarray):
+        return np.require(
+            features,
+            dtype=np.float32,
+            requirements=["C", "A", "O", "W"],
+        )
     feature_data = features.to_numpy(dtype=np.float32, copy=True)
     return np.require(
         feature_data,
@@ -162,7 +182,9 @@ def _prepared_target_array(frame: pd.DataFrame, target_col: str) -> np.ndarray:
     )
 
 
-def _prepared_sample_weight_array(sample_weight: np.ndarray | None) -> np.ndarray | None:
+def _prepared_sample_weight_array(
+    sample_weight: np.ndarray | None,
+) -> np.ndarray | None:
     if sample_weight is None:
         return None
     return np.require(
@@ -193,4 +215,31 @@ def prepare_xgboost_matrices(
         valid_y=_prepared_target_array(valid_frame, target_col),
         train_sample_weight=_prepared_sample_weight_array(train_sample_weight),
         feature_spec=feature_spec,
+    )
+
+
+def prepare_xgboost_matrix_data(
+    *,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    train_sample_weight: np.ndarray | None = None,
+    native_categorical: bool = False,
+) -> XGBoostPreparedMatrixData:
+    matrices = prepare_xgboost_matrices(
+        train_frame=train_frame,
+        valid_frame=valid_frame,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        train_sample_weight=train_sample_weight,
+        native_categorical=native_categorical,
+    )
+    return XGBoostPreparedMatrixData(
+        train_x=to_xgboost_feature_data(matrices.train_x, matrices.feature_spec),
+        valid_x=to_xgboost_feature_data(matrices.valid_x, matrices.feature_spec),
+        train_y=matrices.train_y,
+        valid_y=matrices.valid_y,
+        train_sample_weight=matrices.train_sample_weight,
+        feature_spec=matrices.feature_spec,
     )

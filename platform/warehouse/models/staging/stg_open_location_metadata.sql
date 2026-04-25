@@ -17,6 +17,8 @@ select
     cast(mall_flag as boolean) as mall_flag,
     cast(transit_hub_flag as boolean) as transit_hub_flag,
     cast(tourism_flag as boolean) as tourism_flag,
+    nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
 from {{ source("bronze", "bronze_open_location_metadata") }}

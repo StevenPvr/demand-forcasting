@@ -1,0 +1,11 @@
+feature_name,feature_family,tft_role,available_at_prediction,source_system,missing_policy,default_value,include_in_training,allow_constant,notes
+dataset_source,metadata,static_categorical,true,warehouse,required,,true,false,Dataset source is a governance and segmentation feature.
+client_id,identity,static_categorical,true,warehouse,required,,false,false,Canonical series identifier used as group id.
+location_id,identity,static_categorical,true,warehouse,required,,false,false,Support column for diagnostics and sampling.
+product_id,identity,static_categorical,true,warehouse,required,,false,false,Support column for diagnostics and sampling.
+target_demand_qty_d_plus_1,target,target,false,gold,required,,false,false,D+1 observed-sales target unless latent demand is explicitly reconstructed.
+rolling_mean_7,history,time_varying_known_real,true,gold,zero_fill,0,true,false,Past-only rolling demand feature.
+lag_1,baseline,time_varying_known_real,true,gold,required,,false,false,Support column for baseline reconstruction.
+weather_temperature_lag_1,weather,time_varying_known_real,true,open_exogenous,zero_fill,0,true,false,Weather feature must satisfy point-in-time availability.
+lending_interest_rate_latest_lag_28,macro,time_varying_known_real,true,open_exogenous,zero_fill,0,true,true,Macro feature is allowed to be constant in narrow samples.
+usable_for_training_flag,label_quality,training_filter,true,gold,required,,false,false,Rows with false value are excluded from train/tuning bundles.

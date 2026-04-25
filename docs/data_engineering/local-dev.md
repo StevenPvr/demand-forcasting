@@ -1,144 +1,81 @@
 # Workflow Local Praedixa
 
-## Objectif
+Ce document décrit le workflow local réellement supporté. Les wrappers `main.py`
+sont volontairement lançables sans argument depuis l'IDE: pas de `argparse`, pas
+de flags CLI.
 
-Figer un workflow local simple pour developper les couches `silver` et `gold` sans dependre du cloud.
-
-Le mode local de reference est :
-
-- `DuckDB local` pour la base warehouse
-- `backup local` des inputs bronze
-- `dbt` pour materialiser la silver et la gold
-- `cloud DuckDB` desactive par defaut
-
-## Commande unique
-
-La commande la plus simple pour lancer la chaine locale est :
+## Commande De Référence
 
 ```bash
+PYTHONPATH="$PWD:$PWD/platform/python/src:$PWD/products/demand_forecast/src" \
 .venv/bin/python -m apps.warehouse.main
 ```
 
-Cette commande fait, dans l'ordre :
+Ordre réel:
 
-1. charge les datasets locaux dans le schema `bronze` DuckDB via la step `silver`
-2. lance `dbt run` sur la `silver`
-3. lance `dbt test` sur la `silver`
-4. rafraichit ensuite les fichiers exogenes open-source pour la `gold`
-5. lance `dbt run` sur la `gold`
-6. lance `dbt test` sur la `gold`
+1. `load_core_bronze`: charge les sources locales coeur dans DuckDB.
+2. `run_silver`: exécute dbt sur la silver canonique.
+3. `refresh_open_exogenous`: lit `silver.silver_daily_product_demand`, produit les CSV open data, puis charge les `bronze_open_*`.
+4. `run_gold`: matérialise le panel gold et le contrat `gold_model_training_panel_d1`.
 
-Les runners specialises existent encore, mais `apps.warehouse.main` devient la commande de reference.
+## Variantes Sans CLI
 
-## Base locale utilisee
+Les variantes se font dans le code importable via les dataclasses:
 
-Par defaut, la base locale est :
+- `LocalSilverRunConfig`
+- `LocalGoldRunConfig`
+- `LocalMedallionRunConfig`
+- `MedallionRunConfig`
 
-```bash
+Les wrappers sous `apps/` restent minces et sans flags. Pour un debug ciblé,
+appeler la fonction importable correspondante dans un test ou un petit script
+local temporaire non committé.
+
+## Base Locale
+
+Par défaut:
+
+```text
 var/warehouse/praedixa.duckdb
 ```
 
-Schemas logiques :
+Schemas:
 
 - `bronze`
 - `silver`
 - `gold`
 
-## Variables d'environnement utiles
-
-Par defaut, le runner local force une configuration raisonnable :
-
-- `PRAEDIXA_ENABLE_LOCAL_WAREHOUSE=true`
-- `PRAEDIXA_ENABLE_CLOUD_WAREHOUSE=false`
-- `PRAEDIXA_ENABLE_LOCAL_BACKUP=true`
-- `PRAEDIXA_DUCKDB_LOCAL_PATH=var/warehouse/praedixa.duckdb`
-- `PRAEDIXA_DUCKDB_TARGET_PATH=var/warehouse/praedixa.duckdb`
-- `PRAEDIXA_DUCKDB_BRONZE_SCHEMA=bronze`
-- `PRAEDIXA_DUCKDB_SILVER_SCHEMA=silver`
-- `PRAEDIXA_DUCKDB_GOLD_SCHEMA=gold`
-- `PRAEDIXA_GOLD_HORIZON_DAYS=1`
-- `PRAEDIXA_GOLD_BAKERY_TEST_MONTHS=3`
-- `PRAEDIXA_OPEN_EXOGENOUS_DIR=var/datasets/open_exogenous`
-
-Tu peux les surcharger de l'exterieur si besoin.
-
-Les 2 variables les plus utiles en pratique sont :
+Variables utiles:
 
 - `PRAEDIXA_DUCKDB_LOCAL_PATH`
-- `PRAEDIXA_ENABLE_CLOUD_WAREHOUSE`
+- `PRAEDIXA_DUCKDB_TARGET_PATH`
+- `PRAEDIXA_DUCKDB_BRONZE_SCHEMA`
+- `PRAEDIXA_DUCKDB_SILVER_SCHEMA`
+- `PRAEDIXA_DUCKDB_GOLD_SCHEMA`
+- `PRAEDIXA_OPEN_EXOGENOUS_DIR`
+- `PRAEDIXA_DBT_THREADS`
 
-Notes utiles :
+Le cloud DuckDB/MotherDuck existe mais reste désactivé par défaut.
 
-- la pipeline SQL `dbt` garde maintenant `FreshRetail` dans son echelle native observee
-- le cloud DuckDB est implemente mais reste desactive par defaut
-- la `gold` ne depend que de sources exogenes open-source publiques
-- le runner bootstrap automatiquement `platform/warehouse/profiles.yml`
-- le runner lance automatiquement `dbt deps` si `dbt_packages/` n'existe pas
+## Validation Légère Avant Run Long
 
-## Variantes utiles
-
-### Rejouer la silver sans recharger la bronze
-
-```bash
-.venv/bin/python -m apps.warehouse.main --skip-gold --skip-bronze-load
-```
-
-### Lancer seulement le `dbt run` sans `dbt test`
+Ne pas utiliser le médaillon complet comme outil de debug principal. Préférer:
 
 ```bash
-.venv/bin/python -m apps.warehouse.main --skip-dbt-tests
+PYTHONPATH="$PWD:$PWD/platform/python/src:$PWD/products/demand_forecast/src" \
+.venv/bin/python -m unittest \
+  tests.platform.warehouse.test_local_bronze \
+  tests.platform.warehouse.test_local_silver \
+  tests.platform.warehouse.test_local_gold \
+  tests.platform.warehouse.test_local_medallion \
+  tests.products.demand_forecast.training_bundle.test_bundle_builder
+
+.venv/bin/dbt parse --project-dir platform/warehouse --profiles-dir platform/warehouse
 ```
 
-Version `gold` :
+Puis seulement:
 
 ```bash
-.venv/bin/python -m apps.warehouse.main --skip-silver --skip-dbt-tests
+PYTHONPATH="$PWD:$PWD/platform/python/src:$PWD/products/demand_forecast/src" \
+.venv/bin/python -m apps.warehouse.main
 ```
-
-### Rejouer la gold sans refetch des sources ouvertes
-
-```bash
-.venv/bin/python -m apps.warehouse.main --skip-silver --skip-open-exogenous-refresh
-```
-
-### Cibler un sous-ensemble dbt
-
-```bash
-.venv/bin/python -m apps.warehouse.main --skip-gold --silver-select silver_supplemental_corpus_daily_product_demand
-```
-
-En pratique, le runner ajoute les parents dbt automatiquement. Donc tu peux cibler un modele silver sans gerer a la main les dependances `staging`.
-
-Version `gold` :
-
-```bash
-.venv/bin/python -m apps.warehouse.main --skip-silver --gold-select tag:gold
-```
-
-## Ce que signifie "bronze" localement
-
-Dans l'etat actuel du repo :
-
-- on n'a pas encore de vraie pipeline bronze depuis des JSON POS
-- on a une **zone bronze DuckDB de substitution**
-- cette zone bronze est alimentee depuis `var/sources/`
-
-Donc le workflow actuel est :
-
-- `var/sources/` -> `bronze` DuckDB -> `silver` dbt
-
-et non encore :
-
-- `raw JSON POS` -> `bronze tabulaire` -> `silver`
-
-## Fichiers clefs
-
-- entrypoint unique : [apps/warehouse/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/main.py)
-- runner silver : [apps/warehouse/run_silver/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/run_silver/main.py)
-- runner gold : [apps/warehouse/run_gold/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/run_gold/main.py)
-- chargeur bronze DuckDB : [apps/warehouse/load_bronze/main.py](/Users/steven/Programmation/research_praedixa/apps/warehouse/load_bronze/main.py)
-- ces `main.py` sont volontairement sans parsing CLI : lancement direct, sans flags, avec config par defaut cote module importable
-- spec bronze : [docs/data_engineering/medaillon/bronze.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/bronze.md)
-- spec silver : [docs/data_engineering/medaillon/silver.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/silver.md)
-- spec gold : [docs/data_engineering/medaillon/gold.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/medaillon/gold.md)
-- projet dbt : [platform/warehouse/README.md](/Users/steven/Programmation/research_praedixa/platform/warehouse/README.md)

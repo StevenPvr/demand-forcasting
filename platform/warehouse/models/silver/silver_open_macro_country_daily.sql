@@ -42,7 +42,10 @@ macro_series as (
         effective_from,
         metric_value,
         2 as source_priority
-    from {{ ref("stg_open_macro_annual") }}
+    from {{ ref("stg_open_macro_annual") }} as annual
+    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
+      on coalesce(annual.source_policy_id, annual.source_name) = allowed.source_id
+       or annual.source_name = allowed.source_id
 
     union all
 
@@ -52,7 +55,10 @@ macro_series as (
         effective_from,
         metric_value,
         1 as source_priority
-    from {{ ref("stg_open_macro_timeseries") }}
+    from {{ ref("stg_open_macro_timeseries") }} as timeseries
+    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
+      on coalesce(timeseries.source_policy_id, timeseries.source_name) = allowed.source_id
+       or timeseries.source_name = allowed.source_id
 ),
 candidate_values as (
     select

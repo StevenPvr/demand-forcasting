@@ -59,7 +59,7 @@ class OptimisationBaselinesTests(unittest.TestCase):
         tuning_frame = pd.DataFrame(
             {
                 "dataset_source": ["a"] * 14,
-                "series_id": ["store_1__sku_1"] * 14,
+                "client_id": ["store_1__sku_1"] * 14,
                 "dt": pd.date_range("2024-06-01", periods=14, freq="D"),
                 "target": np.arange(10.0, 24.0, dtype=float),
                 "lag_1": np.arange(9.0, 23.0, dtype=float),

@@ -169,12 +169,15 @@ def _build_shared_tuning_context(
     )
     learning_target_col = target_contract.learning_target_col
     required_frame_cols: list[str] = []
+    identifier_cols: list[str] = [
+        str(column) for column in DEFAULT_IDENTIFIER_FEATURE_COLS
+    ]
     for column in [
         GROUP_COL,
         TIME_IDX_COL,
         DEFAULT_DATE_COL,
         DEFAULT_DATASET_SOURCE_COL,
-        *DEFAULT_IDENTIFIER_FEATURE_COLS,
+        *identifier_cols,
         *TRAINING_ELIGIBILITY_COLUMNS,
         *feature_cols,
     ]:
@@ -1038,7 +1041,6 @@ def _dataset_artifacts_from_core(
             "kind": "group_normalizer",
             "method": "standard",
             "groups": [GROUP_COL],
-            "legacy_external_scaler": False,
         },
     )
     return CachedFoldArtifacts(

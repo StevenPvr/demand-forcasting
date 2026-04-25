@@ -11,6 +11,7 @@ from praedixa.demand_forecast.training.sampling.dataset_filters import (
 )
 from praedixa.demand_forecast.training.validation.eligibility import (
     DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE,
+    NON_TRAINABLE_TARGET_SOURCES,
 )
 from praedixa.demand_forecast.training.sampling.models import (
     GoldSplitSamplingSpec,
@@ -22,11 +23,17 @@ _TRAINING_ELIGIBILITY_SQL_COLUMNS: set[str] = {
     "usable_for_training_flag",
     "censor_flag",
     "label_quality_score",
+    "target_source",
 }
 
 
 def _per_stratum_sample_target_sql(sample_fraction: float) -> str:
     return f"cast(floor(stratum_row_count * {sample_fraction:.12f}) as bigint)"
+
+
+def _sql_tuple(values: tuple[str, ...]) -> str:
+    quoted_values = ["'" + value.replace("'", "''") + "'" for value in values]
+    return "(" + ", ".join(quoted_values) + ")"
 
 
 def _gold_training_eligibility_filter(selected_columns: list[str] | None) -> str:
@@ -39,6 +46,7 @@ def _gold_training_eligibility_filter(selected_columns: list[str] | None) -> str
     coalesce(usable_for_training_flag, false)
     and not coalesce(censor_flag, false)
     and coalesce(label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
+    and coalesce(target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}
 )""".strip()
 
 
@@ -54,7 +62,11 @@ def build_gold_split_sampling_query(
     excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 ) -> str:
     select_list = "*" if selected_columns is None else ", ".join(selected_columns)
-    training_eligibility_filter = _gold_training_eligibility_filter(selected_columns)
+    training_eligibility_filter = (
+        _gold_training_eligibility_filter(selected_columns)
+        if split_bucket in {"train", "val"}
+        else "true"
+    )
     dataset_scope_filter = dataset_source_not_in_filter(
         dataset_source_col,
         excluded_dataset_sources,
@@ -65,10 +77,7 @@ with scoped as (
     from {gold_table}
     where split_bucket = '{split_bucket}'
       and {dataset_scope_filter}
-      and (
-        '{split_bucket}' <> 'train'
-        or {training_eligibility_filter}
-      )
+      and {training_eligibility_filter}
 ),
 ranked as (
     select

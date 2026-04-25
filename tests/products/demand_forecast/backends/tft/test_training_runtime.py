@@ -121,6 +121,30 @@ class _FakeSafeGlobals:
         return _FakeSafeGlobalsContext(self)
 
 
+def _callback_kwargs(**kwargs: object) -> dict[str, object]:
+    return dict(kwargs)
+
+
+def _csv_logger_kwargs(**kwargs: object) -> tuple[str, dict[str, object]]:
+    return "csv", dict(kwargs)
+
+
+def _tensorboard_logger_kwargs(**kwargs: object) -> tuple[str, dict[str, object]]:
+    return "tb", dict(kwargs)
+
+
+def _learning_rate_monitor_kwargs(**kwargs: object) -> tuple[str, dict[str, object]]:
+    return "lr", dict(kwargs)
+
+
+def _early_stopping_kwargs(**kwargs: object) -> tuple[str, dict[str, object]]:
+    return "es", dict(kwargs)
+
+
+def _model_checkpoint_kwargs(**kwargs: object) -> SimpleNamespace:
+    return SimpleNamespace(best_model_path="", **kwargs)
+
+
 class TFTTrainingRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         cast(Any, training_runtime_module)._cpu_interop_threads_configured = False
@@ -242,7 +266,7 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
     def test_early_stopping_callbacks_monitor_business_wape_and_loss(self) -> None:
         callbacks = cast(Any, training_runtime_module)._early_stopping_callbacks(
             {
-                "EarlyStopping": lambda **kwargs: kwargs,
+                "EarlyStopping": _callback_kwargs,
             },
             resolved_params={
                 "patience": 8,
@@ -260,7 +284,7 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
     def test_early_stopping_falls_back_to_model_wape_without_business_metrics(self) -> None:
         callbacks = cast(Any, training_runtime_module)._early_stopping_callbacks(
             {
-                "EarlyStopping": lambda **kwargs: kwargs,
+                "EarlyStopping": _callback_kwargs,
             },
             resolved_params={
                 "patience": 8,
@@ -285,10 +309,14 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
                 tuner_calls.append(dict(kwargs))
                 return _FakeLRFinder(0.0042)
 
+        def _trainer(**kwargs: object) -> dict[str, object]:
+            payload = dict(kwargs)
+            trainer_calls.append(payload)
+            return payload
+
         learning_rate = training_runtime_module.find_learning_rate(
             {
-                "Trainer": lambda **kwargs: trainer_calls.append(dict(kwargs))
-                or dict(kwargs),
+                "Trainer": _trainer,
                 "Tuner": _FakeTuner,
             },
             model=object(),
@@ -331,7 +359,7 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
 
         learning_rate = training_runtime_module.find_learning_rate(
             {
-                "Trainer": lambda **kwargs: dict(kwargs),
+                "Trainer": _callback_kwargs,
                 "Tuner": _FakeTuner,
             },
             model=object(),
@@ -387,7 +415,7 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
                 "torch": SimpleNamespace(
                     serialization=SimpleNamespace(safe_globals=safe_globals)
                 ),
-                "Trainer": lambda **kwargs: dict(kwargs),
+                "Trainer": _callback_kwargs,
                 "Tuner": _FakeTuner,
                 "GroupNormalizer": _FakeGroupNormalizer,
                 "NaNLabelEncoder": _FakeNaNLabelEncoder,
@@ -527,20 +555,22 @@ class TFTTrainingRuntimeTests(unittest.TestCase):
     def test_build_trainer_can_disable_batch_level_overhead_for_hpo(self) -> None:
         trainer_calls: list[dict[str, object]] = []
 
+        def _trainer(**kwargs: object) -> SimpleNamespace:
+            payload = dict(kwargs)
+            trainer_calls.append(payload)
+            return SimpleNamespace(**payload)
+
         trainer, checkpoint_callback, logger_paths = training_runtime_module.build_trainer(
             {
-                "CSVLogger": lambda **kwargs: ("csv", kwargs),
-                "TensorBoardLogger": lambda **kwargs: ("tb", kwargs),
-                "LearningRateMonitor": lambda **kwargs: ("lr", kwargs),
+                "CSVLogger": _csv_logger_kwargs,
+                "TensorBoardLogger": _tensorboard_logger_kwargs,
+                "LearningRateMonitor": _learning_rate_monitor_kwargs,
                 "DeviceStatsMonitor": lambda: "device-stats",
                 "Callback": object,
                 "TQDMProgressBar": object,
-                "EarlyStopping": lambda **kwargs: ("es", kwargs),
-                "ModelCheckpoint": lambda **kwargs: SimpleNamespace(
-                    best_model_path="", **kwargs
-                ),
-                "Trainer": lambda **kwargs: trainer_calls.append(dict(kwargs))
-                or SimpleNamespace(**kwargs),
+                "EarlyStopping": _early_stopping_kwargs,
+                "ModelCheckpoint": _model_checkpoint_kwargs,
+                "Trainer": _trainer,
             },
             {
                 "accelerator": "gpu",

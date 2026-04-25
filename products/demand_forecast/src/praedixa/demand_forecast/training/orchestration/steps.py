@@ -22,11 +22,9 @@ from praedixa.demand_forecast.training.baselines import (
     summarize_dataset_weights,
 )
 from praedixa.demand_forecast.training.config.constants import (
-    DEFAULT_CANONICAL_GROUP_ID_COL,
     DEFAULT_DATASET_SOURCE_COL,
     DEFAULT_EXCLUDED_RISKY_FEATURE_COLS,
     DEFAULT_IDENTIFIER_FEATURE_COLS,
-    DEFAULT_LEGACY_SERIES_ID_COL,
     DEFAULT_REMOVED_MODEL_INPUT_COLS,
     DEFAULT_XGBOOST_IDENTIFIER_FEATURE_COLS,
 )
@@ -198,9 +196,9 @@ def _normalize_frames(
     train_frame[date_col] = pd.to_datetime(train_frame[date_col])
     tuning_frame[date_col] = pd.to_datetime(tuning_frame[date_col])
     if DEFAULT_DATASET_SOURCE_COL not in train_frame.columns:
-        train_frame[DEFAULT_DATASET_SOURCE_COL] = "legacy"
+        raise ValueError(f"Training frame is missing `{DEFAULT_DATASET_SOURCE_COL}`.")
     if DEFAULT_DATASET_SOURCE_COL not in tuning_frame.columns:
-        tuning_frame[DEFAULT_DATASET_SOURCE_COL] = "legacy"
+        raise ValueError(f"Tuning frame is missing `{DEFAULT_DATASET_SOURCE_COL}`.")
     train_frame = _sanitize_model_input_frame(train_frame)
     tuning_frame = _sanitize_model_input_frame(tuning_frame)
     return train_frame.sort_values(date_col).reset_index(
@@ -210,8 +208,6 @@ def _normalize_frames(
 
 def _sanitize_model_input_frame(frame: pd.DataFrame) -> pd.DataFrame:
     sanitized = frame.copy()
-    if DEFAULT_LEGACY_SERIES_ID_COL in sanitized.columns:
-        sanitized[DEFAULT_CANONICAL_GROUP_ID_COL] = sanitized[DEFAULT_LEGACY_SERIES_ID_COL]
     removed_columns = [
         column
         for column in DEFAULT_REMOVED_MODEL_INPUT_COLS

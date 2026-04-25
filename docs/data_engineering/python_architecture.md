@@ -8,7 +8,7 @@ Le principe directeur est simple :
 
 - `platform/warehouse/` reste la source canonique pour le medaillon `bronze -> silver -> gold`
 - `platform/python/src/praedixa/platform/` et `products/demand_forecast/src/praedixa/demand_forecast/` orchestrent, standardisent et preparent les artefacts Python autour de ce backbone
-- le backend modele unique TFT reste une direction explicite, mais pas encore un backend actif dans ce repo
+- `xgboost` reste le backend actif par défaut pendant que TFT devient le backend de référence cible
 
 ## Couche canonique
 
@@ -54,20 +54,21 @@ Les briques partagees vivent sous `platform/python/src/praedixa/platform/` et `p
 - `platform.runtime.warehouse` : configuration warehouse / dbt / DuckDB partagee par les runners
 - `demand_forecast.contracts.targets` : contrat de cible et reconstruction business-safe
 - `platform.governance.source_registry` : politique de sources commercialement exploitables
-- `demand_forecast.backends.tft.backend` et `demand_forecast.backends.tft.model_utils` : facade explicite vers le backend modele unique
+- `demand_forecast.backends.tft` : backend TFT présent, encore en transition avant promotion par défaut
 
-## Frontiere TFT
+## Frontiere Modele
 
-Tant que le backend TFT n'est pas branche :
+Tant que TFT n'est pas le backend par défaut :
 
-- `optimisation` et `evaluation` doivent exposer clairement un statut placeholder
-- les helpers reutilisables peuvent vivre dans ces packages
-- aucun code mort critique ne doit rester melange a l'orchestrateur public
+- `xgboost` reste utilisable comme backend courant;
+- les contrats `gold`, bundle et feature mapping doivent rester compatibles TFT;
+- `optimisation` et `evaluation` doivent expliciter le backend réellement utilisé;
+- aucun code mort critique ne doit rester melange a l'orchestrateur public.
 
 Autrement dit :
 
-- on peut preparer les donnees, les folds, les baselines et les artefacts
-- on ne doit pas faire croire que l'entrainement final est deja actif
+- on peut préparer les données, les folds, les baselines et les artefacts;
+- on ne doit pas présenter TFT comme chemin promu tant que la parité, les tests et les artefacts ne sont pas verrouillés.
 
 ## Critere d'une bonne extraction
 

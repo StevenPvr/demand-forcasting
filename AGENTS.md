@@ -116,7 +116,7 @@ def build_dataset(config: PipelineConfig) -> pd.DataFrame:
 | Silver | `apps/warehouse/run_silver/main.py` | bronze + enrichissements | tables silver |
 | Gold | `apps/warehouse/run_gold/main.py` | silver | panel gold canonique |
 | Global dataset | `platform/python/src/praedixa/platform/datasets/standardization/` | sources compatibles commerce | parquet canonique |
-| Feature prep | `products/demand_forecast/src/praedixa/demand_forecast/feature_screening/` | panel nettoye | jeux de travail locaux |
+| Training bundle | `products/demand_forecast/src/praedixa/demand_forecast/training_bundle/` | gold canonique | artefacts train / tuning |
 | Optimize | `products/demand_forecast/src/praedixa/demand_forecast/training/` | jeux train / tuning | artefacts d'optimisation |
 | Evaluate | `products/demand_forecast/src/praedixa/demand_forecast/evaluation/` | predictions + labels + baselines | metriques, diagnostics, model card |
 
@@ -571,7 +571,7 @@ df = prices.merge(macro, on="date")
   2. `apps/warehouse/run_silver/main.py`
   3. `apps/warehouse/run_gold/main.py`
   4. `apps/platform/build_global_dataset/main.py`
-- `features_selection_lag` reste utile pour la preparation et l'analyse locale, mais ce n'est pas la vision finale du backend modele.
+- Le bundle d'entrainement materialise depuis `gold` est la seule preparation modele canonique.
 - `optimisation` et `evaluation` doivent etre pensees pour un backend TFT unique, meme si ce backend n'est pas encore branche completement. Tant que ce backend n'est pas connecte, ces etapes doivent se comporter comme des placeholders explicites.
 - La cible ideale reste la demande latente. Quand elle n'est pas reconstructible proprement, le repo doit parler explicitement de ventes observees.
 
@@ -583,7 +583,7 @@ var/{etape}/{description}.{format}
 Exemples :
   var/warehouse/praedixa.duckdb
   var/datasets/global_dataset/commercial_external_daily.parquet
-  var/experiments/demand_forecast/feature_screening/train_selection_70_selected.parquet
+  var/experiments/demand_forecast/training_bundle/train.parquet
 ```
 
 - [ ] Minuscules, underscores. Plage de dates dans le nom. Parquet principal, CSV pour debug.
@@ -744,7 +744,7 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[6]
 VAR_DIR: Path = PROJECT_ROOT / "var"
 WAREHOUSE_DIR: Path = VAR_DIR / "warehouse"
 GLOBAL_DATASET_DIR: Path = VAR_DIR / "datasets" / "global_dataset"
-FEATURE_SELECTION_DIR: Path = VAR_DIR / "experiments" / "demand_forecast" / "feature_screening"
+TRAINING_BUNDLE_DIR: Path = VAR_DIR / "experiments" / "demand_forecast" / "training_bundle"
 ```
 
 **`constants.py`** -- centralise les constantes metier reutilisables.

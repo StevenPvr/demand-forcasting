@@ -7,13 +7,13 @@ L’objectif du projet est de construire un pipeline sérieux de prévision pour
 - **idéalement** : prévision de **demande latente**
 - **sinon** : prévision de **ventes observées**
 
-Le repo est aujourd’hui surtout un socle de **data engineering**, de **standardisation multi-sources**, de **contrats de données**, de **backtesting temporel** et de **préparation du futur backend modèle unique TFT**.
+Le repo est aujourd’hui surtout un socle de **data engineering**, de **standardisation multi-sources**, de **contrats de données**, de **backtesting temporel** et de transition vers un backend modèle de référence **TFT**.
 
 Le point important à garder en tête :
 
 - le pipeline data est réel et exploitable
-- le backend modèle final **TFT** est la direction retenue
-- il n’est **pas encore branché complètement** dans ce repo
+- le backend modèle de référence visé est **TFT**
+- `xgboost` reste le backend câblé par défaut tant que la bascule TFT n’est pas complète
 
 ## Vision du repo
 
@@ -37,22 +37,16 @@ Le repo sert à préparer une couche de prévision opérationnelle capable de :
 - gestion d’un registre de conformité des sources utilisables commercialement
 - enrichissements exogènes open-source et dérivés
 - génération de données `first-party` et synthétiques pour le cold start
-- préparation locale de jeux de travail pour la suite du pipeline
 - baselines, contrats de cible et structure d’évaluation
 
-### Transition
+### En transition
 
-- `features_selection_lag` reste disponible comme couche de préparation et de diagnostic locale
-- `optimisation` et `evaluation` gardent leur structure, mais sont déjà réalignées vers un backend TFT unique
+- backend d’entraînement **TFT** présent mais pas encore chemin par défaut
+- tuning TFT en cours de durcissement
+- évaluation finale à aligner sur les artefacts TFT promouvables
+- artefacts de modèle entraîné à rendre production-ready
 
-### Placeholder
-
-- backend d’entraînement **TFT**
-- tuning TFT
-- évaluation finale TFT
-- artefacts de modèle entraîné en production-ready
-
-Le repo a été nettoyé pour sortir l’ancienne logique boosting. Il n’y a pas de faux remplacement “tabulaire” à considérer comme la direction cible.
+La direction cible reste TFT, mais le repo conserve `xgboost` comme backend opérationnel par défaut pendant la transition.
 
 ## Architecture
 
@@ -67,7 +61,7 @@ Le repo est organisé autour de 5 couches principales :
 3. `platform/python/src/praedixa/platform/`
    Contient la logique Python plateforme : runtime, standardisation, signaux exogènes, gouvernance et runners warehouse.
 4. `products/demand_forecast/src/praedixa/demand_forecast/`
-   Contient la logique produit wedge : feature screening, training, evaluation, contrats et backend TFT.
+   Contient la logique produit wedge : training, evaluation, contrats et backends modèles.
 5. `tests/`
    Couvre les pipelines et les invariants du repo.
 
@@ -89,11 +83,12 @@ sources locales / open data
 -> silver
 -> gold
 -> panel canonique quotidien
--> backend TFT (à brancher)
+-> bundle d'entraînement
+-> backend modèle (`xgboost` par défaut, TFT cible)
 ```
 
 La séparation entre backbone `dbt` et stages Python est détaillée dans
-[docs/data_engineering/python_architecture.md](/Users/steven/Programmation/research_praedixa/docs/data_engineering/python_architecture.md).
+[docs/data_engineering/python_architecture.md](docs/data_engineering/python_architecture.md).
 
 ## Structure du repo
 
@@ -104,23 +99,19 @@ La séparation entre backbone `dbt` et stages Python est détaillée dans
 - `platform/python/src/praedixa/platform/datasets/standardization/`
   Standardisation multi-sources au format quotidien canonique.
 - `products/demand_forecast/src/praedixa/demand_forecast/training/`
-  Surface de tuning/optimisation. Structure conservée, backend TFT encore à brancher.
+  Surface de tuning/optimisation. `xgboost` par défaut, TFT en transition.
 - `products/demand_forecast/src/praedixa/demand_forecast/evaluation/`
-  Surface d’évaluation et d’artefacts métier. Backend TFT encore à brancher.
-- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/backend.py`
-  Point d’arrêt explicite qui rappelle que le backend modèle cible est TFT.
-- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/model_utils.py`
-  Surface minimale prévue pour le futur backend TFT.
+  Surface d’évaluation et d’artefacts métier.
+- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/`
+  Backend TFT présent, à finaliser avant promotion comme backend par défaut.
 - `apps/warehouse/main.py`
-  Entry point unique du medaillon local `bronze -> silver -> gold`.
+  Entry point unique du medaillon local explicite `bronze core -> silver -> open exogenous -> gold`.
 - `apps/warehouse/run_silver/main.py`
   Runner local specialise `bronze -> silver`.
 - `apps/warehouse/run_gold/main.py`
   Runner local specialise `silver -> gold`.
 - `apps/platform/prepare_first_party_onboarding/main.py`
   Prépare un feed first-party minimal au bon format.
-- `apps/platform/generate_synthetic_cold_start/main.py`
-  Génère des données synthétiques de cold start.
 - `platform/warehouse/`
   Projet `dbt`.
 - `tests/`
@@ -177,26 +168,18 @@ Sources dataset autorisées dans l’état actuel :
 - `freshretail`
 - `freshretail_lt`
 - `bakery`
-- `uci_online_retail`
-- `uci_online_retail_ii`
-- `mendeley_ecommerce`
-- `mendeley_pharmacy_id`
-- `mendeley_bangladesh_retail`
 - `first_party_daily`
-- `synthetic_v1`
-
-Source explicitement exclue :
-
-- `m5`
 
 Providers à statut particulier :
 
 - `world_bank_indicators` : autorisé
+- `insee_bdm` : autorisé
+- `deterministic_public_holidays` : autorisé
+- `praedixa_location_metadata` : autorisé
 - `french_school_calendar_ics` : autorisé
 - `openstreetmap_odbl` : autorisé pour features dérivées
 - `open_meteo_api` : quarantaine contractuelle
 - `nager_date_api` : quarantaine contractuelle
-- `fred_public_api` : bloqué
 
 ## Schéma canonique
 
@@ -233,13 +216,9 @@ Point d’entrée :
 .venv/bin/python -m apps.platform.build_global_dataset.main
 ```
 
-Ce pipeline construit :
-
-- `var/datasets/global_dataset/freshretail_daily.parquet`
-- `var/datasets/global_dataset/commercial_external_daily.parquet`
-- `var/datasets/global_dataset/bakery_daily.parquet` si disponible
-- `var/datasets/global_dataset/global_daily_demand.parquet`
-- `var/datasets/global_dataset/global_daily_demand_manifest.json`
+Ce point d’entrée sert aujourd’hui à valider et synthétiser l’assemblage global
+en mémoire. La source aval de référence pour l’entraînement reste le panel
+médaillon `gold.gold_model_training_panel_d1`.
 
 ### Ce que fait la standardisation
 
@@ -260,12 +239,22 @@ Point d’entrée de référence :
 
 Ce runner :
 
-- lance la step `silver` avec chargement bronze intégré
-- exécute `dbt seed`, `dbt run` et `dbt test` sur `silver`
-- enchaîne ensuite sur la step `gold`
+- charge les sources coeur dans `bronze`
+- matérialise `silver`
+- rafraîchit les exogènes ouverts depuis les bornes silver
+- charge les `bronze_open_*`
+- matérialise `gold.gold_model_training_panel_d1`
 - peut rafraîchir les enrichissements open-source avant `gold`
 - exécute `dbt seed`, `dbt run` et `dbt test` sur `gold`
 - reste un `main.py` sans parsing CLI, prévu pour un lancement direct depuis l'IDE ou `python -m`
+
+Contrat de split actif:
+
+- `freshretail` et `freshretail_lt`: `train`/`val` chronologique 60/40 pour
+  l'optimisation;
+- `bakery`: `test` uniquement sur les 3 derniers mois pour l'évaluation finale;
+- dans le bundle, `val` est matérialisé en `tuning.parquet` et `test` en
+  `valid.parquet`.
 
 Les runners spécialisés `apps.warehouse.run_silver.main` et `apps.warehouse.run_gold.main` restent supportés pour les cas ciblés, mais ne sont plus le point d’entrée recommandé.
 
@@ -281,26 +270,6 @@ Pour plus de détails warehouse :
 
 - voir `platform/warehouse/README.md`
 
-## Feature prep locale
-
-Point d’entrée :
-
-```bash
-.venv/bin/python -m apps.demand_forecast.run_feature_screening.main
-```
-
-Cette étape est **transitionnelle**. Elle n’est **pas** la cible finale du repo. Elle reste utile pour :
-
-- explorer les signaux temporels
-- produire des jeux de travail locaux
-- garder un outillage de diagnostic pendant la transition vers le backend TFT
-
-Sorties typiques :
-
-- `var/experiments/demand_forecast/feature_screening/train_selection_70_selected.parquet`
-- `var/experiments/demand_forecast/feature_screening/train_tuning_30_selected.parquet`
-- `var/experiments/demand_forecast/feature_screening/selected_lag_features.json`
-
 ## Backend modèle : état actuel
 
 ### Direction retenue
@@ -315,16 +284,17 @@ Les surfaces suivantes existent :
 
 - `products/demand_forecast/src/praedixa/demand_forecast/training/`
 - `products/demand_forecast/src/praedixa/demand_forecast/evaluation/`
-- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/model_utils.py`
-- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/backend.py`
+- `products/demand_forecast/src/praedixa/demand_forecast/backends/tft/`
+- `apps/demand_forecast/run_tft_training/main.py`
 
-Mais le vrai backend TFT n’est pas encore branché.
+Le backend TFT est présent mais la transition n’est pas encore complète.
+Le backend par défaut reste `xgboost` dans `SUPPORTED_MODEL_BACKENDS = ("xgboost", "tft")`.
 
 Concrètement :
 
-- `optimisation` et `evaluation` sont des placeholders structurels explicites
-- elles échouent explicitement tant que le backend TFT n’est pas implémenté
-- cela évite de laisser croire qu’un ancien backend est encore valide
+- `xgboost` reste le chemin câblé par défaut pour les runs courants
+- `tft` est la direction cible pour le backend modèle de référence
+- les contrats `gold`, bundle, feature mapping et artefacts sont progressivement durcis pour cette bascule
 
 ## Cold start, first-party et synthétique
 
@@ -342,19 +312,6 @@ But :
 
 - préparer un feed client minimal
 - converger vers le schéma canonique
-
-### Données synthétiques
-
-Script :
-
-```bash
-.venv/bin/python -m apps.platform.generate_synthetic_cold_start.main
-```
-
-But :
-
-- générer des séries synthétiques de cold start
-- renforcer les cas d’ouverture / faible historique / manque de données
 
 ## Installation et environnement
 
@@ -375,8 +332,9 @@ Le projet utilise notamment :
 - `optuna`
 - `matplotlib`
 - `openpyxl`
-
-Le backend TFT n’est pas encore ajouté aux dépendances runtime dans ce repo.
+- `torch`
+- `lightning`
+- `pytorch-forecasting`
 
 ## Commandes utiles
 
@@ -404,22 +362,10 @@ Le backend TFT n’est pas encore ajouté aux dépendances runtime dans ce repo.
 .venv/bin/python -m apps.warehouse.run_gold.main
 ```
 
-### Préparer les jeux locaux de travail
-
-```bash
-.venv/bin/python -m apps.demand_forecast.run_feature_screening.main
-```
-
 ### Préparer un feed first-party
 
 ```bash
 .venv/bin/python -m apps.platform.prepare_first_party_onboarding.main
-```
-
-### Générer des données synthétiques de cold start
-
-```bash
-.venv/bin/python -m apps.platform.generate_synthetic_cold_start.main
 ```
 
 ### Tests ciblés
@@ -429,7 +375,6 @@ Le backend TFT n’est pas encore ajouté aux dépendances runtime dans ce repo.
   tests.platform.datasets.standardization.test_pipeline \
   tests.apps.warehouse.test_run_silver \
   tests.apps.warehouse.test_run_gold \
-  tests.products.demand_forecast.feature_screening.test_pipeline \
   tests.products.demand_forecast.training.test_pipeline \
   tests.products.demand_forecast.evaluation.test_pipeline \
   tests.products.demand_forecast.backends.tft.test_model_utils
@@ -446,26 +391,31 @@ Le repo contient des tests de :
 - surfaces optimisation/évaluation
 - transition vers le backend TFT
 
-Commande de vérification canonique :
+Commande de vérification canonique une fois les outils de typage installés dans
+l'environnement :
 
 ```bash
 .venv/bin/python -m apps.dev.verify_repo.main
 ```
 
-Les checks exécutés restent :
+Dans ce checkout, les binaires `pyright`, `mypy` et `ruff` ne sont pas installés
+dans `.venv/bin`. La validation ciblée reproductible passe donc par `uvx` pour
+le typage tant que ces outils ne sont pas ajoutés au groupe `dev`.
+
+Checks à exécuter avant de promouvoir un changement médaillon :
 
 ```bash
 .venv/bin/python -m compileall praedixa platform/python/src products/demand_forecast/src apps
+uvx pyright --project pyrightconfig.json platform/python/src/praedixa/platform/warehouse platform/python/src/praedixa/platform/governance products/demand_forecast/src/praedixa/demand_forecast/training products/demand_forecast/src/praedixa/demand_forecast/training_bundle products/demand_forecast/src/praedixa/demand_forecast/backends/tft
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/dbt parse --project-dir platform/warehouse --profiles-dir platform/warehouse
 ```
 
 ## Limites actuelles
 
-- le backend TFT n’est pas encore implémenté de bout en bout
+- le backend TFT n’est pas encore le chemin par défaut de bout en bout
 - toutes les sources n’exposent pas des signaux suffisants pour reconstruire la demande latente
 - certaines sources externes utiles restent volontairement en quarantaine tant que la conformité commerciale n’est pas verrouillée
-- la couche `features_selection_lag` reste un outil de transition, pas la destination finale
 
 ## Roadmap technique immédiate
 
@@ -473,8 +423,8 @@ Les priorités cohérentes avec l’état actuel du repo sont :
 
 1. figer le socle repo / doc / architecture
 2. conserver `gold` comme contrat canonique d’entrée
-3. brancher le vrai backend **TFT**
-4. reconnecter `optimisation` et `evaluation`
+3. promouvoir **TFT** comme backend de référence après parité contrôlée
+4. aligner `optimisation` et `evaluation` sur les artefacts TFT promouvables
 5. mesurer proprement la différence entre :
    - demande latente quand elle est observable/estimable
    - ventes observées sinon

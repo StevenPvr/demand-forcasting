@@ -102,6 +102,52 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             self.assertEqual(len(bundled_tuning), 2)
             self.assertEqual(len(bundled_valid), 1)
 
+    def test_build_training_bundle_reports_holdout_and_training_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            train_path = root / "train_selection_70_selected.parquet"
+            tuning_path = root / "train_tuning_30_selected.parquet"
+            valid_path = root / "validation_selected.parquet"
+            output_dir = root / "bundle"
+            train_frame = self._frame(
+                "2024-01-01",
+                [10.0, 11.0, 12.0, 13.0],
+                [8.0, 9.0, 10.0, 11.0],
+                [7.0, 8.0, 9.0, 10.0],
+                [9.0, 10.0, 11.0, 12.0],
+            )
+            train_frame["dataset_source"] = ["freshretail", "freshretail", "bakery", "freshretail"]
+            train_frame["target_source"] = [
+                "observed_sales",
+                "dense_calendar_zero_fill",
+                "observed_sales",
+                "observed_sales",
+            ]
+            train_frame["usable_for_training_flag"] = True
+            train_frame["censor_flag"] = False
+            train_frame["label_quality_score"] = 1.0
+            tuning_frame = self._frame("2024-01-05", [14.0, 15.0], [12.0, 13.0], [11.0, 12.0], [13.0, 14.0])
+            tuning_frame["target_source"] = "observed_sales"
+            tuning_frame["usable_for_training_flag"] = True
+            tuning_frame["censor_flag"] = False
+            tuning_frame["label_quality_score"] = 1.0
+            valid_frame = self._frame("2024-01-07", [16.0], [14.0], [13.0], [15.0])
+            self._write_inputs(train_frame, tuning_frame, valid_frame, train_path, tuning_path, valid_path)
+
+            artifacts = build_training_bundle(
+                train_input_path=train_path,
+                tuning_input_path=tuning_path,
+                valid_input_path=valid_path,
+                output_dir=output_dir,
+            )
+
+            bundled_train = pd.read_parquet(artifacts["train"])
+            report = json.loads(artifacts["training_exclusion_report"].read_text(encoding="utf-8"))
+            self.assertEqual(len(bundled_train), 2)
+            self.assertEqual(report["holdout_exclusions"][0]["excluded_rows"], 1)
+            self.assertEqual(report["splits"][0]["closed_or_dense_zero_rows"], 1)
+            self.assertEqual(report["splits"][0]["dropped_rows"], 1)
+
     def _frame(
         self,
         start_date: str,
@@ -262,6 +308,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             "feature_roles",
             "split_manifest",
             "target_contract",
+            "training_exclusion_report",
             "bundle_manifest",
             "optimisation_manifest",
         ):
@@ -316,6 +363,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertEqual(bundle_manifest["feature_count"], 2)
         self.assertTrue(bundle_manifest["feature_roles_path"].endswith("feature_roles.json"))
         self.assertTrue(bundle_manifest["split_manifest_path"].endswith("split_manifest.json"))
+        self.assertTrue(bundle_manifest["training_exclusion_report_path"].endswith("training_exclusion_report.json"))
         self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
         self.assertEqual(bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"]))
         self.assertEqual(bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"]))

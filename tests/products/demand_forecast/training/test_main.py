@@ -20,7 +20,9 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from praedixa.demand_forecast.training.orchestration.pipeline import OptimisationBuildRequest  # noqa: E402
+from praedixa.demand_forecast.training.orchestration.pipeline import (  # noqa: E402
+    OptimisationBuildRequest,
+)
 from praedixa.demand_forecast.training.main import (  # noqa: E402
     OFFICIAL_OPTIMISATION_MAIN_CONFIG,
     build_default_optimisation_main_config,
@@ -108,7 +110,7 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.model_backend, "xgboost")
         self.assertEqual(config.runtime_profile, "local_cpu")
         self.assertEqual(config.n_folds, 5)
-        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
 
     def test_default_xgboost_config_keeps_standard_budget_when_h100_is_available(
@@ -133,7 +135,7 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.model_backend, "xgboost")
         self.assertEqual(config.runtime_profile, "local_cpu")
         self.assertEqual(config.n_folds, 5)
-        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)
@@ -169,7 +171,7 @@ class OptimisationMainTests(unittest.TestCase):
 
         self.assertEqual(config.runtime_profile, "local_cpu")
         self.assertEqual(config.n_folds, 5)
-        self.assertEqual(config.max_trials, 100)
+        self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)

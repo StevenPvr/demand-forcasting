@@ -38,4 +38,5 @@ tft = [
 [dependency-groups]
 dev = [
     "pandas-stubs>=3.0.0.260204",
+    "ruff>=0.15.12",
 ]

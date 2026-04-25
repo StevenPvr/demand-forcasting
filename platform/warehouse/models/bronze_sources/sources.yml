@@ -14,3 +14,4 @@ sources:
       - name: bronze_open_weather_daily
       - name: bronze_open_macro_annual
       - name: bronze_open_macro_timeseries
+      - name: bronze_source_manifest

@@ -24,7 +24,7 @@ from praedixa.demand_forecast.backends.tft.feature_contract import (  # noqa: E4
 
 class TFTFeatureMappingTests(unittest.TestCase):
     def test_explicit_mapping_covers_gold_panel_and_runtime_helpers(self) -> None:
-        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 239)
+        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 243)
 
     def test_group_id_is_explicit_and_stable(self) -> None:
         self.assertEqual(TFT_GROUP_ID_COLUMNS, ("client_id",))

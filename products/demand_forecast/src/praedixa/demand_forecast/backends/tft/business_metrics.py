@@ -6,6 +6,8 @@ import torch
 
 from pytorch_forecasting.metrics.base_metrics import Metric
 
+TORCH = cast(Any, torch)
+
 
 class WAPEMetric(Metric):
     """Weighted absolute percentage error on point forecasts."""
@@ -22,12 +24,12 @@ class WAPEMetric(Metric):
         metric_self = cast(Any, self)
         metric_self.add_state(
             "absolute_error_sum",
-            default=torch.tensor(0.0, dtype=torch.float32),
+            default=TORCH.tensor(0.0, dtype=TORCH.float32),
             dist_reduce_fx="sum",
         )
         metric_self.add_state(
             "absolute_target_sum",
-            default=torch.tensor(0.0, dtype=torch.float32),
+            default=TORCH.tensor(0.0, dtype=TORCH.float32),
             dist_reduce_fx="sum",
         )
 
@@ -57,5 +59,5 @@ class WAPEMetric(Metric):
         self.absolute_target_sum += absolute_target.sum()
 
     def compute(self) -> torch.Tensor:
-        denominator = torch.clamp(self.absolute_target_sum, min=1e-8)
+        denominator = TORCH.clamp(self.absolute_target_sum, min=1e-8)
         return self.absolute_error_sum / denominator

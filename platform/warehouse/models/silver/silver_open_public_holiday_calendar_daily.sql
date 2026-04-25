@@ -26,7 +26,10 @@ holiday_rows as (
         true as holiday_flag,
         string_agg(holiday_name, ' | ' order by holiday_name) as holiday_name,
         bool_or(global_flag) as holiday_global_flag
-    from {{ ref("stg_open_public_holidays") }}
+    from {{ ref("stg_open_public_holidays") }} as holidays
+    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
+      on coalesce(holidays.source_policy_id, holidays.source_name) = allowed.source_id
+       or holidays.source_name = allowed.source_id
     group by
         country_code,
         dt

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 from unittest import mock
 
@@ -75,33 +74,23 @@ class OpenExogenousTransformersAppTests(unittest.TestCase):
             ],
         )
 
-    def test_main_writes_transformer_csvs(self) -> None:
-        frames = {
-            "location_metadata": pd.DataFrame([{"location_id": "store_1"}]),
-            "location_catchment": pd.DataFrame([{"location_id": "store_1", "parking_score": "medium"}]),
-            "school_holidays": pd.DataFrame([{"location_id": "store_1", "dt": "2024-01-01"}]),
-            "weather_daily": pd.DataFrame([{"location_id": "store_1", "dt": "2024-01-01"}]),
-        }
+    def test_main_delegates_to_governed_fetcher(self) -> None:
+        config = _build_runtime_config(Path("/tmp/ignored"))
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = _build_runtime_config(Path(temp_dir))
+        with (
+            mock.patch(
+                "praedixa.platform.signals.open_data.transformers_app.build_runtime_config_from_env",
+                return_value=config,
+            ) as build_config,
+            mock.patch(
+                "praedixa.platform.signals.open_data.transformers_app.fetch_open_exogenous_data",
+                return_value={"manifest_path": "/tmp/manifest.json"},
+            ) as fetch_open_exogenous,
+        ):
+            main()
 
-            with (
-                mock.patch(
-                    "praedixa.platform.signals.open_data.transformers_app.build_runtime_config_from_env",
-                    return_value=config,
-                ),
-                mock.patch(
-                    "praedixa.platform.signals.open_data.transformers_app.build_open_exogenous_transformer_frames",
-                    return_value=frames,
-                ),
-            ):
-                main()
-
-            self.assertTrue((Path(temp_dir) / "location_metadata.csv").exists())
-            self.assertTrue((Path(temp_dir) / "location_catchment.csv").exists())
-            self.assertTrue((Path(temp_dir) / "school_holidays.csv").exists())
-            self.assertTrue((Path(temp_dir) / "weather_daily.csv").exists())
+        build_config.assert_called_once_with()
+        fetch_open_exogenous.assert_called_once_with(config)
 
 
 if __name__ == "__main__":

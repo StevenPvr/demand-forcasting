@@ -1,5 +1,6 @@
-from pathlib import Path
+from collections.abc import Callable
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -53,15 +54,19 @@ class TFTModelUtilsTests(unittest.TestCase):
         )
         raw_predictions = np.asarray([11.0, 14.0], dtype=float)
 
-        payload = cast(Any, model_fit_module)._business_validation_metrics_payload(
+        build_payload = cast(
+            Callable[..., dict[str, float]],
+            getattr(model_fit_module, "_business_validation_metrics_payload"),
+        )
+        payload = build_payload(
             valid_frame=valid_frame,
             raw_predictions=raw_predictions,
             target_col="target_demand_qty_d_plus_1",
             train_frame=train_frame,
         )
 
-        self.assertAlmostEqual(float(cast(Any, payload["business_val_wape"])), 2.0 / 27.0)
-        self.assertAlmostEqual(float(cast(Any, payload["business_val_abs_bias"])), 1.0)
+        self.assertAlmostEqual(float(payload["business_val_wape"]), 2.0 / 27.0)
+        self.assertAlmostEqual(float(payload["business_val_abs_bias"]), 1.0)
 
     def test_fit_tft_model_skips_business_callback_when_business_metrics_disabled(
         self,
@@ -207,8 +212,8 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertGreaterEqual(model.best_iteration, 0)
         self.assertGreater(model.runtime_metrics["rows_per_second"], 0.0)
         self.assertEqual(
-            int(cast(Any, model.runtime_metrics["loader_worker_count"])),
-            int(cast(Any, model.model_hyperparameters["num_workers"])),
+            int(model.runtime_metrics["loader_worker_count"]),
+            int(model.model_hyperparameters["num_workers"]),
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:

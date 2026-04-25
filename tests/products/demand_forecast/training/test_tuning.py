@@ -50,7 +50,7 @@ class TuningPolicyTests(unittest.TestCase):
     def _build_target_contract(self) -> tuple[pd.DataFrame, pd.DataFrame, Any]:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "dataset_source": ["source_a", "source_a", "source_a"],
                 "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
                 "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0],
@@ -58,7 +58,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "dataset_source": ["source_a", "source_a", "source_a"],
                 "dt": pd.date_range("2024-01-04", periods=3, freq="D"),
                 "target_demand_qty_d_plus_1": [13.0, 14.0, 15.0],
@@ -147,7 +147,7 @@ class TuningPolicyTests(unittest.TestCase):
             train_frame=train_frame,
             tuning_frame=tuning_frame,
             folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
-            feature_cols=["series_id"],
+            feature_cols=["client_id"],
             target_contract=target_contract,
             logger=__import__("logging").getLogger(__name__),
             model_params={
@@ -183,7 +183,7 @@ class TuningPolicyTests(unittest.TestCase):
                 train_frame=train_frame,
                 tuning_frame=tuning_frame,
                 folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
-                feature_cols=["series_id"],
+                feature_cols=["client_id"],
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
                 model_params={"runtime_profile": "scaleway_l40s", "n_jobs": 8},
@@ -212,7 +212,7 @@ class TuningPolicyTests(unittest.TestCase):
                     {"fold": 0, "train_idx": [0], "valid_idx": [1]},
                     {"fold": 1, "train_idx": [0, 1], "valid_idx": [2]},
                 ],
-                feature_cols=["series_id"],
+                feature_cols=["client_id"],
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
                 model_params={
@@ -235,7 +235,7 @@ class TuningPolicyTests(unittest.TestCase):
     ) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "location_id": ["loc_1"] * 3,
                 "product_id": ["sku_1"] * 3,
                 "dataset_source": ["source_a"] * 3,
@@ -246,7 +246,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "location_id": ["loc_1"] * 3,
                 "product_id": ["sku_1"] * 3,
                 "dataset_source": ["source_a"] * 3,
@@ -323,7 +323,7 @@ class TuningPolicyTests(unittest.TestCase):
                 train_frame=train_frame,
                 tuning_frame=tuning_frame,
                 folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
-                feature_cols=["series_id"],
+                feature_cols=["client_id"],
                 baseline_wape=0.5,
                 target_contract=target_contract,
                 logger=__import__("logging").getLogger(__name__),
@@ -384,7 +384,7 @@ class TuningPolicyTests(unittest.TestCase):
                     train_frame=train_frame,
                     tuning_frame=tuning_frame,
                     folds=[{"fold": 0, "train_idx": [0], "valid_idx": [1]}],
-                    feature_cols=["series_id"],
+                    feature_cols=["client_id"],
                     baseline_wape=0.5,
                     target_contract=target_contract,
                     logger=__import__("logging").getLogger(__name__),
@@ -416,10 +416,10 @@ class TuningPolicyTests(unittest.TestCase):
         self.assertIn("business_mean_coverage_95=0.900000", joined_output)
         self.assertIn("dataset_business_mean_wape=", joined_output)
 
-    def test_fit_and_score_keeps_dt_and_series_id_for_tft_folds(self) -> None:
+    def test_fit_and_score_keeps_dt_and_client_id_for_tft_folds(self) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "dataset_source": ["source_a"] * 4,
                 "dt": pd.date_range("2024-01-01", periods=4, freq="D"),
                 "rolling_mean_7": [1.0, 2.0, 3.0, 4.0],
@@ -428,7 +428,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "dataset_source": ["source_a"] * 4,
                 "dt": pd.date_range("2024-01-05", periods=4, freq="D"),
                 "rolling_mean_7": [5.0, 6.0, 7.0, 8.0],
@@ -450,7 +450,7 @@ class TuningPolicyTests(unittest.TestCase):
             **_: object,
         ) -> object:
             self.assertIn("dt", fold_train_frame.columns)
-            self.assertIn("series_id", fold_train_frame.columns)
+            self.assertIn("client_id", fold_train_frame.columns)
             self.assertEqual(feature_cols, ["rolling_mean_7"])
             self.assertEqual(target_col, "target_demand_qty_d_plus_1")
             self.assertIsNotNone(valid_weights)
@@ -502,7 +502,7 @@ class TuningPolicyTests(unittest.TestCase):
     def test_fit_and_score_filters_unusable_tuning_rows_from_fold_train(self) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a"],
+                "client_id": ["a", "a"],
                 "location_id": ["loc_1"] * 2,
                 "product_id": ["sku_1"] * 2,
                 "dataset_source": ["source_a"] * 2,
@@ -516,7 +516,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "location_id": ["loc_1"] * 3,
                 "product_id": ["sku_1"] * 3,
                 "dataset_source": ["source_a"] * 3,
@@ -596,7 +596,7 @@ class TuningPolicyTests(unittest.TestCase):
     def test_fit_and_score_reuses_fold_cores_across_encoder_lengths(self) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "location_id": ["loc_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dataset_source": ["source_a"] * 4,
@@ -607,7 +607,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "location_id": ["loc_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dataset_source": ["source_a"] * 4,
@@ -695,7 +695,7 @@ class TuningPolicyTests(unittest.TestCase):
     def test_prewarm_tft_fold_cores_moves_core_build_before_first_trial(self) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "location_id": ["loc_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dataset_source": ["source_a"] * 4,
@@ -706,7 +706,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "location_id": ["loc_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dataset_source": ["source_a"] * 4,
@@ -795,7 +795,7 @@ class TuningPolicyTests(unittest.TestCase):
     ) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a"],
+                "client_id": ["a", "a"],
                 "dataset_source": ["source_a", "source_a"],
                 "dt": pd.to_datetime(["2024-01-01", "2024-01-02"]),
                 "target_demand_qty_d_plus_1": [10.0, 11.0],
@@ -803,7 +803,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         valid_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a"],
+                "client_id": ["a", "a"],
                 "dataset_source": ["source_a", "source_a"],
                 "dt": pd.to_datetime(["2024-01-03", "2024-01-04"]),
                 "target_demand_qty_d_plus_1": [12.0, 13.0],
@@ -843,7 +843,7 @@ class TuningPolicyTests(unittest.TestCase):
     def test_prepare_fold_frame_raises_when_polars_contract_path_fails(self) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a"],
+                "client_id": ["a", "a"],
                 "dataset_source": ["source_a", "source_a"],
                 "dt": pd.to_datetime(["2024-01-01", "2024-01-02"]),
                 "target_demand_qty_d_plus_1": [10.0, 11.0],
@@ -875,7 +875,7 @@ class TuningPolicyTests(unittest.TestCase):
     ) -> None:
         train_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a"],
+                "client_id": ["a", "a", "a"],
                 "location_id": ["loc_1"] * 3,
                 "product_id": ["sku_1"] * 3,
                 "dataset_source": ["source_a"] * 3,
@@ -886,7 +886,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         tuning_frame = pd.DataFrame(
             {
-                "series_id": ["a", "a", "a", "a"],
+                "client_id": ["a", "a", "a", "a"],
                 "location_id": ["loc_1"] * 4,
                 "product_id": ["sku_1"] * 4,
                 "dataset_source": ["source_a"] * 4,
@@ -956,7 +956,7 @@ class TuningPolicyTests(unittest.TestCase):
     ) -> None:
         fold_train_frame = pd.DataFrame(
             {
-                "series_id": ["series_1"] * 7,
+                "client_id": ["series_1"] * 7,
                 "location_id": ["store_1"] * 7,
                 "product_id": ["sku_1"] * 7,
                 "dt": pd.date_range("2024-01-01", periods=7, freq="D"),
@@ -964,7 +964,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         fold_valid_frame = pd.DataFrame(
             {
-                "series_id": ["series_1", "series_2"],
+                "client_id": ["series_1", "series_2"],
                 "location_id": ["store_1", "store_2"],
                 "product_id": ["sku_1", "sku_2"],
                 "dt": pd.to_datetime(["2024-01-08", "2024-01-08"]),
@@ -989,7 +989,7 @@ class TuningPolicyTests(unittest.TestCase):
     ) -> None:
         fold_train_frame = pd.DataFrame(
             {
-                "series_id": ["series_1"] * 7 + ["series_2"] * 3,
+                "client_id": ["series_1"] * 7 + ["series_2"] * 3,
                 "location_id": ["store_1"] * 7 + ["store_2"] * 3,
                 "product_id": ["sku_1"] * 7 + ["sku_2"] * 3,
                 "dt": pd.to_datetime(
@@ -1010,7 +1010,7 @@ class TuningPolicyTests(unittest.TestCase):
         )
         fold_valid_frame = pd.DataFrame(
             {
-                "series_id": ["series_1", "series_2", "series_1"],
+                "client_id": ["series_1", "series_2", "series_1"],
                 "location_id": ["store_1", "store_2", "store_1"],
                 "product_id": ["sku_1", "sku_2", "sku_1"],
                 "dt": pd.to_datetime(["2024-01-08", "2024-01-04", "2024-01-09"]),
@@ -1024,7 +1024,7 @@ class TuningPolicyTests(unittest.TestCase):
             max_encoder_length=7,
         )
 
-        self.assertEqual(filtered_frame["series_id"].tolist(), ["series_1", "series_1"])
+        self.assertEqual(filtered_frame["client_id"].tolist(), ["series_1", "series_1"])
         np.testing.assert_array_equal(
             filtered_indices, np.asarray([20, 22], dtype=np.int32)
         )

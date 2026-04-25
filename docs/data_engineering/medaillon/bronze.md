@@ -1,92 +1,55 @@
-# Couche Bronze Praedixa
+# Couche Bronze
 
-## Statut actuel
+La bronze locale est une projection tabulaire DuckDB des sources disponibles. Elle
+ne prétend pas encore remplacer une vraie ingestion POS/ERP/WFM, mais elle porte
+déjà les garanties nécessaires au développement commercial: audit, replay,
+lignage source et refus des schémas cassés.
 
-Aujourd'hui, Praedixa n'a **pas encore** de vraie pipeline `raw JSON -> bronze tabulaire` en production.
+## Tables Actives
 
-Les API et formats JSON des logiciels de caisse ne sont pas encore connus ou stabilises.
+- `bronze_freshretail_daily`
+- `bronze_bakery_order_lines`
+- `bronze_supplemental_corpus_daily`
+- `bronze_open_location_metadata`
+- `bronze_open_location_catchment`
+- `bronze_open_public_holidays`
+- `bronze_open_school_holidays`
+- `bronze_open_weather_daily`
+- `bronze_open_macro_annual`
+- `bronze_open_macro_timeseries`
+- `bronze_source_manifest`
 
-Donc, dans l'etat actuel du repo :
+## Contrat Source
 
-- il n'y a pas encore de couche bronze de production au sens "ingestion POS reelle"
-- il existe en revanche une **zone bronze technique** dans DuckDB
-- cette zone bronze est alimentee a partir des fichiers locaux dans `var/sources/`
-- cette zone bronze sert de **substitut de bronze tabulaire** pour developper la silver
+Chaque chargement ajoute ou conserve:
 
-La formulation la plus juste est donc :
+- `source_name`
+- `source_policy_id`
+- `source_file_path`
+- `loaded_at`
 
-- **pas encore de vraie pipeline bronze**
-- **oui a une base/schema bronze locale de substitution**
+Le manifest persistant `bronze_source_manifest` contient:
 
-## Cible d'architecture
+- `source_run_id`
+- chemin source
+- hash SHA-256
+- taille fichier
+- lignes chargées
+- statut `required` / `allow_empty`
+- `source_policy_id`
 
-La cible reste :
+## Règles
 
-- `raw_landing`
-  - payloads JSON bruts
-  - stockage immutable pour audit et replay
-- `bronze`
-  - projection tabulaire proche source
-  - flatten des JSON
-  - typage technique minimal
-  - fidelite maximale a la source
-- `silver`
-  - normalisation metier
-  - standardisation des schemas
-  - flags qualite, anomalies, manquants
-  - consolidation au grain journalier
-- `gold`
-  - panel de modelling
-  - jointures de signaux
-  - feature engineering leak-safe
+- Les sources requises manquantes ou vides échouent avant mutation warehouse.
+- Les colonnes attendues par une spec bronze échouent explicitement si absentes.
+- Le chargement d'un batch de specs bronze est transactionnel: anciennes tables
+  conservées si un remplacement tardif échoue.
+- Les sources open exogenous peuvent être absentes, mais elles créent des tables
+  vides contractuelles pour garder dbt stable.
+- `source_policy_id` est la vérité légale aval. Exemple: les fichiers
+  FreshRetail-LT doivent rester `freshretail_lt`.
 
-## Ce qu'on a reellement aujourd'hui
+## Frontière
 
-Pour la V1 locale :
-
-- les datasets sous `var/sources/` jouent le role d'inputs bronze
-- `apps/warehouse/load_bronze/main.py` charge ces donnees dans un schema `bronze` DuckDB
-- la silver SQL lit ensuite ce schema `bronze`
-
-Sources actuellement chargees en bronze de substitution :
-
-- `var/sources/bakery_sales/data_train.parquet`
-- `var/sources/bakery_sales/data_val.parquet`
-- `var/sources/bakery_sales/Bakery sales.csv`
-- `var/datasets/global_dataset/commercial_external_daily.parquet`
-
-Tables bronze de substitution :
-
-- `bronze.bronze_freshretail_daily`
-- `bronze.bronze_bakery_order_lines`
-- `bronze.bronze_commercial_external_daily`
-
-## Pourquoi cette approche est saine
-
-Cette approche permet de :
-
-- coder la silver tout de suite
-- figer un contrat tabulaire que la silver sait lire
-- ne pas bloquer l'architecture sur des APIs POS encore inconnues
-- separer clairement :
-  - le probleme d'ingestion JSON
-  - le probleme de standardisation silver
-
-Autrement dit :
-
-- la **forme finale de la vraie bronze** reste ouverte
-- le **contrat tabulaire lu par la silver** existe deja
-
-## Regle de travail a retenir
-
-Tant que les APIs POS ne sont pas connues :
-
-- on ne pretend pas avoir une vraie bronze de production
-- on travaille avec une **bronze database/schema de substitution**
-- la silver doit etre ecrite comme si elle lisait une vraie bronze tabulaire
-
-Quand les POS seront connus plus tard, il faudra seulement ajouter :
-
-- la brique `raw JSON -> bronze tabulaire`
-
-La silver, elle, ne devra pas etre repensee en profondeur si le contrat bronze tabulaire reste coherent.
+Bronze ne fait pas de logique métier. Elle prépare des tables proches source,
+auditables et suffisamment typées pour que staging/silver puissent normaliser.

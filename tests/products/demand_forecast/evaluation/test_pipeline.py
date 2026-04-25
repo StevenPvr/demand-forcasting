@@ -40,6 +40,7 @@ def _build_eval_output_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     train_selection = pd.DataFrame(
         {
             "dt": pd.date_range("2024-01-01", periods=8, freq="D"),
+            "dataset_source": ["unit_test"] * 8,
             "location_id": ["store_1"] * 8,
             "product_id": ["sku_1"] * 8,
             "client_id": ["public_client"] * 8,
@@ -53,6 +54,7 @@ def _build_eval_output_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     train_tuning = pd.DataFrame(
         {
             "dt": pd.date_range("2024-01-09", periods=4, freq="D"),
+            "dataset_source": ["unit_test"] * 4,
             "location_id": ["store_1"] * 4,
             "product_id": ["sku_1"] * 4,
             "client_id": ["public_client"] * 4,
@@ -66,6 +68,7 @@ def _build_eval_output_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     val_frame = pd.DataFrame(
         {
             "dt": pd.date_range("2024-01-13", periods=3, freq="D"),
+            "dataset_source": ["unit_test"] * 3,
             "location_id": ["store_1"] * 3,
             "product_id": ["sku_1"] * 3,
             "client_id": ["public_client"] * 3,

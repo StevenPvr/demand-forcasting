@@ -14,6 +14,7 @@ select
     cast(competitor_count_1km as integer) as competitor_count_1km,
     nullif(cast(parking_score as varchar), '') as parking_score,
     nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
 from {{ source("bronze", "bronze_open_location_catchment") }}

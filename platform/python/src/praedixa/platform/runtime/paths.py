@@ -45,7 +45,6 @@ DBT_LOG_DIR: Path = WAREHOUSE_RUNTIME_DIR / "logs"
 
 GLOBAL_DATASET_DIR: Path = DATASETS_DIR / "global_dataset"
 EXTERNAL_OPEN_DIR: Path = DATASETS_DIR / "open_exogenous"
-FEATURE_SELECTION_DIR: Path = EXPERIMENTS_DIR / "demand_forecast" / "feature_screening"
 TRAINING_BUNDLE_DIR: Path = EXPERIMENTS_DIR / "demand_forecast" / "training_bundle"
 OPTIMISATION_DIR: Path = EXPERIMENTS_DIR / "demand_forecast" / "training"
 EVALUATION_DIR: Path = EXPERIMENTS_DIR / "demand_forecast" / "evaluation"

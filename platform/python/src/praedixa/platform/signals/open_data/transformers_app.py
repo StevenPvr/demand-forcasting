@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pandas as pd
 
@@ -68,12 +67,6 @@ def build_open_exogenous_transformer_frames(config: OpenExogenousRuntimeConfig) 
             http_json_reader=http_json,
         ),
     }
-
-
-def _write_transformer_csv(frame: pd.DataFrame, output_path: Path) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
-    return output_path
 
 
 def main() -> None:

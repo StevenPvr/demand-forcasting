@@ -25,10 +25,17 @@ class TrainingEligibilityTests(unittest.TestCase):
     def test_filter_training_eligible_rows_rejects_censored_low_quality_rows(self) -> None:
         frame = pd.DataFrame(
             {
-                "row_id": [1, 2, 3, 4],
-                "usable_for_training_flag": [True, True, True, False],
-                "censor_flag": [False, True, False, False],
-                "label_quality_score": [1.0, 1.0, 0.4, 1.0],
+                "row_id": [1, 2, 3, 4, 5],
+                "usable_for_training_flag": [True, True, True, False, True],
+                "censor_flag": [False, True, False, False, False],
+                "label_quality_score": [1.0, 1.0, 0.4, 1.0, 1.0],
+                "target_source": [
+                    "observed_sales",
+                    "observed_sales",
+                    "observed_sales",
+                    "observed_sales",
+                    "dense_calendar_zero_fill",
+                ],
             }
         )
 

@@ -1,9 +1,9 @@
-{{ config(tags=["silver", "bakery"], unique_key=["dataset_source", "source_partition", "row_index"]) }}
+{{ config(tags=["silver", "bakery"], materialized="table", unique_key=["dataset_source", "source_partition", "row_index"]) }}
 
 select
-    'bakery' as dataset_source,
+    coalesce(source_policy_id, 'bakery') as dataset_source,
     source_partition,
-    'warehouse_run' as source_run_id,
+    coalesce(source_name, 'bakery') as source_run_id,
     concat('bakery_store_1', '__', product_id) as series_id,
     cast(dt as date) as dt,
     'bakery_store_1' as location_id,

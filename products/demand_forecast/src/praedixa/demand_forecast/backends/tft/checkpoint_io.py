@@ -358,12 +358,7 @@ def _normalization_strategy_from_payload(payload: dict[str, Any]) -> dict[str, A
     strategy = payload.get("normalization_strategy")
     if isinstance(strategy, dict):
         return dict(cast(dict[str, Any], strategy))
-    return {
-        "kind": "legacy_external_standard_scaler"
-        if payload.get("target_scaler") is not None
-        else "dataset_native",
-        "legacy_external_scaler": payload.get("target_scaler") is not None,
-    }
+    raise RuntimeError("TFT checkpoint metadata is missing `normalization_strategy`.")
 
 
 def _rebuild_model_from_payload(payload: dict[str, Any]) -> Any:
@@ -416,7 +411,7 @@ def load_tft_checkpoint_bundle(input_path: str | Path) -> FittedTFTModel:
     metadata_path = _metadata_path(resolved_input_path)
     if not metadata_path.exists():
         raise RuntimeError(
-            "TFT checkpoint metadata sidecar is missing; refusing unsafe legacy pickle load. "
+            "TFT checkpoint metadata sidecar is missing; refusing unsafe pickle load. "
             "Re-save the model with the v2 checkpoint writer."
         )
     metadata = cast(

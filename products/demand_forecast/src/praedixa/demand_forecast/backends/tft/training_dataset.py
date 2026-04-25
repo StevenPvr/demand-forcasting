@@ -297,6 +297,5 @@ def build_training_dataset_artifacts(
             "kind": "group_normalizer",
             "method": "standard",
             "groups": [GROUP_COL],
-            "legacy_external_scaler": False,
         },
     )

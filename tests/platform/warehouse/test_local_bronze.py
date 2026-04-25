@@ -20,6 +20,7 @@ for path in (PROJECT_ROOT, PLATFORM_SRC):
 from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
     BronzeTableSpec,
     EmptyRequiredBronzeSourceError,
+    MissingBronzeColumnsError,
     MissingRequiredBronzeSourceError,
     backup_local_bronze_sources,
     build_cloud_duckdb_config_from_env,
@@ -34,7 +35,7 @@ from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
 )
 
 
-def _build_legacy_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSpec, Path]:
+def _build_stale_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSpec, Path]:
     source_path = root / "location_metadata.csv"
     source_path.write_text(
         "dataset_source,location_id,site_format\nfreshretail,site_1,bakery\n",
@@ -42,7 +43,7 @@ def _build_legacy_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSp
     )
     local_db_path = root / "warehouse" / "praedixa.duckdb"
     local_db_path.parent.mkdir(parents=True, exist_ok=True)
-    _create_legacy_open_location_metadata_table(local_db_path)
+    _create_stale_open_location_metadata_table(local_db_path)
     return (
         BronzeTableSpec(
             table_name="bronze_open_location_metadata",
@@ -62,7 +63,7 @@ def _build_legacy_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSp
     )
 
 
-def _create_legacy_open_location_metadata_table(local_db_path: Path) -> None:
+def _create_stale_open_location_metadata_table(local_db_path: Path) -> None:
     connection = duckdb.connect(str(local_db_path))
     try:
         connection.execute("CREATE SCHEMA bronze")
@@ -80,18 +81,26 @@ def _create_legacy_open_location_metadata_table(local_db_path: Path) -> None:
         connection.close()
 
 
-def _assert_legacy_schema_loaded(local_db_path: Path) -> None:
+def _assert_stale_schema_loaded(local_db_path: Path) -> None:
     connection = duckdb.connect(str(local_db_path))
     try:
         columns = connection.execute("PRAGMA table_info('bronze.bronze_open_location_metadata')").fetchall()
         loaded_row = connection.execute(
             "SELECT dataset_source, location_id FROM bronze.bronze_open_location_metadata"
         ).fetchone()
+        manifest_row = connection.execute(
+            "SELECT source_name, source_policy_id, loaded_rows FROM bronze.bronze_source_manifest"
+        ).fetchone()
     finally:
         connection.close()
     column_names = [cast(tuple[object, str], column)[1] for column in columns]
     assert "site_format" not in column_names
     assert cast(tuple[str, str], loaded_row) == ("freshretail", "site_1")
+    assert cast(tuple[str, str, int], manifest_row) == (
+        "open_location_metadata",
+        "open_location_metadata",
+        1,
+    )
 
 
 class LoadBronzeDuckDBTests(unittest.TestCase):
@@ -287,12 +296,15 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         specs = default_active_bronze_specs("data", schema_name="bronze")
         source_names = {spec.source_name for spec in specs}
         table_names = {spec.table_name for spec in specs}
+        policy_by_source = {spec.source_name: spec.source_policy_id for spec in specs}
 
         self.assertIn("freshretail_train", source_names)
         self.assertIn("freshretail_val", source_names)
         self.assertIn("bakery", source_names)
         self.assertIn("open_location_catchment", source_names)
         self.assertIn("bronze_open_location_catchment", table_names)
+        self.assertEqual(policy_by_source["bakery"], "bakery")
+        self.assertEqual(policy_by_source["open_weather_daily"], "open_meteo_api")
 
     def test_prepare_bronze_batch_renames_bakery_columns(self) -> None:
         spec = BronzeTableSpec(
@@ -318,6 +330,43 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("sale_date_raw", prepared.columns)
         self.assertIn("unit_price_raw", prepared.columns)
         self.assertEqual(prepared.loc[0, "source_partition"], "historical")
+        self.assertEqual(prepared.loc[0, "source_name"], "bakery")
+        self.assertEqual(prepared.loc[0, "source_policy_id"], "bakery")
+
+    def test_load_selected_bronze_specs_rejects_missing_expected_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_path = root / "source.csv"
+            source_path.write_text("a,b\n1,2\n", encoding="utf-8")
+            local_db_path = root / "warehouse" / "praedixa.duckdb"
+            spec = BronzeTableSpec(
+                table_name="bronze_test",
+                source_path=source_path,
+                ddl="""
+                CREATE SCHEMA IF NOT EXISTS bronze;
+                CREATE TABLE IF NOT EXISTS bronze.bronze_test (
+                    a INTEGER,
+                    required_col VARCHAR,
+                    source_name VARCHAR,
+                    source_policy_id VARCHAR,
+                    source_file_path VARCHAR,
+                    loaded_at TIMESTAMP
+                );
+                """,
+                source_name="test_source",
+                expected_columns=("required_col",),
+            )
+            env = {
+                "PRAEDIXA_ENABLE_LOCAL_WAREHOUSE": "true",
+                "PRAEDIXA_ENABLE_CLOUD_WAREHOUSE": "false",
+                "PRAEDIXA_ENABLE_LOCAL_BACKUP": "false",
+                "PRAEDIXA_DUCKDB_LOCAL_PATH": str(local_db_path),
+                "PRAEDIXA_DUCKDB_BRONZE_SCHEMA": "bronze",
+            }
+
+            with mock.patch.dict("os.environ", env, clear=True):
+                with self.assertRaises(MissingBronzeColumnsError):
+                    load_selected_bronze_specs(specs=[spec], batch_rows=10)
 
     def test_validate_bronze_sources_fails_on_missing_required_source(self) -> None:
         spec = BronzeTableSpec(
@@ -394,10 +443,10 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             self.assertEqual(second_result["source_count"], 1)
             self.assertEqual(second_result["copied_count"], 0)
 
-    def test_load_selected_bronze_specs_recreates_legacy_table_schema(self) -> None:
+    def test_load_selected_bronze_specs_recreates_stale_table_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            spec, local_db_path = _build_legacy_open_location_metadata_spec(root)
+            spec, local_db_path = _build_stale_open_location_metadata_spec(root)
             env = {
                 "PRAEDIXA_ENABLE_LOCAL_WAREHOUSE": "true",
                 "PRAEDIXA_ENABLE_CLOUD_WAREHOUSE": "false",
@@ -412,7 +461,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             row_counts = cast(dict[str, int], result["local_warehouse_row_counts"])
             self.assertEqual(row_counts["open_location_metadata"], 1)
             self.assertIn("source_manifest_path", result)
-            _assert_legacy_schema_loaded(local_db_path)
+            _assert_stale_schema_loaded(local_db_path)
 
     def test_load_all_bronze_tables_loads_into_local_duckdb_and_keeps_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

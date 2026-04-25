@@ -291,6 +291,8 @@ def _test_window_unit_prices_from_gold(
             group by 1
             """
         ).fetchdf()
+    except duckdb.CatalogException:
+        return {}
     finally:
         connection.close()
     grouped_df = grouped_df.loc[grouped_df["total_quantity"].astype(float) > 0.0].copy()

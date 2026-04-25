@@ -16,8 +16,6 @@ models:
     staging:
       +materialized: view
     silver:
-      +materialized: incremental
-      +incremental_strategy: delete_insert
-      +on_schema_change: sync_all_columns
+      +materialized: table
     gold:
       +materialized: table

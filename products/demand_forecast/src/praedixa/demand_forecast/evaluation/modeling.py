@@ -54,7 +54,9 @@ def _model_param_as_int(params: dict[str, object], key: str) -> int:
         return value
     if isinstance(value, (float, str)):
         return int(value)
-    raise TypeError(f"Model parameter `{key}` must be int-compatible, got {type(value).__name__}.")
+    raise TypeError(
+        f"Model parameter `{key}` must be int-compatible, got {type(value).__name__}."
+    )
 
 
 def compute_equal_dataset_row_weights(
@@ -309,8 +311,8 @@ def fit_xgboost_evaluation_model(
         _sample_weight_summary(train_weights),
     )
     model = fit_xgboost_model(
-        train_frame.copy(),
-        valid_frame.copy(),
+        train_frame,
+        valid_frame,
         feature_cols,
         target_col=learning_target_col,
         model_params=resolved_model_params,
@@ -372,8 +374,8 @@ def fit_final_xgboost_model(
         target_contract.learning_target_col,
     )
     return fit_xgboost_model(
-        fit_frame.copy(),
-        fit_frame.head(1).copy(),
+        fit_frame,
+        fit_frame.head(0),
         feature_cols,
         target_col=target_contract.learning_target_col,
         model_params=fit_params,
@@ -385,7 +387,9 @@ def fit_final_xgboost_model(
     )
 
 
-def _stable_xgboost_evaluation_params(model_params: dict[str, object]) -> dict[str, object]:
+def _stable_xgboost_evaluation_params(
+    model_params: dict[str, object],
+) -> dict[str, object]:
     resolved = dict(model_params)
     if platform.system() != "Darwin":
         return resolved
@@ -408,7 +412,9 @@ def _int_param(params: dict[str, object], key: str, default: int) -> int:
         return int(value)
     if isinstance(value, str):
         return int(value)
-    raise TypeError(f"Parameter `{key}` must be convertible to int, got {type(value).__name__}.")
+    raise TypeError(
+        f"Parameter `{key}` must be convertible to int, got {type(value).__name__}."
+    )
 
 
 def _log_native_categorical_evaluation_override() -> None:
@@ -472,8 +478,12 @@ def _xgboost_eval_frame_summary(
     return {
         "rows": int(len(frame)),
         "feature_count": int(len(present_features)),
-        "target_nulls": int(frame[target_col].isna().sum()) if target_col in frame.columns else None,
-        "feature_dtype_counts": {str(key): int(value) for key, value in dtype_counts.items()},
+        "target_nulls": int(frame[target_col].isna().sum())
+        if target_col in frame.columns
+        else None,
+        "feature_dtype_counts": {
+            str(key): int(value) for key, value in dtype_counts.items()
+        },
         "top_feature_null_counts": dict(list(top_null_counts.items())[:12]),
     }
 

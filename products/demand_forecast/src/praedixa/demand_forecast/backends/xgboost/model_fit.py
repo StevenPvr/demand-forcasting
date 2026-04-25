@@ -21,8 +21,8 @@ from praedixa.demand_forecast.backends.xgboost.model_common import (
 )
 from praedixa.demand_forecast.backends.xgboost.preprocessing import (
     XGBoostFeatureSpec,
-    XGBoostMatrices,
-    prepare_xgboost_matrices,
+    XGBoostPreparedMatrixData,
+    prepare_xgboost_matrix_data,
     to_xgboost_feature_data,
     transform_xgboost_features,
 )
@@ -41,7 +41,7 @@ class FittedXGBoostModel:
 @dataclass(frozen=True)
 class _XGBoostTrainingPlan:
     resolved_params: dict[str, object]
-    matrices: XGBoostMatrices
+    matrices: XGBoostPreparedMatrixData
     train_params: dict[str, object]
     num_boost_round: int
     early_stopping_rounds: int | None
@@ -88,7 +88,7 @@ def warm_up_xgboost_runtime(nthread: int) -> None:
 
 def _build_dmatrix(
     xgb_module: Any,
-    features: pd.DataFrame,
+    features: pd.DataFrame | np.ndarray,
     feature_spec: XGBoostFeatureSpec,
     *,
     params: dict[str, object],
@@ -148,7 +148,7 @@ def _prediction_iteration_range(model: object) -> tuple[int, int] | None:
     return (0, best_iteration + 1)
 
 
-def _log_matrix_summary(matrices: XGBoostMatrices) -> None:
+def _log_matrix_summary(matrices: XGBoostPreparedMatrixData) -> None:
     LOGGER.debug(
         "XGBoost fit matrices prepared: train_shape=%s valid_shape=%s "
         "categorical_features=%s numeric_features=%s native_categorical=%s "
@@ -186,9 +186,10 @@ def _build_training_plan(
         default_params=default_params or DEFAULT_XGBOOST_MODEL_PARAMS,
     )
     native_categorical = bool(resolved_params.get("enable_categorical", False))
-    use_early_stopping = bool(resolved_params.get("enable_early_stopping", False)) and len(
-        valid_frame
-    ) > 0
+    use_early_stopping = (
+        bool(resolved_params.get("enable_early_stopping", False))
+        and len(valid_frame) > 0
+    )
     LOGGER.debug(
         "XGBoost fit preparing matrices: train_rows=%s valid_rows=%s feature_count=%s "
         "target_col=%s native_categorical=%s use_early_stopping=%s params=%s sample_weight=%s",
@@ -201,7 +202,7 @@ def _build_training_plan(
         _param_snapshot(resolved_params),
         train_sample_weight is not None,
     )
-    matrices = prepare_xgboost_matrices(
+    matrices = prepare_xgboost_matrix_data(
         train_frame=train_frame,
         valid_frame=valid_frame,
         feature_cols=feature_cols,
@@ -231,7 +232,10 @@ def _build_training_plan(
     )
 
 
-def _train_booster(xgb_module: Any, plan: _XGBoostTrainingPlan) -> Any:
+def _train_booster_with_validation_matrix(
+    xgb_module: Any,
+    plan: _XGBoostTrainingPlan,
+) -> tuple[Any, Any | None]:
     LOGGER.debug(
         "XGBoost native train matrix build starting: train_shape=%s categorical=%s",
         plan.matrices.train_x.shape,
@@ -249,23 +253,25 @@ def _train_booster(xgb_module: Any, plan: _XGBoostTrainingPlan) -> Any:
         "XGBoost native train matrix build completed: train_rows=%s",
         len(plan.matrices.train_x),
     )
-    LOGGER.debug(
-        "XGBoost native validation matrix build starting: valid_shape=%s categorical=%s",
-        plan.matrices.valid_x.shape,
-        plan.matrices.feature_spec.native_categorical,
-    )
-    valid_matrix = _build_dmatrix(
-        xgb_module,
-        plan.matrices.valid_x,
-        plan.matrices.feature_spec,
-        params=plan.resolved_params,
-        label=plan.matrices.valid_y,
-    )
-    LOGGER.debug(
-        "XGBoost native validation matrix build completed: valid_rows=%s",
-        len(plan.matrices.valid_x),
-    )
-    evals = [(valid_matrix, "validation")] if plan.use_early_stopping else []
+    valid_matrix = None
+    if plan.use_early_stopping:
+        LOGGER.debug(
+            "XGBoost native validation matrix build starting: valid_shape=%s categorical=%s",
+            plan.matrices.valid_x.shape,
+            plan.matrices.feature_spec.native_categorical,
+        )
+        valid_matrix = _build_dmatrix(
+            xgb_module,
+            plan.matrices.valid_x,
+            plan.matrices.feature_spec,
+            params=plan.resolved_params,
+            label=plan.matrices.valid_y,
+        )
+        LOGGER.debug(
+            "XGBoost native validation matrix build completed: valid_rows=%s",
+            len(plan.matrices.valid_x),
+        )
+    evals = [(valid_matrix, "validation")] if valid_matrix is not None else []
     LOGGER.debug(
         "XGBoost native DMatrix fit starting: train_rows=%s valid_rows=%s eval_metric=%s early_stopping_rounds=%s",
         len(plan.matrices.train_x),
@@ -273,7 +279,7 @@ def _train_booster(xgb_module: Any, plan: _XGBoostTrainingPlan) -> Any:
         plan.resolved_params.get("eval_metric"),
         plan.early_stopping_rounds,
     )
-    return xgb_module.train(
+    model = xgb_module.train(
         params=plan.train_params,
         dtrain=train_matrix,
         num_boost_round=plan.num_boost_round,
@@ -281,6 +287,42 @@ def _train_booster(xgb_module: Any, plan: _XGBoostTrainingPlan) -> Any:
         early_stopping_rounds=plan.early_stopping_rounds,
         verbose_eval=False,
     )
+    return model, valid_matrix
+
+
+def _train_booster(xgb_module: Any, plan: _XGBoostTrainingPlan) -> Any:
+    model, _ = _train_booster_with_validation_matrix(xgb_module, plan)
+    return model
+
+
+def _predict_booster(
+    *,
+    model: Any,
+    matrix: Any,
+) -> np.ndarray:
+    iteration_range = _prediction_iteration_range(model)
+    if iteration_range is None:
+        predictions = model.predict(matrix)
+    else:
+        predictions = model.predict(matrix, iteration_range=iteration_range)
+    return np.asarray(predictions, dtype=float)
+
+
+def _predict_booster_inplace(
+    *,
+    model: Any,
+    data: pd.DataFrame | np.ndarray,
+) -> np.ndarray:
+    iteration_range = _prediction_iteration_range(model)
+    if iteration_range is None:
+        predictions = model.inplace_predict(data, validate_features=False)
+    else:
+        predictions = model.inplace_predict(
+            data,
+            iteration_range=iteration_range,
+            validate_features=False,
+        )
+    return np.asarray(predictions, dtype=float)
 
 
 def fit_xgboost_model(
@@ -318,6 +360,57 @@ def fit_xgboost_model(
     )
 
 
+def fit_xgboost_model_and_predict_validation(
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    feature_cols: list[str],
+    *,
+    target_col: str,
+    model_params: dict[str, object] | None = None,
+    default_params: dict[str, object] | None = None,
+    train_sample_weight: np.ndarray | None = None,
+) -> tuple[FittedXGBoostModel, np.ndarray]:
+    fit_start = time.perf_counter()
+    plan = _build_training_plan(
+        train_frame,
+        valid_frame,
+        feature_cols,
+        target_col=target_col,
+        model_params=model_params,
+        default_params=default_params,
+        train_sample_weight=train_sample_weight,
+    )
+    LOGGER.debug(
+        "XGBoost native booster training with validation prediction about to start."
+    )
+    xgb_module = _xgboost_module()
+    model, valid_matrix = _train_booster_with_validation_matrix(xgb_module, plan)
+    if valid_matrix is None:
+        valid_matrix = _build_dmatrix(
+            xgb_module,
+            plan.matrices.valid_x,
+            plan.matrices.feature_spec,
+            params=plan.resolved_params,
+            label=plan.matrices.valid_y,
+        )
+    predictions = _predict_booster(model=model, matrix=valid_matrix)
+    LOGGER.debug(
+        "XGBoost native fit+validation predict completed: rows=%s duration_seconds=%.3f best_iteration=%s best_score=%s",
+        len(predictions),
+        time.perf_counter() - fit_start,
+        _model_attr(model, "best_iteration"),
+        _model_attr(model, "best_score"),
+    )
+    return (
+        FittedXGBoostModel(
+            model=model,
+            feature_spec=plan.matrices.feature_spec,
+            params=plan.resolved_params,
+        ),
+        predictions,
+    )
+
+
 def predict_with_xgboost_model(
     fitted_model: FittedXGBoostModel,
     frame: pd.DataFrame,
@@ -329,26 +422,28 @@ def predict_with_xgboost_model(
         len(fitted_model.feature_spec.feature_cols),
     )
     features = transform_xgboost_features(frame, fitted_model.feature_spec)
-    xgb_module = _xgboost_module()
-    matrix = _build_dmatrix(
-        xgb_module,
-        features,
-        fitted_model.feature_spec,
-        params=fitted_model.params,
-    )
-    iteration_range = _prediction_iteration_range(fitted_model.model)
     LOGGER.debug(
-        "XGBoost native DMatrix predict starting: feature_shape=%s iteration_range=%s",
+        "XGBoost native prediction starting: feature_shape=%s iteration_range=%s native_categorical=%s",
         features.shape,
-        iteration_range,
+        _prediction_iteration_range(fitted_model.model),
+        fitted_model.feature_spec.native_categorical,
     )
-    if iteration_range is None:
-        predictions = fitted_model.model.predict(matrix)
+    if not fitted_model.feature_spec.native_categorical:
+        predictions = _predict_booster_inplace(
+            model=fitted_model.model,
+            data=to_xgboost_feature_data(features, fitted_model.feature_spec),
+        )
     else:
-        predictions = fitted_model.model.predict(matrix, iteration_range=iteration_range)
+        matrix = _build_dmatrix(
+            _xgboost_module(),
+            features,
+            fitted_model.feature_spec,
+            params=fitted_model.params,
+        )
+        predictions = _predict_booster(model=fitted_model.model, matrix=matrix)
     LOGGER.debug(
-        "XGBoost native DMatrix predict completed: rows=%s duration_seconds=%.3f",
+        "XGBoost native prediction completed: rows=%s duration_seconds=%.3f",
         len(predictions),
         time.perf_counter() - predict_start,
     )
-    return np.asarray(predictions, dtype=float)
+    return predictions

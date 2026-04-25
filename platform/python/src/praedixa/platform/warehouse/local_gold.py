@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from contextlib import contextmanager
 import logging
@@ -20,12 +21,8 @@ from praedixa.platform.signals.open_data.fetch_app import (
     fetch_open_exogenous_data,
 )
 from praedixa.platform.warehouse.dbt_runner import (
-    dbt_packages_installed,
-    ensure_dbt_profiles_file,
-    resolve_dbt_executable,
-    resolve_dbt_selector,
-    resolve_warehouse_project_dir_or_raise,
-    run_dbt_command,
+    DbtStageRunConfig,
+    DbtStageRunner,
 )
 from praedixa.platform.warehouse.local_bronze import load_selected_bronze_specs
 from praedixa.platform.warehouse.local_silver import (
@@ -69,7 +66,7 @@ def build_local_gold_env(base_env: dict[str, str] | None = None) -> dict[str, st
 
 
 @contextmanager
-def _patched_environment(env_updates: dict[str, str]) -> Generator[None]:
+def _patched_environment(env_updates: dict[str, str]) -> Generator[None, None, None]:
     original_values = {key: os.environ.get(key) for key in env_updates}
     os.environ.update(env_updates)
     try:
@@ -105,9 +102,12 @@ def assert_silver_ready_for_open_exogenous(env: dict[str, str]) -> None:
         raise MissingSilverDependencyError(
             "Missing PRAEDIXA_DUCKDB_TARGET_PATH for open exogenous refresh."
         )
-    if _is_local_duckdb_path(duckdb_path) and not _resolve_local_duckdb_path(
-        duckdb_path
-    ).exists():
+    resolved_duckdb_path = (
+        str(_resolve_local_duckdb_path(duckdb_path))
+        if _is_local_duckdb_path(duckdb_path)
+        else duckdb_path
+    )
+    if _is_local_duckdb_path(duckdb_path) and not Path(resolved_duckdb_path).exists():
         raise MissingSilverDependencyError(
             f"Missing DuckDB warehouse before open exogenous refresh: {duckdb_path}"
         )
@@ -122,7 +122,7 @@ def assert_silver_ready_for_open_exogenous(env: dict[str, str]) -> None:
     silver_schema = env.get("PRAEDIXA_DUCKDB_SILVER_SCHEMA", DEFAULT_SILVER_SCHEMA)
     relation = f"{_quote_identifier(silver_schema)}.silver_daily_product_demand"
     try:
-        connection = duckdb.connect(duckdb_path, read_only=True)
+        connection = duckdb.connect(resolved_duckdb_path, read_only=True)
         try:
             row = connection.execute(
                 f"select count(*) from {relation}"
@@ -141,7 +141,7 @@ def assert_silver_ready_for_open_exogenous(env: dict[str, str]) -> None:
         )
 
 
-def _all_open_exogenous_sources_available(specs: list[object]) -> bool:
+def _all_open_exogenous_sources_available(specs: Sequence[object]) -> bool:
     source_paths = [getattr(spec, "source_path", None) for spec in specs]
     return bool(source_paths) and all(
         isinstance(source_path, Path) and source_path.exists()
@@ -186,83 +186,30 @@ def refresh_open_exogenous_inputs(env: dict[str, str]) -> dict[str, object]:
     }
 
 
-def _maybe_refresh_open_exogenous(config: LocalGoldRunConfig, env: dict[str, str]) -> dict[str, object] | None:
+def _maybe_refresh_open_exogenous(
+    config: LocalGoldRunConfig,
+    env: dict[str, str],
+) -> dict[str, object] | None:
     if not config.refresh_open_exogenous:
         return None
     return refresh_open_exogenous_inputs(env)
-
-
-def _run_local_gold_dbt(
-    *,
-    project_dir: Path,
-    dbt_executable: str,
-    profiles_dir: Path,
-    env: dict[str, str],
-    selector: str,
-    test_selector: str,
-    run_dbt_tests: bool,
-) -> dict[str, bool]:
-    if not dbt_packages_installed(project_dir):
-        run_dbt_command(
-            dbt_executable,
-            "deps",
-            project_dir=project_dir,
-            profiles_dir=profiles_dir,
-            env=env,
-            cwd=PROJECT_ROOT,
-        )
-    run_dbt_command(
-        dbt_executable,
-        "seed",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select="source_registry",
-    )
-    run_dbt_command(
-        dbt_executable,
-        "run",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select=selector,
-    )
-    if not run_dbt_tests:
-        return {"dbt_run": True, "dbt_test": False}
-    run_dbt_command(
-        dbt_executable,
-        "test",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select=test_selector,
-    )
-    return {"dbt_run": True, "dbt_test": True}
 
 
 def run_local_gold(config: LocalGoldRunConfig) -> dict[str, object]:
     """Materialize the local Praedixa gold workflow in DuckDB with open-source exogenous refresh."""
 
     env = build_local_gold_env()
-    warehouse_project_dir = resolve_warehouse_project_dir_or_raise(PROJECT_ROOT)
-    dbt_executable = resolve_dbt_executable(PROJECT_ROOT)
-    profiles_dir = ensure_dbt_profiles_file(PROJECT_ROOT).parent
-    selector = resolve_dbt_selector(config.dbt_select)
     test_selector = config.dbt_select.strip().lstrip("+")
     refresh_result = _maybe_refresh_open_exogenous(config, env)
-    dbt_result = _run_local_gold_dbt(
-        project_dir=warehouse_project_dir,
-        dbt_executable=dbt_executable,
-        profiles_dir=profiles_dir,
+    dbt_result = DbtStageRunner().run_stage(
+        config=DbtStageRunConfig(
+            selector=config.dbt_select,
+            test_selector=test_selector,
+            run_tests=config.run_dbt_tests,
+        ),
         env=env,
-        selector=selector,
-        test_selector=test_selector,
-        run_dbt_tests=config.run_dbt_tests,
     )
-    return {"open_exogenous_refresh": refresh_result, **dbt_result}
+    return {"open_exogenous_refresh": refresh_result, **dbt_result.as_dict()}
 
 
 def build_default_local_gold_run_config() -> LocalGoldRunConfig:

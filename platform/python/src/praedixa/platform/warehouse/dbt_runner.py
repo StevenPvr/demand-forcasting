@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 import shutil
@@ -12,6 +13,119 @@ from praedixa.platform.runtime.paths import WAREHOUSE_PROJECT_DIR
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DbtStageRunConfig:
+    """One dbt stage invocation with explicit selectors and test policy."""
+
+    selector: str
+    test_selector: str | None = None
+    test_exclude: str | None = None
+    run_tests: bool = True
+    seed_selector: str | None = "source_registry feature_registry"
+
+
+@dataclass(frozen=True)
+class DbtStageResult:
+    """Structured result for one local dbt stage."""
+
+    deps: bool
+    seed: bool
+    run: bool
+    test: bool
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "dbt_deps": self.deps,
+            "dbt_seed": self.seed,
+            "dbt_run": self.run,
+            "dbt_test": self.test,
+        }
+
+
+class DbtStageRunner:
+    """Run dbt stages with one shared deps/seed/run/test implementation."""
+
+    def __init__(
+        self,
+        *,
+        project_root: Path = PROJECT_ROOT,
+        project_dir: Path | None = None,
+        profiles_dir: Path | None = None,
+        dbt_executable: str | None = None,
+        cwd: Path = PROJECT_ROOT,
+    ) -> None:
+        self.project_root = project_root
+        self.project_dir = project_dir or resolve_warehouse_project_dir_or_raise(
+            project_root
+        )
+        self.profiles_dir = profiles_dir or ensure_dbt_profiles_file(
+            project_root
+        ).parent
+        self.dbt_executable = dbt_executable or resolve_dbt_executable(project_root)
+        self.cwd = cwd
+
+    def run_stage(
+        self,
+        *,
+        config: DbtStageRunConfig,
+        env: dict[str, str],
+    ) -> DbtStageResult:
+        """Run one dbt stage using the configured selector and tests."""
+
+        deps_ran = False
+        if not dbt_packages_installed(self.project_dir):
+            run_dbt_command(
+                self.dbt_executable,
+                "deps",
+                project_dir=self.project_dir,
+                profiles_dir=self.profiles_dir,
+                env=env,
+                cwd=self.cwd,
+            )
+            deps_ran = True
+        seed_ran = False
+        if config.seed_selector is not None:
+            run_dbt_command(
+                self.dbt_executable,
+                "seed",
+                project_dir=self.project_dir,
+                profiles_dir=self.profiles_dir,
+                env=env,
+                cwd=self.cwd,
+                select=config.seed_selector,
+            )
+            seed_ran = True
+        run_dbt_command(
+            self.dbt_executable,
+            "run",
+            project_dir=self.project_dir,
+            profiles_dir=self.profiles_dir,
+            env=env,
+            cwd=self.cwd,
+            select=resolve_dbt_selector(config.selector),
+        )
+        test_ran = False
+        if config.run_tests:
+            run_dbt_command(
+                self.dbt_executable,
+                "test",
+                project_dir=self.project_dir,
+                profiles_dir=self.profiles_dir,
+                env=env,
+                cwd=self.cwd,
+                select=config.test_selector
+                or resolve_dbt_test_selector(config.selector),
+                exclude=config.test_exclude,
+            )
+            test_ran = True
+        return DbtStageResult(
+            deps=deps_ran,
+            seed=seed_ran,
+            run=True,
+            test=test_ran,
+        )
+
+
 def resolve_warehouse_project_dir(project_root: Path) -> Path | None:
     """Resolve the dbt project directory from either a repo root or a project path."""
 
@@ -20,9 +134,6 @@ def resolve_warehouse_project_dir(project_root: Path) -> Path | None:
     platform_candidate = project_root / "platform" / "warehouse"
     if (platform_candidate / "dbt_project.yml").exists():
         return platform_candidate
-    legacy_candidate = project_root / "warehouse"
-    if (legacy_candidate / "dbt_project.yml").exists():
-        return legacy_candidate
     if project_root == PROJECT_ROOT:
         return WAREHOUSE_PROJECT_DIR
     return None

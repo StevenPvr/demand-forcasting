@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -29,10 +33,14 @@ from praedixa.demand_forecast.training.orchestration.steps import (  # noqa: E40
     prepare_optimisation_context,
 )
 from praedixa.demand_forecast.training.config.constants import DEFAULT_GOLD_TABLE  # noqa: E402
-from praedixa.demand_forecast.training.validation.feature_audit import drop_constant_feature_columns  # noqa: E402
+from praedixa.demand_forecast.training.validation.feature_audit import (  # noqa: E402
+    drop_constant_feature_columns,
+)
 
 
-def _mock_hpo_result(*, mean_wape: float, stage_a_trials: int, stage_b_trials: int) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
+def _mock_hpo_result(
+    *, mean_wape: float, stage_a_trials: int, stage_b_trials: int
+) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
     return (
         {"hidden_size": 8, "max_epochs": 1, "n_jobs": 1},
         pd.DataFrame(
@@ -46,7 +54,11 @@ def _mock_hpo_result(*, mean_wape: float, stage_a_trials: int, stage_b_trials: i
             ]
         ),
         {
-            "execution_policy": {"accelerator": "cpu", "fold_workers": 2, "gpu_safe_mode": False},
+            "execution_policy": {
+                "accelerator": "cpu",
+                "fold_workers": 2,
+                "gpu_safe_mode": False,
+            },
             "pruner": {"type": "MedianPruner"},
             "stage_policy": {
                 "stage_a": {"trial_count": stage_a_trials},
@@ -56,15 +68,27 @@ def _mock_hpo_result(*, mean_wape: float, stage_a_trials: int, stage_b_trials: i
     )
 
 
-def _mock_backend(*, mean_wape: float, stage_a_trials: int, stage_b_trials: int) -> SimpleNamespace:
-    return SimpleNamespace(
-        name="xgboost",
-        require_available=lambda stage: None,
-        optimize_fn=lambda **kwargs: _mock_hpo_result(
+def _mock_backend(
+    *, mean_wape: float, stage_a_trials: int, stage_b_trials: int
+) -> SimpleNamespace:
+    def _require_available(stage: str) -> None:
+        _ = stage
+        return None
+
+    def _optimize_fn(
+        **kwargs: object,
+    ) -> tuple[dict[str, object], pd.DataFrame, dict[str, object]]:
+        _ = kwargs
+        return _mock_hpo_result(
             mean_wape=mean_wape,
             stage_a_trials=stage_a_trials,
             stage_b_trials=stage_b_trials,
-        ),
+        )
+
+    return SimpleNamespace(
+        name="xgboost",
+        require_available=_require_available,
+        optimize_fn=_optimize_fn,
     )
 
 
@@ -75,6 +99,7 @@ def _sinusoidal_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     return (
         pd.DataFrame(
             {
+                "dataset_source": ["unit_test"] * 30,
                 "dt": train_dates,
                 "target": shifted_signal[:30] * 2.0 + 0.1,
                 "location_id": "store_1",
@@ -88,6 +113,7 @@ def _sinusoidal_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
         ),
         pd.DataFrame(
             {
+                "dataset_source": ["unit_test"] * 18,
                 "dt": tuning_dates,
                 "target": shifted_signal[30:] * 2.0 + 0.1,
                 "location_id": "store_1",
@@ -115,7 +141,9 @@ def _assert_output_artifacts(output_dir: Path) -> dict[str, Any]:
     assert (output_dir / "best_optuna_params.json").exists()
     assert (output_dir / "optuna_trials_report.csv").exists()
     assert (output_dir / "baseline_report.json").exists()
-    return json.loads((output_dir / "optimisation_metadata.json").read_text(encoding="utf-8"))
+    return json.loads(
+        (output_dir / "optimisation_metadata.json").read_text(encoding="utf-8")
+    )
 
 
 def _gold_frame() -> pd.DataFrame:
@@ -126,8 +154,12 @@ def _gold_frame() -> pd.DataFrame:
         ("freshretail", "store_3", "sku_3"),
         ("bakery", "store_4", "sku_4"),
     )
-    for dataset_offset, (dataset_source, location_id, product_id) in enumerate(dataset_specs):
-        dates = pd.date_range("2024-01-01", periods=120, freq="D") + pd.Timedelta(days=dataset_offset)
+    for dataset_offset, (dataset_source, location_id, product_id) in enumerate(
+        dataset_specs
+    ):
+        dates = pd.date_range("2024-01-01", periods=120, freq="D") + pd.Timedelta(
+            days=dataset_offset
+        )
         base_signal = np.sin((np.arange(120) + dataset_offset) / 5.0) + 2.0
         frames.append(
             pd.DataFrame(
@@ -154,7 +186,9 @@ def _write_gold_table(duckdb_path: Path) -> None:
     try:
         connection.execute("create schema gold")
         connection.register("gold_frame", _gold_frame())
-        connection.execute("create table gold.gold_daily_product_forecast_panel_d1 as select * from gold_frame")
+        connection.execute(
+            "create table gold.gold_daily_product_forecast_panel_d1 as select * from gold_frame"
+        )
         connection.unregister("gold_frame")
     finally:
         connection.close()
@@ -259,7 +293,9 @@ class OptimisationPipelineTests(unittest.TestCase):
             ["all_zero_real", "all_zero_bool", "all_zero_category"],
         )
 
-    def test_build_tuning_walk_forward_folds_uses_expanding_train_on_tuning_block(self) -> None:
+    def test_build_tuning_walk_forward_folds_uses_expanding_train_on_tuning_block(
+        self,
+    ) -> None:
         tuning_frame = pd.DataFrame(
             {
                 "dt": pd.date_range("2024-06-01", periods=18, freq="D"),
@@ -275,7 +311,9 @@ class OptimisationPipelineTests(unittest.TestCase):
         self.assertEqual(folds[-1]["train_dates"], 15)
         self.assertEqual(folds[-1]["valid_dates"], 3)
 
-    def test_build_tuning_walk_forward_folds_by_dataset_returns_positional_indices(self) -> None:
+    def test_build_tuning_walk_forward_folds_by_dataset_returns_positional_indices(
+        self,
+    ) -> None:
         base_frame = pd.DataFrame(
             {
                 "dataset_source": ["a"] * 8 + ["b"] * 8,
@@ -290,50 +328,77 @@ class OptimisationPipelineTests(unittest.TestCase):
         for fold in folds:
             valid_frame = cast(
                 pd.DataFrame,
-                tuning_frame.loc[tuning_frame["dataset_source"] == fold["dataset_source"]]
+                tuning_frame.loc[
+                    tuning_frame["dataset_source"] == fold["dataset_source"]
+                ]
                 .sort_values("dt")
                 .reset_index(drop=True)
-                .iloc[cast(Any, fold["valid_idx"])]
+                .iloc[cast(Any, fold["valid_idx"])],
             )
             self.assertFalse(valid_frame.empty)
-            self.assertTrue((valid_frame["dataset_source"] == fold["dataset_source"]).all())
+            self.assertTrue(
+                (valid_frame["dataset_source"] == fold["dataset_source"]).all()
+            )
 
-    def test_build_grouped_tuning_walk_forward_folds_by_dataset_returns_fold_unions(self) -> None:
-        tuning_frame = pd.DataFrame(
-            {
-                "dataset_source": ["a"] * 8 + ["b"] * 8,
-                "dt": list(pd.date_range("2024-06-01", periods=8, freq="D")) * 2,
-                "target": np.arange(16, dtype=float),
-            }
-        ).sort_values("dt").reset_index(drop=True)
+    def test_build_grouped_tuning_walk_forward_folds_by_dataset_returns_fold_unions(
+        self,
+    ) -> None:
+        tuning_frame = (
+            pd.DataFrame(
+                {
+                    "dataset_source": ["a"] * 8 + ["b"] * 8,
+                    "dt": list(pd.date_range("2024-06-01", periods=8, freq="D")) * 2,
+                    "target": np.arange(16, dtype=float),
+                }
+            )
+            .sort_values("dt")
+            .reset_index(drop=True)
+        )
 
-        folds = build_grouped_tuning_walk_forward_folds_by_dataset(tuning_frame, n_folds=2)
+        folds = build_grouped_tuning_walk_forward_folds_by_dataset(
+            tuning_frame, n_folds=2
+        )
 
         self.assertEqual(len(folds), 2)
         for fold in folds:
-            valid_frame = cast(pd.DataFrame, tuning_frame.iloc[cast(Any, fold["valid_idx"])])
+            valid_frame = cast(
+                pd.DataFrame, tuning_frame.iloc[cast(Any, fold["valid_idx"])]
+            )
             self.assertEqual(set(valid_frame["dataset_source"]), {"a", "b"})
             self.assertEqual(len(cast(list[dict[str, object]], fold["per_dataset"])), 2)
 
-    def test_build_grouped_tuning_walk_forward_folds_by_dataset_skips_sparse_dataset_from_validation(self) -> None:
-        tuning_frame = pd.DataFrame(
-            {
-                "dataset_source": ["a"] * 8 + ["b"] * 4,
-                "dt": list(pd.date_range("2024-06-01", periods=8, freq="D")) + list(pd.date_range("2024-06-01", periods=4, freq="D")),
-                "target": np.arange(12, dtype=float),
-            }
-        ).sort_values(["dataset_source", "dt"]).reset_index(drop=True)
+    def test_build_grouped_tuning_walk_forward_folds_by_dataset_skips_sparse_dataset_from_validation(
+        self,
+    ) -> None:
+        tuning_frame = (
+            pd.DataFrame(
+                {
+                    "dataset_source": ["a"] * 8 + ["b"] * 4,
+                    "dt": list(pd.date_range("2024-06-01", periods=8, freq="D"))
+                    + list(pd.date_range("2024-06-01", periods=4, freq="D")),
+                    "target": np.arange(12, dtype=float),
+                }
+            )
+            .sort_values(["dataset_source", "dt"])
+            .reset_index(drop=True)
+        )
 
         flat_folds = build_tuning_walk_forward_folds_by_dataset(tuning_frame, n_folds=5)
-        grouped_folds = build_grouped_tuning_walk_forward_folds_by_dataset(tuning_frame, n_folds=5)
+        grouped_folds = build_grouped_tuning_walk_forward_folds_by_dataset(
+            tuning_frame, n_folds=5
+        )
 
-        dataset_b_flat_folds = [fold for fold in flat_folds if fold["dataset_source"] == "b"]
+        dataset_b_flat_folds = [
+            fold for fold in flat_folds if fold["dataset_source"] == "b"
+        ]
         self.assertEqual(len(dataset_b_flat_folds), 0)
         self.assertEqual(len(grouped_folds), 5)
         self.assertEqual(set(cast(list[str], grouped_folds[0]["datasets"])), {"a"})
         self.assertEqual(set(cast(list[str], grouped_folds[-1]["datasets"])), {"a"})
 
-    def test_evaluate_statistical_baselines_macro_ignores_partial_nan_predictions(self) -> None:
+    def test_evaluate_statistical_baselines_macro_ignores_partial_nan_predictions(
+        self,
+    ) -> None:
         tuning_frame = pd.DataFrame(
             {
                 "dataset_source": ["a"] * 6 + ["b"] * 6,
@@ -352,19 +417,27 @@ class OptimisationPipelineTests(unittest.TestCase):
         self.assertTrue(baseline_rows)
         self.assertEqual(best_baseline["baseline_name"], "naive_lag_1")
         self.assertTrue(bool(np.isfinite(float(cast(Any, best_baseline["mean_wape"])))))
-        naive_row = next(row for row in baseline_rows if row["baseline_name"] == "naive_lag_1")
+        naive_row = next(
+            row for row in baseline_rows if row["baseline_name"] == "naive_lag_1"
+        )
         self.assertTrue(
             all(
                 cast(int, result["rows_scored"]) > 0
-                for result in cast(list[dict[str, object]], naive_row["fold_wape_scores"])
+                for result in cast(
+                    list[dict[str, object]], naive_row["fold_wape_scores"]
+                )
             )
         )
 
-    def test_build_optimisation_outputs_writes_reports_and_selected_datasets(self) -> None:
+    def test_build_optimisation_outputs_writes_reports_and_selected_datasets(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output_dir = root / "outputs"
-            train_input_path, tuning_input_path, train_frame, tuning_frame = _write_selected_inputs(root)
+            train_input_path, tuning_input_path, train_frame, tuning_frame = (
+                _write_selected_inputs(root)
+            )
 
             with patch(
                 "praedixa.demand_forecast.training.orchestration.orchestrator.resolve_optimisation_model_backend",
@@ -393,7 +466,9 @@ class OptimisationPipelineTests(unittest.TestCase):
             self.assertEqual(metadata["tuning_rows"], len(tuning_frame))
             self.assertEqual(metadata["model_backend"], "xgboost")
             self.assertEqual(metadata["hpo_runtime"]["pruner"]["type"], "MedianPruner")
-            self.assertEqual(metadata["hpo_runtime"]["execution_policy"]["accelerator"], "cpu")
+            self.assertEqual(
+                metadata["hpo_runtime"]["execution_policy"]["accelerator"], "cpu"
+            )
 
     def test_build_optimisation_outputs_loads_gold_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -427,7 +502,9 @@ class OptimisationPipelineTests(unittest.TestCase):
 
             metadata = _assert_output_artifacts(output_dir)
             self.assertIsNone(metadata["train_input_path"])
-            self.assertEqual(metadata["gold_table"], "gold.gold_daily_product_forecast_panel_d1")
+            self.assertEqual(
+                metadata["gold_table"], "gold.gold_daily_product_forecast_panel_d1"
+            )
 
 
 if __name__ == "__main__":

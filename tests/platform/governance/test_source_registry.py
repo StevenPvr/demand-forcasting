@@ -39,6 +39,10 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertTrue(bool(insee_row["commercial_use_allowed"]))
         self.assertTrue(bool(insee_row["ml_training_allowed"]))
 
+        metadata_row = frame.loc[frame["source_id"].eq("praedixa_location_metadata")].iloc[0]
+        self.assertEqual(metadata_row["review_status"], "allowed")
+        self.assertFalse(bool(metadata_row["contract_required"]))
+
     def test_provider_runtime_enabled_requires_explicit_contract_opt_in_for_quarantine_sources(self) -> None:
         self.assertFalse(is_provider_runtime_enabled("open_meteo_api", allow_contractual_providers=False))
         self.assertTrue(is_provider_runtime_enabled("open_meteo_api", allow_contractual_providers=True))

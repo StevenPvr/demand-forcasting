@@ -6,12 +6,14 @@ import logging
 from praedixa.platform.warehouse.local_gold import (
     LocalGoldRunConfig,
     build_default_local_gold_run_config,
-    run_local_gold,
 )
 from praedixa.platform.warehouse.local_silver import (
     LocalSilverRunConfig,
     build_default_local_silver_run_config,
-    run_local_silver,
+)
+from praedixa.platform.warehouse.pipeline import (
+    MedallionRunConfig,
+    run_local_medallion_pipeline,
 )
 
 
@@ -27,6 +29,19 @@ class LocalMedallionRunConfig:
     silver: LocalSilverRunConfig
     gold: LocalGoldRunConfig
 
+    def to_pipeline_config(self) -> MedallionRunConfig:
+        """Convert the public local config to the explicit pipeline config."""
+
+        return MedallionRunConfig(
+            load_core_bronze=self.run_silver and self.silver.run_bronze_load,
+            run_silver=self.run_silver,
+            refresh_open_exogenous=self.run_gold
+            and self.gold.refresh_open_exogenous,
+            run_gold=self.run_gold,
+            silver=self.silver,
+            gold=self.gold,
+        )
+
 
 def build_default_local_medallion_run_config() -> LocalMedallionRunConfig:
     """Return the default local medallion workflow configuration."""
@@ -40,20 +55,13 @@ def build_default_local_medallion_run_config() -> LocalMedallionRunConfig:
 
 
 def run_local_medallion(config: LocalMedallionRunConfig) -> dict[str, object]:
-    """Run the local Praedixa medallion workflow from silver through gold."""
+    """Run the explicit local Praedixa medallion workflow."""
 
-    if not config.run_silver and not config.run_gold:
-        raise ValueError("At least one medallion step must be enabled.")
-
-    results: dict[str, object] = {}
-    if config.run_silver:
-        logger.info("Starting medallion silver step.")
-        results["silver"] = run_local_silver(config.silver)
-        logger.info("Finished medallion silver step.")
-    if config.run_gold:
-        logger.info("Starting medallion gold step.")
-        results["gold"] = run_local_gold(config.gold)
-        logger.info("Finished medallion gold step.")
+    results = run_local_medallion_pipeline(config.to_pipeline_config())
+    if "run_silver" in results:
+        results["silver"] = results["run_silver"]
+    if "run_gold" in results:
+        results["gold"] = results["run_gold"]
     return results
 
 

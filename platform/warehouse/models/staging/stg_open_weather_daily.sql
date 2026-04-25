@@ -13,6 +13,7 @@ select
     cast(weather_relative_humidity_mean as double) as weather_relative_humidity_mean,
     cast(weather_wind_speed_mean as double) as weather_wind_speed_mean,
     nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
 from {{ source("bronze", "bronze_open_weather_daily") }}

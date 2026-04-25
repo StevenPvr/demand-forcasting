@@ -59,11 +59,12 @@ Le backup local reste possible, mais seulement sur opt-in explicite via `PRAEDIX
 
 ## Sources exogenes open-source
 
-La `gold` V1 enrichit la silver avec des sources publiques uniquement :
+La `gold` enrichit la silver avec des sources publiques uniquement si elles sont
+autorisées dans `source_registry.csv` :
 
-- jours feries : `Nager.Date`
+- jours feries : règles déterministes ou source autorisée
 - vacances scolaires France : calendrier ICS ministeriel open data
-- meteo historique : `Open-Meteo Archive API`
+- meteo historique : provider autorisé uniquement
 - macro annuelle lente : `World Bank Indicators API`
 - macro France mensuelle / trimestrielle : `Insee BDM SDMX`
 
@@ -71,6 +72,7 @@ Important :
 
 - la couche macro actuelle est `as-of` avec lags de publication conservateurs
 - ce n'est pas encore une vraie couche `vintage` avec revisions historiques
+- `nager_date_api` et `open_meteo_api` restent en quarantaine sans contrat commercial
 
 Les fichiers telecharges sont ecrits localement par defaut dans :
 
@@ -78,7 +80,7 @@ Les fichiers telecharges sont ecrits localement par defaut dans :
 var/datasets/open_exogenous
 ```
 
-Puis rechargees dans le schema `bronze` avant le run dbt `gold`.
+Puis rechargées dans le schema `bronze` avant le run dbt `gold`.
 
 ## FreshRetail
 
@@ -86,10 +88,25 @@ La pipeline SQL `dbt` conserve maintenant `FreshRetail` dans son echelle native 
 
 Important :
 
-- aucun multiplicateur runtime n'est applique dans `warehouse/models/staging/stg_freshretail_daily.sql`
 - aucun multiplicateur runtime n'est applique dans `platform/warehouse/models/staging/stg_freshretail_daily.sql`
 - les colonnes de compatibilite `freshretail_rescaled_flag` et `target_scale_assumption` restent exposees dans la `gold`
 - elles valent desormais respectivement `false` et `native_observed`
+
+## Split Gold Actif
+
+Le contrat `gold.gold_model_training_panel_d1` sépare optimisation et évaluation:
+
+- `freshretail` et `freshretail_lt` alimentent uniquement `train` et `val`;
+- leur split est chronologique 60/40 par `dataset_source`;
+- `bakery` alimente uniquement `test`;
+- le `test` Bakery couvre les 3 derniers mois disponibles par défaut
+  (`PRAEDIXA_GOLD_BAKERY_TEST_MONTHS=3`).
+
+Mapping bundle:
+
+- `split_bucket = 'train'` -> `train.parquet`;
+- `split_bucket = 'val'` -> `tuning.parquet`, validation d'Optuna/HPO;
+- `split_bucket = 'test'` -> `valid.parquet`, holdout final d'évaluation.
 
 ## Activer le cloud DuckDB
 
@@ -146,42 +163,26 @@ dbt run --project-dir platform/warehouse --profiles-dir platform/warehouse --sel
 dbt test --project-dir platform/warehouse --profiles-dir platform/warehouse --select tag:gold
 ```
 
-## Workflow local simplifie
+## Workflow local simplifié
 
 Pour lancer la chaine locale de bout en bout en une commande :
 
 ```bash
-.venv/bin/python -m apps.warehouse.run_silver.main
+PYTHONPATH="$PWD:$PWD/platform/python/src:$PWD/products/demand_forecast/src" \
+.venv/bin/python -m apps.warehouse.main
 ```
 
 Cette commande :
 
-- recharge le schema `bronze` local dans DuckDB
-- bootstrap `profiles.yml` si necessaire
-- installe `dbt_utils` si necessaire via `dbt deps`
-- lance `dbt run`
-- lance `dbt test`
+- charge les sources coeur dans `bronze`
+- persiste `bronze_source_manifest`
+- lance silver
+- rafraîchit et charge les exogènes ouverts
+- lance gold
+- publie `gold.gold_model_training_panel_d1`
 
-Pour la `gold` :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_gold.main
-```
-
-Cette commande :
-
-- telecharge / rafraichit les fichiers exogenes open-source
-- recharge uniquement les tables bronze exogenes correspondantes
-- bootstrap `profiles.yml` si necessaire
-- installe `dbt_utils` si necessaire via `dbt deps`
-- lance `dbt run` sur `+tag:gold`
-- lance `dbt test` sur `tag:gold`
-
-Si tu veux rejouer la `gold` sans refetch des sources ouvertes :
-
-```bash
-.venv/bin/python -m apps.warehouse.run_gold.main --skip-open-exogenous-refresh
-```
+Les variantes se font via les dataclasses Python importables, pas avec des flags
+CLI. Les wrappers `main.py` sont volontairement sans parser.
 
 ## Basculer dbt vers une cible cloud
 

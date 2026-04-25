@@ -277,9 +277,11 @@ weighted as (
       on features.split_bucket = source_weights.split_bucket
      and features.dataset_source = source_weights.dataset_source
 ),
-legacy_panel as (
+forecast_panel as (
 select
     weighted.dataset_source,
+    weighted.source_partition,
+    weighted.source_run_id,
     weighted.client_id,
     weighted.vertical_level_1,
     weighted.vertical_level_2,
@@ -326,6 +328,7 @@ select
     weighted.target_source,
     weighted.label_quality_score,
     weighted.usable_for_training_flag,
+    weighted.target_true_zero_demand_flag,
     weighted.target_delta_log_wow_d_plus_1_applicable_flag as target_delta_log_wow_d_plus_1_applicable_flag,
 
     coalesce(weighted.target_delta_log_wow_d_plus_1, 0) as target_delta_log_wow_d_plus_1,
@@ -593,7 +596,7 @@ select
 from weighted
 )
 select
-    legacy_panel.* exclude (
+    forecast_panel.* exclude (
 {% for base in feature_status_bases %}
         {{ base }}_applicable_flag,
         {{ base }}_missing_flag{{ "," if not loop.last }}
@@ -602,13 +605,13 @@ select
 {% for family_name, bases in data_quality_families %}
     (
 {% for base in bases %}
-        case when legacy_panel.{{ base }}_applicable_flag = 0 then 1 else 0 end{{ " +" if not loop.last }}
+        case when forecast_panel.{{ base }}_applicable_flag = 0 then 1 else 0 end{{ " +" if not loop.last }}
 {% endfor %}
     ) as data_quality_{{ family_name }}_unavailable_count,
     (
 {% for base in bases %}
-        legacy_panel.{{ base }}_missing_flag{{ " +" if not loop.last }}
+        forecast_panel.{{ base }}_missing_flag{{ " +" if not loop.last }}
 {% endfor %}
     ) as data_quality_{{ family_name }}_missing_count{{ "," if not loop.last }}
 {% endfor %}
-from legacy_panel
+from forecast_panel

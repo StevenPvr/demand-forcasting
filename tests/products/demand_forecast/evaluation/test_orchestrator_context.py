@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -34,6 +38,7 @@ from praedixa.demand_forecast.evaluation.orchestrator_context import (  # noqa: 
     prepare_evaluation_context,
 )
 
+
 def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
     train_targets = [10.0, 11.0, 12.0, 13.0]
     train_lags = [8.0, 9.0, 10.0, 11.0]
@@ -52,6 +57,7 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "rolling_mean_7": [12.0, 13.0, 14.0, 15.0],
             "observed_discount_amount": [1.0, 2.0, 3.0, 4.0],
             "weather_humidity": [40.0, 42.0, 41.0, 43.0],
+            "weather_humidity_rolling_mean_7": [40.0, 41.0, 41.5, 42.0],
             "target_demand_qty_d_plus_1": train_targets,
             "target_lag_7": train_lags,
         }
@@ -66,6 +72,7 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "rolling_mean_7": [16.0, 17.0],
             "observed_discount_amount": [5.0, 6.0],
             "weather_humidity": [44.0, 45.0],
+            "weather_humidity_rolling_mean_7": [43.0, 44.0],
             "target_demand_qty_d_plus_1": valid_targets,
             "target_lag_7": valid_lags,
         }
@@ -80,6 +87,7 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
             "rolling_mean_7": [18.0, 19.0],
             "observed_discount_amount": [np.nan, 7.0],
             "weather_humidity": [np.nan, np.nan],
+            "weather_humidity_rolling_mean_7": [np.nan, np.nan],
             "target_demand_qty_d_plus_1": test_targets,
             "target_lag_7": test_lags,
             REFERENCE_DATE_COL: pd.date_range("2024-01-08", periods=2, freq="D"),
@@ -119,13 +127,17 @@ def _build_bakery_loaded_frames() -> LoadedEvaluationFrames:
 
 
 class EvaluationOrchestratorContextTests(unittest.TestCase):
-    def test_evaluation_build_request_uses_sampled_train_validation_defaults(self) -> None:
+    def test_evaluation_build_request_uses_sampled_train_validation_defaults(
+        self,
+    ) -> None:
         request = EvaluationBuildRequest()
 
-        self.assertEqual(request.train_sample_fraction, 0.10)
-        self.assertEqual(request.tuning_sample_fraction, 0.10)
+        self.assertEqual(request.train_sample_fraction, 1.0)
+        self.assertEqual(request.tuning_sample_fraction, 1.0)
 
-    def test_load_evaluation_frames_routes_bakery_reference_mode_with_current_defaults(self) -> None:
+    def test_load_evaluation_frames_routes_bakery_reference_mode_with_current_defaults(
+        self,
+    ) -> None:
         request = EvaluationBuildRequest()
         expected_loaded = _build_bakery_loaded_frames()
         logger = logging.getLogger(__name__)
@@ -150,12 +162,14 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         mocked_load_gold.assert_called_once_with(
             duckdb_path=request.duckdb_path,
             gold_table=request.gold_table,
-            train_sample_fraction=0.10,
-            tuning_sample_fraction=0.10,
+            train_sample_fraction=1.0,
+            tuning_sample_fraction=1.0,
             model_backend="tft",
         )
 
-    def test_prepare_evaluation_context_accepts_best_params_for_bakery_overlap(self) -> None:
+    def test_prepare_evaluation_context_accepts_best_params_for_bakery_overlap(
+        self,
+    ) -> None:
         loaded = _build_bakery_loaded_frames()
         logger = logging.getLogger(__name__)
 
@@ -182,14 +196,22 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         self.assertEqual(context.evaluation_mode, "bakery_reference_overlap")
         self.assertEqual(context.best_params["runtime_profile"], "scaleway_l40s")
         self.assertEqual(context.best_params["batch_size"], 64)
-        self.assertEqual(context.target_contract.learning_target_col, DEFAULT_ABSOLUTE_TARGET_COL)
-        self.assertEqual(context.target_contract.absolute_target_col, "target_demand_qty_d_plus_1")
+        self.assertEqual(
+            context.target_contract.learning_target_col, DEFAULT_ABSOLUTE_TARGET_COL
+        )
+        self.assertEqual(
+            context.target_contract.absolute_target_col, "target_demand_qty_d_plus_1"
+        )
         self.assertEqual(context.dropped_test_rows, 0)
         self.assertIn("rolling_mean_7", context.feature_cols)
-        self.assertIn("weather_humidity", context.missing_in_test_feature_cols)
-        self.assertNotIn("weather_humidity", context.feature_cols)
+        self.assertIn(
+            "weather_humidity_rolling_mean_7", context.missing_in_test_feature_cols
+        )
+        self.assertNotIn("weather_humidity_rolling_mean_7", context.feature_cols)
         self.assertIn("observed_discount_amount", context.feature_cols)
-        self.assertEqual(context.test_frame["observed_discount_amount"].tolist(), [2.5, 7.0])
+        self.assertEqual(
+            context.test_frame["observed_discount_amount"].tolist(), [2.5, 7.0]
+        )
         self.assertIsNotNone(context.overlap_metadata)
         assert context.overlap_metadata is not None
         self.assertEqual(context.overlap_metadata["scorable_test_rows"], 2)
@@ -208,7 +230,9 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
                 "praedixa.demand_forecast.evaluation.orchestrator_context._training_manifest_feature_columns",
                 return_value=["dataset_source", "rolling_mean_7", "missing_feature"],
             ):
-                with self.assertRaisesRegex(ValueError, "XGBoost evaluation feature contract mismatch"):
+                with self.assertRaisesRegex(
+                    ValueError, "XGBoost evaluation feature contract mismatch"
+                ):
                     prepare_evaluation_context(
                         loaded=loaded,
                         requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,

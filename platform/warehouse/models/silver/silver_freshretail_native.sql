@@ -1,9 +1,9 @@
-{{ config(tags=["silver", "freshretail"], unique_key=["dataset_source", "source_partition", "dt", "location_id", "product_id"]) }}
+{{ config(tags=["silver", "freshretail"], materialized="table", unique_key=["dataset_source", "source_partition", "dt", "location_id", "product_id"]) }}
 
 select
-    'freshretail' as dataset_source,
+    coalesce(source_policy_id, 'freshretail') as dataset_source,
     source_partition,
-    'warehouse_run' as source_run_id,
+    coalesce(source_name, 'freshretail') as source_run_id,
     concat(cast(store_id as varchar), '__', cast(product_id as varchar)) as series_id,
     cast(dt as date) as dt,
     cast(store_id as varchar) as location_id,

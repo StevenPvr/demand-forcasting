@@ -9,12 +9,14 @@ from praedixa.platform.runtime.constants import DEFAULT_SILVER_DBT_SELECT
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_SCHEMA
 from praedixa.platform.datasets.standardization.supplemental_corpus import build_supplemental_corpus_frame
 from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH
-from praedixa.platform.runtime.paths import PROJECT_ROOT
 from praedixa.platform.runtime.paths import SOURCES_DIR
 from praedixa.platform.runtime.warehouse import WarehouseRuntimeConfig
-from praedixa.platform.warehouse.bronze_specs import default_active_bronze_specs
+from praedixa.platform.warehouse.bronze_specs import default_active_core_bronze_specs
+from praedixa.platform.warehouse.bronze_specs import default_open_exogenous_bronze_specs
 from praedixa.platform.warehouse.bronze_specs import supplemental_corpus_daily_ddl
 from praedixa.platform.warehouse.dbt_runner import dbt_packages_installed
+from praedixa.platform.warehouse.dbt_runner import DbtStageRunConfig
+from praedixa.platform.warehouse.dbt_runner import DbtStageRunner
 from praedixa.platform.warehouse.dbt_runner import ensure_dbt_profiles_file
 from praedixa.platform.warehouse.dbt_runner import resolve_dbt_executable
 from praedixa.platform.warehouse.dbt_runner import resolve_dbt_selector
@@ -37,6 +39,7 @@ __all__ = [
     "build_local_silver_env",
     "dbt_packages_installed",
     "ensure_dbt_profiles_file",
+    "load_core_bronze_sources",
     "resolve_dbt_executable",
     "resolve_dbt_selector",
     "resolve_dbt_test_exclude",
@@ -70,14 +73,26 @@ def build_local_silver_env(base_env: dict[str, str] | None = None) -> dict[str, 
     return runtime.to_env(base_env=base_env)
 
 
-def _maybe_load_local_bronze(config: LocalSilverRunConfig, env: dict[str, str]) -> dict[str, object] | None:
+def load_core_bronze_sources(
+    config: LocalSilverRunConfig,
+    env: dict[str, str],
+) -> dict[str, object] | None:
+    """Load core local bronze inputs and the inline supplemental corpus."""
+
     if not config.run_bronze_load:
         return None
-    bronze_specs = default_active_bronze_specs(
+    bronze_specs = default_active_core_bronze_specs(
         data_dir=config.data_dir,
         schema_name=env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"],
-        open_exogenous_dir=env.get("PRAEDIXA_OPEN_EXOGENOUS_DIR"),
     )
+    bronze_specs = [
+        *bronze_specs,
+        *default_open_exogenous_bronze_specs(
+            data_dir=config.data_dir,
+            schema_name=env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"],
+            open_exogenous_dir=env.get("PRAEDIXA_OPEN_EXOGENOUS_DIR"),
+        ),
+    ]
     bronze_load = load_selected_bronze_specs(specs=bronze_specs)
     supplemental_corpus_frame = build_supplemental_corpus_frame(
         raw_dir=config.data_dir / "commercial_datasets" / "raw",
@@ -94,76 +109,22 @@ def _maybe_load_local_bronze(config: LocalSilverRunConfig, env: dict[str, str]) 
     return bronze_load
 
 
-def _run_local_silver_dbt(
-    *,
-    project_dir: Path,
-    dbt_executable: str,
-    profiles_dir: Path,
-    env: dict[str, str],
-    selector: str,
-    run_dbt_tests: bool,
-) -> dict[str, bool]:
-    if not dbt_packages_installed(project_dir):
-        run_dbt_command(
-            dbt_executable,
-            "deps",
-            project_dir=project_dir,
-            profiles_dir=profiles_dir,
-            env=env,
-            cwd=PROJECT_ROOT,
-        )
-    run_dbt_command(
-        dbt_executable,
-        "seed",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select="source_registry",
-    )
-    run_dbt_command(
-        dbt_executable,
-        "run",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select=selector,
-    )
-    if not run_dbt_tests:
-        return {"dbt_run": True, "dbt_test": False}
-    run_dbt_command(
-        dbt_executable,
-        "test",
-        project_dir=project_dir,
-        profiles_dir=profiles_dir,
-        env=env,
-        cwd=PROJECT_ROOT,
-        select=resolve_dbt_test_selector(selector),
-        exclude=resolve_dbt_test_exclude(),
-    )
-    return {"dbt_run": True, "dbt_test": True}
-
-
 def run_local_silver(config: LocalSilverRunConfig) -> dict[str, object]:
     """Load local bronze sources into DuckDB and materialize silver with dbt."""
 
     env = build_local_silver_env()
     env["PRAEDIXA_BRONZE_DATA_DIR"] = str(config.data_dir)
-    warehouse_project_dir = resolve_warehouse_project_dir_or_raise(PROJECT_ROOT)
-    dbt_executable = resolve_dbt_executable(PROJECT_ROOT)
-    profiles_dir = ensure_dbt_profiles_file(PROJECT_ROOT).parent
-    selector = resolve_dbt_selector(config.dbt_select)
-    bronze_load = _maybe_load_local_bronze(config, env)
-    dbt_result = _run_local_silver_dbt(
-        project_dir=warehouse_project_dir,
-        dbt_executable=dbt_executable,
-        profiles_dir=profiles_dir,
+    bronze_load = load_core_bronze_sources(config, env)
+    dbt_result = DbtStageRunner().run_stage(
+        config=DbtStageRunConfig(
+            selector=config.dbt_select,
+            test_selector=resolve_dbt_test_selector(config.dbt_select),
+            test_exclude=resolve_dbt_test_exclude(),
+            run_tests=config.run_dbt_tests,
+        ),
         env=env,
-        selector=selector,
-        run_dbt_tests=config.run_dbt_tests,
     )
-    return {"bronze_load": bronze_load, **dbt_result}
+    return {"bronze_load": bronze_load, **dbt_result.as_dict()}
 
 
 def build_default_local_silver_run_config() -> LocalSilverRunConfig:

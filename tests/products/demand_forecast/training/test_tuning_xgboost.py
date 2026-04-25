@@ -25,6 +25,15 @@ from praedixa.demand_forecast.contracts.targets import resolve_target_contract  
 from praedixa.demand_forecast.training.validation.folds import (  # noqa: E402
     build_grouped_tuning_walk_forward_folds_by_dataset,
 )
+from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
+    DEFAULT_XGBOOST_MAX_CAT_THRESHOLD,
+    DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT,
+    DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE,
+    DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES,
+    DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE,
+    DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE,
+    DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE,
+)
 from praedixa.demand_forecast.training.xgboost.tuning import (  # noqa: E402
     fit_and_score_xgboost_model_on_tuning,
     sample_xgboost_optuna_params,
@@ -70,13 +79,13 @@ class XGBoostTuningTests(unittest.TestCase):
     def test_sample_xgboost_optuna_params_returns_xgboost_space(self) -> None:
         trial = optuna.trial.FixedTrial(
             {
-                "learning_rate": 0.05,
-                "max_depth": 4,
-                "min_child_weight": 2.0,
-                "subsample": 0.9,
-                "colsample_bytree": 0.8,
-                "reg_alpha": 1e-4,
-                "reg_lambda": 1.0,
+                "learning_rate": 0.04,
+                "max_depth": 5,
+                "min_child_weight": 64.0,
+                "subsample": 0.85,
+                "colsample_bytree": 0.75,
+                "reg_alpha": 1e-2,
+                "reg_lambda": 20.0,
                 "max_bin": 256,
             }
         )
@@ -84,11 +93,25 @@ class XGBoostTuningTests(unittest.TestCase):
         params = sample_xgboost_optuna_params(cast(Any, trial), random_seed=11)
 
         self.assertNotIn("n_estimators", params)
-        self.assertEqual(params["max_depth"], 4)
+        self.assertEqual(params["max_depth"], 5)
         self.assertTrue(params["enable_early_stopping"])
         self.assertTrue(params["enable_categorical"])
         self.assertEqual(params["early_stopping_rounds"], 100)
         self.assertEqual(params["random_state"], 12)
+
+    def test_xgboost_tuning_space_is_regularized_for_large_multiseries_panels(
+        self,
+    ) -> None:
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES, (3, 4, 5, 6, 7, 8))
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE[0], 16.0)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE[1], 512.0)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE[0], 1.0)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE[1], 200.0)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[0], 0.75)
+        self.assertLessEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[1], 0.95)
+        self.assertLessEqual(DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE[1], 0.90)
+        self.assertLessEqual(DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT, 8)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_MAX_CAT_THRESHOLD, 64)
 
     def test_fit_and_score_xgboost_uses_walk_forward_folds(self) -> None:
         train_frame, tuning_frame = self._frames()
@@ -106,7 +129,12 @@ class XGBoostTuningTests(unittest.TestCase):
             train_frame=train_frame,
             tuning_frame=tuning_frame,
             folds=folds,
-            feature_cols=["client_id", "location_id", "product_id", "target_day_of_week"],
+            feature_cols=[
+                "client_id",
+                "location_id",
+                "product_id",
+                "target_day_of_week",
+            ],
             target_contract=target_contract,
             logger=__import__("logging").getLogger(__name__),
             model_params={

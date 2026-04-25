@@ -14,8 +14,7 @@ from praedixa.demand_forecast.backends.xgboost.model_common import (
     resolve_xgboost_model_params,
 )
 from praedixa.demand_forecast.backends.xgboost.model_fit import (
-    fit_xgboost_model,
-    predict_with_xgboost_model,
+    fit_xgboost_model_and_predict_validation,
     warm_up_xgboost_runtime,
 )
 from praedixa.demand_forecast.contracts.targets import (
@@ -27,7 +26,9 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TARGET_TRANSFORM,
     DEFAULT_XGBOOST_LOCAL_CPU_FOLD_WORKERS,
 )
-from praedixa.demand_forecast.training.validation.eligibility import filter_training_eligible_rows
+from praedixa.demand_forecast.training.validation.eligibility import (
+    filter_training_eligible_rows,
+)
 from praedixa.demand_forecast.training.shared.metrics import compute_wape
 
 
@@ -106,12 +107,15 @@ def fit_and_score_xgboost_model_on_tuning(
     total_threads: int | None = None,
     target_transform: str = DEFAULT_TARGET_TRANSFORM,
     trial: optuna.trial.Trial | None = None,
+    train_frame_is_eligible: bool = False,
 ) -> dict[str, object]:
     _ = target_transform
     trial_number = trial.number if trial is not None else None
     scoring_start = time.perf_counter()
     resolved_params = resolve_xgboost_model_params(model_params)
-    resolved_params["n_jobs"] = int(total_threads or cast(Any, resolved_params["n_jobs"]))
+    resolved_params["n_jobs"] = int(
+        total_threads or cast(Any, resolved_params["n_jobs"])
+    )
     execution_policy = xgboost_execution_policy(
         resolved_params,
         fold_count=len(folds),
@@ -126,11 +130,14 @@ def fit_and_score_xgboost_model_on_tuning(
         execution_policy,
         _param_snapshot(resolved_params),
     )
-    base_train_frame = filter_training_eligible_rows(
-        train_frame,
-        label="xgboost_optuna_shared_train",
-        logger=logger,
-    )
+    if train_frame_is_eligible:
+        base_train_frame = train_frame
+    else:
+        base_train_frame = filter_training_eligible_rows(
+            train_frame,
+            label="xgboost_optuna_shared_train",
+            logger=logger,
+        )
     logger.debug(
         "XGBoost scoring eligible train frame ready: trial=%s rows_before=%s rows_after=%s",
         trial_number,
@@ -302,7 +309,9 @@ def _score_xgboost_folds_parallel(
         trial_number=trial_number,
         fold_workers=fold_workers,
     )
-    fold_results = [row for fold_result in sorted(completed) for row in fold_result.results]
+    fold_results = [
+        row for fold_result in sorted(completed) for row in fold_result.results
+    ]
     if trial is not None:
         _report_trial_progress(trial, fold_results, step=len(folds))
     return fold_results, len(completed)
@@ -481,7 +490,7 @@ def _score_single_fold(
         len(fold_valid),
         len(feature_cols),
     )
-    model = fit_xgboost_model(
+    model, raw_predictions = fit_xgboost_model_and_predict_validation(
         fold_train,
         fold_valid,
         feature_cols,
@@ -491,7 +500,6 @@ def _score_single_fold(
         if bool(resolved_params.get("enable_dataset_sample_weight", False))
         else None,
     )
-    raw_predictions = predict_with_xgboost_model(model, fold_valid)
     predictions = reconstruct_absolute_predictions(
         raw_predictions,
         fold_valid,

@@ -21,5 +21,9 @@ select
             try_strptime(sale_date_raw || ' ' || sale_time_raw, '%Y-%m-%d %H:%M')
         ) as date
     ) as dt,
-    upper(trim(article_raw)) as product_id
+    upper(trim(article_raw)) as product_id,
+    nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
+    source_file_path,
+    loaded_at
 from {{ source("bronze", "bronze_bakery_order_lines") }}

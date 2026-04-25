@@ -20,5 +20,9 @@ select
     cast(avg_temperature as double) as avg_temperature,
     cast(avg_humidity as double) as avg_humidity,
     cast(avg_wind_level as double) as avg_wind_level,
-    cast(is_censored as boolean) as is_censored
+    cast(is_censored as boolean) as is_censored,
+    nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
+    source_file_path,
+    loaded_at
 from {{ source("bronze", "bronze_freshretail_daily") }}

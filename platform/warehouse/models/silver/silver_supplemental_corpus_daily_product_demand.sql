@@ -1,7 +1,7 @@
 {{ config(tags=["silver", "supplemental_corpus"], materialized="table") }}
 
 select
-    cast(dataset_source as varchar) as dataset_source,
+    cast(coalesce(dataset_source, source_policy_id) as varchar) as dataset_source,
     cast(source_partition as varchar) as source_partition,
     cast(source_run_id as varchar) as source_run_id,
     cast(series_id as varchar) as series_id,

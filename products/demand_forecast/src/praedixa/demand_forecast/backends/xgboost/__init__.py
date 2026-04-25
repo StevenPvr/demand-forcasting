@@ -12,6 +12,7 @@ from praedixa.demand_forecast.backends.xgboost.model_common import (
 from praedixa.demand_forecast.backends.xgboost.model_fit import (
     FittedXGBoostModel,
     fit_xgboost_model,
+    fit_xgboost_model_and_predict_validation,
     predict_with_xgboost_model,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "FittedXGBoostModel",
     "XGBoostBackendNotReadyError",
     "fit_xgboost_model",
+    "fit_xgboost_model_and_predict_validation",
     "get_xgboost_backend_availability",
     "predict_with_xgboost_model",
     "raise_if_xgboost_backend_required",

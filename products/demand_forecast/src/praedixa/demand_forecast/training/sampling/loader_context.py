@@ -20,9 +20,8 @@ def relation_sql_with_dataset_source(
 ) -> tuple[str, list[str]]:
     if dataset_source_col in columns:
         return base_relation_sql, columns
-    return (
-        f"select *, 'legacy' as {dataset_source_col} from ({base_relation_sql}) as parquet_source",
-        [*columns, dataset_source_col],
+    raise ValueError(
+        f"Parquet optimisation inputs must include `{dataset_source_col}`."
     )
 
 
@@ -40,9 +39,9 @@ def common_schema_previews(
     train_target_schema_preview = train_schema_preview.loc[:, common_columns].copy()
     tuning_target_schema_preview = tuning_schema_preview.loc[:, common_columns].copy()
     if dataset_source_col not in train_target_schema_preview.columns:
-        train_target_schema_preview[dataset_source_col] = "legacy"
+        raise ValueError(f"Training schema is missing `{dataset_source_col}`.")
     if dataset_source_col not in tuning_target_schema_preview.columns:
-        tuning_target_schema_preview[dataset_source_col] = "legacy"
+        raise ValueError(f"Tuning schema is missing `{dataset_source_col}`.")
     return train_target_schema_preview, tuning_target_schema_preview
 
 

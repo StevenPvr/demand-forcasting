@@ -42,6 +42,8 @@ select
     weather_humidity,
     weather_wind_level,
     silver_run_id,
+    nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
 from {{ source("bronze", "bronze_supplemental_corpus_daily") }}

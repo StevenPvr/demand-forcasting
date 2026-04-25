@@ -182,42 +182,18 @@ def _prediction_trainer_kwargs(fitted_model: FittedTFTModel) -> dict[str, object
     }
 
 
-def _uses_legacy_target_scaler(fitted_model: FittedTFTModel) -> bool:
-    strategy = fitted_model.normalization_strategy
-    return (
-        bool(strategy.get("legacy_external_scaler"))
-        or str(strategy.get("kind")) == "legacy_external_standard_scaler"
-    )
-
-
 def _inverse_target_scaler(
     values: np.ndarray, *, fitted_model: FittedTFTModel
 ) -> np.ndarray:
-    if (
-        fitted_model.target_scaler is None
-        or values.size == 0
-        or not _uses_legacy_target_scaler(fitted_model)
-    ):
-        return np.asarray(values, dtype=float)
-    inverse = cast(Any, fitted_model.target_scaler).inverse_transform(
-        values.reshape(-1, 1)
-    )
-    return np.asarray(inverse, dtype=float).reshape(-1)
+    _ = fitted_model
+    return np.asarray(values, dtype=float)
 
 
 def _inverse_target_scaler_quantiles(
     values: np.ndarray, *, fitted_model: FittedTFTModel
 ) -> np.ndarray:
-    if (
-        fitted_model.target_scaler is None
-        or values.size == 0
-        or not _uses_legacy_target_scaler(fitted_model)
-    ):
-        return np.asarray(values, dtype=float)
-    inverse = cast(Any, fitted_model.target_scaler).inverse_transform(
-        values.reshape(-1, 1)
-    )
-    return np.asarray(inverse, dtype=float).reshape(values.shape)
+    _ = fitted_model
+    return np.asarray(values, dtype=float)
 
 
 def _prediction_dataset(

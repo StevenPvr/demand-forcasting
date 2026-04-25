@@ -9,6 +9,7 @@ select
     nullif(cast(counties_json as varchar), '') as counties_json,
     nullif(cast(holiday_types_json as varchar), '') as holiday_types_json,
     nullif(cast(source_name as varchar), '') as source_name,
+    nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
 from {{ source("bronze", "bronze_open_public_holidays") }}

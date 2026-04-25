@@ -2,7 +2,7 @@
 
 {{ praedixa_gold_feature_slice(
     ref("gold_base_panel_d1"),
-    "dataset_source <> 'bakery'",
-    "dataset_source <> 'bakery'",
-    "pilot_ready_chrono_60_20_20"
+    "dataset_source in ('freshretail', 'freshretail_lt')",
+    "dataset_source in ('freshretail', 'freshretail_lt')",
+    "chrono_60_40"
 ) }}
