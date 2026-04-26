@@ -318,6 +318,7 @@ class XGBoostModelFitTests(unittest.TestCase):
 
         self.assertEqual(resolved["device"], "cuda")
         self.assertEqual(resolved["tree_method"], "hist")
+        self.assertFalse(resolved["enable_categorical"])
         self.assertEqual(resolved["xgboost_matrix_type"], "quantile")
         self.assertEqual(resolved["xgboost_gpu_input_backend"], "auto")
         self.assertEqual(resolved["n_jobs"], 1)
@@ -343,8 +344,34 @@ class XGBoostModelFitTests(unittest.TestCase):
 
         self.assertEqual(resolved["device"], "cuda")
         self.assertEqual(resolved["runtime_profile"], "cuda")
+        self.assertFalse(resolved["enable_categorical"])
         self.assertEqual(resolved["xgboost_matrix_type"], "quantile")
         self.assertEqual(resolved["xgboost_gpu_input_backend"], "auto")
+
+    def test_cuda_cudf_input_preserves_native_categorical_mode(self) -> None:
+        with mock.patch(
+            "praedixa.demand_forecast.backends.xgboost.model_common.resolve_xgboost_runtime_profile",
+            return_value=XGBoostRuntimeResolution(
+                requested_profile="cuda",
+                runtime_profile="cuda",
+                device="cuda",
+                tree_method="hist",
+                accelerator="gpu",
+                devices=1,
+                cuda_available=True,
+                cuda_device_name="NVIDIA H100",
+            ),
+        ):
+            resolved = resolve_xgboost_model_params(
+                {
+                    "device": "cuda",
+                    "enable_categorical": True,
+                    "xgboost_gpu_input_backend": "cudf",
+                }
+            )
+
+        self.assertTrue(resolved["enable_categorical"])
+        self.assertEqual(resolved["xgboost_gpu_input_backend"], "cudf")
 
     def test_device_cuda_with_auto_profile_does_not_fall_back_to_cpu(self) -> None:
         with (

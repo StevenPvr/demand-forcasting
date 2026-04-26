@@ -117,6 +117,8 @@ def resolve_xgboost_model_params(
             "xgboost_gpu_input_backend",
             DEFAULT_XGBOOST_GPU_INPUT_BACKEND,
         )
+        if str(requested_gpu_input_backend).lower() != "cudf":
+            resolved["enable_categorical"] = False
         requested_runtime_profile = str(resolved.get("runtime_profile", "cuda"))
         if requested_runtime_profile == "local_cpu":
             requested_runtime_profile = "cuda"
