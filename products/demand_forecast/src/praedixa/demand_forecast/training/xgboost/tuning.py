@@ -106,8 +106,10 @@ def _guardrail_failure_reason(
     ]
     if collapsed:
         return f"dataset_wape_collapse:{','.join(collapsed)}"
-    mean_abs_bias = tuning_result.get("mean_abs_bias")
-    if isinstance(mean_abs_bias, (int, float)) and float(mean_abs_bias) > max(
+    mean_abs_normalized_bias = tuning_result.get("mean_abs_normalized_bias")
+    if isinstance(mean_abs_normalized_bias, (int, float)) and float(
+        mean_abs_normalized_bias
+    ) > max(
         DEFAULT_TUNING_GUARDRAIL_MIN_ABS_BIAS_LIMIT,
         baseline_wape,
     ):
@@ -127,6 +129,10 @@ def _tuning_report_row(trial: optuna.trial.FrozenTrial) -> dict[str, object]:
         "folds_completed": int(trial.user_attrs.get("folds_completed", 0)),
         "mean_wape": _trial_user_attr_float(trial, "mean_wape"),
         "mean_abs_bias": _trial_user_attr_float(trial, "mean_abs_bias"),
+        "mean_abs_normalized_bias": _trial_user_attr_float(
+            trial,
+            "mean_abs_normalized_bias",
+        ),
         "coverage_80": float("nan"),
         "coverage_95": float("nan"),
         "objective_score": _trial_user_attr_float(trial, "objective_score"),
@@ -394,6 +400,10 @@ def _record_trial_result(
     trial.set_user_attr("mean_wape", mean_wape)
     trial.set_user_attr("dataset_mean_wape", tuning_result["dataset_mean_wape"])
     trial.set_user_attr("mean_abs_bias", tuning_result.get("mean_abs_bias"))
+    trial.set_user_attr(
+        "mean_abs_normalized_bias",
+        tuning_result.get("mean_abs_normalized_bias"),
+    )
     trial.set_user_attr(
         "selected_learning_rate", tuning_result["selected_learning_rate"]
     )

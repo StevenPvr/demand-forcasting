@@ -36,6 +36,7 @@ from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
     DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE,
 )
 from praedixa.demand_forecast.training.xgboost.tuning import (  # noqa: E402
+    _guardrail_failure_reason,
     fit_and_score_xgboost_model_on_tuning,
     sample_xgboost_optuna_params,
 )
@@ -158,6 +159,9 @@ class XGBoostTuningTests(unittest.TestCase):
         self.assertIsInstance(result["selected_n_estimators"], int)
         self.assertLessEqual(int(cast(Any, result["selected_n_estimators"])), 8)
         self.assertTrue(bool(np.isfinite(float(cast(Any, result["macro_mean_wape"])))))
+        self.assertTrue(
+            bool(np.isfinite(float(cast(Any, result["mean_abs_normalized_bias"]))))
+        )
         execution_policy = cast(dict[str, object], result["execution_policy"])
         self.assertEqual(execution_policy["backend"], "xgboost")
         self.assertEqual(execution_policy["fold_workers"], 5)
@@ -242,6 +246,36 @@ class XGBoostTuningTests(unittest.TestCase):
         self.assertEqual(execution_policy["fold_workers"], 1)
         self.assertEqual(execution_policy["threads_per_fold"], 1)
         self.assertEqual(execution_policy["total_threads"], 1)
+
+    def test_guardrail_uses_normalized_bias_instead_of_raw_demand_units(
+        self,
+    ) -> None:
+        accepted_result: dict[str, object] = {
+            "dataset_mean_wape": {"fixture": 0.40},
+            "mean_abs_bias": 50.0,
+            "mean_abs_normalized_bias": 0.20,
+        }
+        rejected_result: dict[str, object] = {
+            "dataset_mean_wape": {"fixture": 0.40},
+            "mean_abs_bias": 50.0,
+            "mean_abs_normalized_bias": 0.90,
+        }
+
+        self.assertIsNone(
+            _guardrail_failure_reason(
+                tuning_result=accepted_result,
+                baseline_wape=0.50,
+                baseline_dataset_wape={"fixture": 0.50},
+            )
+        )
+        self.assertEqual(
+            _guardrail_failure_reason(
+                tuning_result=rejected_result,
+                baseline_wape=0.50,
+                baseline_dataset_wape={"fixture": 0.50},
+            ),
+            "absolute_bias_too_high",
+        )
 
 
 if __name__ == "__main__":

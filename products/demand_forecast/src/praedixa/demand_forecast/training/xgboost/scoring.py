@@ -33,7 +33,10 @@ from praedixa.demand_forecast.training.config.constants import (
 from praedixa.demand_forecast.training.validation.eligibility import (
     filter_training_eligible_rows,
 )
-from praedixa.demand_forecast.training.shared.metrics import compute_wape
+from praedixa.demand_forecast.training.shared.metrics import (
+    FLOAT_COMPARISON_EPSILON,
+    compute_wape,
+)
 
 
 def _param_snapshot(params: dict[str, object]) -> dict[str, object]:
@@ -357,6 +360,10 @@ def fit_and_score_xgboost_model_on_tuning(
         "macro_mean_wape": float(np.mean(list(dataset_mean_wape.values()))),
         "dataset_mean_wape": dataset_mean_wape,
         "mean_abs_bias": _mean_metric(fold_results, metric_key="abs_bias"),
+        "mean_abs_normalized_bias": _mean_metric(
+            fold_results,
+            metric_key="abs_normalized_bias",
+        ),
         "mean_coverage_80": None,
         "mean_coverage_95": None,
         "mean_pinball_loss": None,
@@ -1005,6 +1012,12 @@ def _score_predictions_by_dataset(
         target = dataset_frame[absolute_target_col].astype(float)
         prediction = dataset_frame["prediction"].astype(float)
         bias = float((prediction - target).mean())
+        target_volume = float(target.abs().sum())
+        abs_normalized_bias = (
+            float(abs((prediction - target).sum()) / target_volume)
+            if target_volume > FLOAT_COMPARISON_EPSILON
+            else float("inf")
+        )
         rows.append(
             {
                 "dataset_source": str(dataset_source),
@@ -1012,6 +1025,7 @@ def _score_predictions_by_dataset(
                 "wape": float(compute_wape(target, prediction)),
                 "bias": bias,
                 "abs_bias": abs(bias),
+                "abs_normalized_bias": abs_normalized_bias,
                 "coverage_80": None,
                 "coverage_95": None,
                 "pinball_loss_p50": None,
