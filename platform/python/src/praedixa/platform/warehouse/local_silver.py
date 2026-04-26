@@ -7,13 +7,18 @@ from pathlib import Path
 from praedixa.platform.runtime.constants import DEFAULT_BRONZE_SCHEMA
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_DBT_SELECT
 from praedixa.platform.runtime.constants import DEFAULT_SILVER_SCHEMA
-from praedixa.platform.datasets.standardization.supplemental_corpus import build_supplemental_corpus_frame
+from praedixa.platform.datasets.standardization.supplemental_corpus import (
+    DEFAULT_OUTPUT_PATH as DEFAULT_SUPPLEMENTAL_CORPUS_OUTPUT_PATH,
+)
+from praedixa.platform.datasets.standardization.supplemental_corpus import (
+    build_supplemental_corpus_standardized_dataset,
+)
 from praedixa.platform.runtime.paths import LOCAL_DUCKDB_PATH
 from praedixa.platform.runtime.paths import SOURCES_DIR
 from praedixa.platform.runtime.warehouse import WarehouseRuntimeConfig
 from praedixa.platform.warehouse.bronze_specs import default_active_core_bronze_specs
 from praedixa.platform.warehouse.bronze_specs import default_open_exogenous_bronze_specs
-from praedixa.platform.warehouse.bronze_specs import supplemental_corpus_daily_ddl
+from praedixa.platform.warehouse.bronze_specs import supplemental_corpus_daily_spec
 from praedixa.platform.warehouse.dbt_runner import dbt_packages_installed
 from praedixa.platform.warehouse.dbt_runner import DbtStageRunConfig
 from praedixa.platform.warehouse.dbt_runner import DbtStageRunner
@@ -23,9 +28,10 @@ from praedixa.platform.warehouse.dbt_runner import resolve_dbt_selector
 from praedixa.platform.warehouse.dbt_runner import resolve_dbt_test_exclude
 from praedixa.platform.warehouse.dbt_runner import resolve_dbt_test_selector
 from praedixa.platform.warehouse.dbt_runner import resolve_warehouse_project_dir
-from praedixa.platform.warehouse.dbt_runner import resolve_warehouse_project_dir_or_raise
+from praedixa.platform.warehouse.dbt_runner import (
+    resolve_warehouse_project_dir_or_raise,
+)
 from praedixa.platform.warehouse.dbt_runner import run_dbt_command
-from praedixa.platform.warehouse.local_bronze import load_inline_bronze_frame
 from praedixa.platform.warehouse.local_bronze import load_selected_bronze_specs
 
 logger = logging.getLogger(__name__)
@@ -77,10 +83,14 @@ def load_core_bronze_sources(
     config: LocalSilverRunConfig,
     env: dict[str, str],
 ) -> dict[str, object] | None:
-    """Load core local bronze inputs and the inline supplemental corpus."""
+    """Load core local bronze inputs and the standardized supplemental corpus."""
 
     if not config.run_bronze_load:
         return None
+    supplemental_corpus_path = build_supplemental_corpus_standardized_dataset(
+        output_path=_supplemental_corpus_output_path(config.data_dir),
+        raw_dir=config.data_dir / "commercial_datasets" / "raw",
+    )
     bronze_specs = default_active_core_bronze_specs(
         data_dir=config.data_dir,
         schema_name=env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"],
@@ -93,20 +103,28 @@ def load_core_bronze_sources(
             open_exogenous_dir=env.get("PRAEDIXA_OPEN_EXOGENOUS_DIR"),
         ),
     ]
+    if supplemental_corpus_path is not None:
+        bronze_specs.append(
+            supplemental_corpus_daily_spec(
+                source_path=supplemental_corpus_path,
+                schema_name=env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"],
+            )
+        )
     bronze_load = load_selected_bronze_specs(specs=bronze_specs)
-    supplemental_corpus_frame = build_supplemental_corpus_frame(
-        raw_dir=config.data_dir / "commercial_datasets" / "raw",
-    )
-    if supplemental_corpus_frame is None:
-        bronze_load["inline_supplemental_corpus_row_counts"] = {}
-        return bronze_load
-    bronze_load["inline_supplemental_corpus_row_counts"] = load_inline_bronze_frame(
-        table_name="bronze_supplemental_corpus_daily",
-        ddl=supplemental_corpus_daily_ddl(env["PRAEDIXA_DUCKDB_BRONZE_SCHEMA"]),
-        frame=supplemental_corpus_frame.to_pandas(),
-        source_name="supplemental_corpus_runtime",
-    )
+    if supplemental_corpus_path is not None:
+        bronze_load["supplemental_corpus_path"] = str(supplemental_corpus_path)
     return bronze_load
+
+
+def _supplemental_corpus_output_path(data_dir: Path) -> Path:
+    if data_dir == DEFAULT_DATA_DIR:
+        return DEFAULT_SUPPLEMENTAL_CORPUS_OUTPUT_PATH
+    return (
+        data_dir.parent
+        / "datasets"
+        / "global_dataset"
+        / "supplemental_corpus_daily.parquet"
+    )
 
 
 def run_local_silver(config: LocalSilverRunConfig) -> dict[str, object]:

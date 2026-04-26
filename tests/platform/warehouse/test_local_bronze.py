@@ -11,7 +11,11 @@ import duckdb
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
 for path in (PROJECT_ROOT, PLATFORM_SRC):
     if str(path) not in sys.path:
@@ -35,7 +39,9 @@ from praedixa.platform.warehouse.local_bronze import (  # noqa: E402
 )
 
 
-def _build_stale_open_location_metadata_spec(root: Path) -> tuple[BronzeTableSpec, Path]:
+def _build_stale_open_location_metadata_spec(
+    root: Path,
+) -> tuple[BronzeTableSpec, Path]:
     source_path = root / "location_metadata.csv"
     source_path.write_text(
         "dataset_source,location_id,site_format\nfreshretail,site_1,bakery\n",
@@ -84,7 +90,9 @@ def _create_stale_open_location_metadata_table(local_db_path: Path) -> None:
 def _assert_stale_schema_loaded(local_db_path: Path) -> None:
     connection = duckdb.connect(str(local_db_path))
     try:
-        columns = connection.execute("PRAGMA table_info('bronze.bronze_open_location_metadata')").fetchall()
+        columns = connection.execute(
+            "PRAGMA table_info('bronze.bronze_open_location_metadata')"
+        ).fetchall()
         loaded_row = connection.execute(
             "SELECT dataset_source, location_id FROM bronze.bronze_open_location_metadata"
         ).fetchone()
@@ -114,7 +122,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self._write_supplemental_corpus_parquet(global_dataset_root)
 
     def _write_freshretail_parquets(self, bakery_root: Path) -> None:
-        pd.DataFrame([self._freshretail_row(product_id=10000, dt="2024-01-01", sale_amount=12.0)]).to_parquet(
+        pd.DataFrame(
+            [self._freshretail_row(product_id=10000, dt="2024-01-01", sale_amount=12.0)]
+        ).to_parquet(
             bakery_root / "data_train.parquet",
             index=False,
         )
@@ -292,7 +302,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("bronze_bakery_order_lines", table_names)
         self.assertIn("bronze_open_weather_daily", table_names)
 
-    def test_default_active_bronze_specs_declares_commercial_and_exogenous_sources(self) -> None:
+    def test_default_active_bronze_specs_declares_commercial_and_exogenous_sources(
+        self,
+    ) -> None:
         specs = default_active_bronze_specs("data", schema_name="bronze")
         source_names = {spec.source_name for spec in specs}
         table_names = {spec.table_name for spec in specs}
@@ -301,9 +313,15 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("freshretail_train", source_names)
         self.assertIn("freshretail_val", source_names)
         self.assertIn("bakery", source_names)
+        self.assertIn("synthetic_foodservice_daily", source_names)
         self.assertIn("open_location_catchment", source_names)
         self.assertIn("bronze_open_location_catchment", table_names)
+        self.assertIn("bronze_synthetic_foodservice_daily", table_names)
         self.assertEqual(policy_by_source["bakery"], "bakery")
+        self.assertEqual(
+            policy_by_source["synthetic_foodservice_daily"],
+            "synthetic_foodservice_qsr",
+        )
         self.assertEqual(policy_by_source["open_weather_daily"], "open_meteo_api")
 
     def test_prepare_bronze_batch_renames_bakery_columns(self) -> None:
@@ -436,8 +454,12 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                 source_name="bakery",
             )
 
-            first_result = backup_local_bronze_sources([spec], backup_root=root / "backup")
-            second_result = backup_local_bronze_sources([spec], backup_root=root / "backup")
+            first_result = backup_local_bronze_sources(
+                [spec], backup_root=root / "backup"
+            )
+            second_result = backup_local_bronze_sources(
+                [spec], backup_root=root / "backup"
+            )
 
             self.assertEqual(first_result["copied_count"], 1)
             self.assertEqual(second_result["source_count"], 1)
@@ -463,7 +485,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             self.assertIn("source_manifest_path", result)
             _assert_stale_schema_loaded(local_db_path)
 
-    def test_load_all_bronze_tables_loads_into_local_duckdb_and_keeps_backup(self) -> None:
+    def test_load_all_bronze_tables_loads_into_local_duckdb_and_keeps_backup(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             self._build_bronze_fixture_root(root)

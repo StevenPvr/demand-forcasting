@@ -398,6 +398,8 @@ split_labeled as (
             when ranks.date_rank <= cast(floor(ranks.date_count * 0.6) as bigint) then 'train'
             else 'val'
         end as split_bucket
+        {% elif split_strategy == "train_only" %}
+        'train' as split_bucket
         {% else %}
         cast(null as varchar) as split_bucket
         {% endif %}

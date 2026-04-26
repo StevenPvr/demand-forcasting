@@ -16,6 +16,11 @@ unioned as (
     from {{ ref("silver_supplemental_corpus_daily_product_demand") }}
     union all by name
     select
+        30 as source_priority,
+        *
+    from {{ ref("silver_synthetic_foodservice_daily_product_demand") }}
+    union all by name
+    select
         10 as source_priority,
         *
     from {{ ref("silver_bakery_daily_product_demand") }}

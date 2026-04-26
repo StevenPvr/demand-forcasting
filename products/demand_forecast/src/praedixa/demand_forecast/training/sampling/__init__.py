@@ -10,6 +10,7 @@ from praedixa.demand_forecast.training.sampling.frame import (
     sample_frame_stratified_by_date_store,
 )
 from praedixa.demand_forecast.training.sampling.metadata import (
+    load_complete_series_sampling_metadata_from_relation,
     load_gold_split_sampling_metadata,
     load_sampling_metadata_from_relation,
     relation_sampling_requires_top_up,
@@ -23,6 +24,7 @@ from praedixa.demand_forecast.training.sampling.models import (
     RelationSamplingSpec,
 )
 from praedixa.demand_forecast.training.sampling.queries import (
+    build_complete_series_sampling_query_for_relation,
     build_gold_sampling_spec,
     build_gold_split_sampling_query,
     build_sampling_query_for_relation,
@@ -34,9 +36,11 @@ __all__ = [
     "GoldSplitSamplingSpec",
     "RelationSamplingQuery",
     "RelationSamplingSpec",
+    "build_complete_series_sampling_query_for_relation",
     "build_gold_sampling_spec",
     "build_gold_split_sampling_query",
     "build_sampling_query_for_relation",
+    "load_complete_series_sampling_metadata_from_relation",
     "load_gold_split_sampling_metadata",
     "load_sampling_metadata_from_relation",
     "log_sampling_summary",

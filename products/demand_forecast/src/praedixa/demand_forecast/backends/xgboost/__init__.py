@@ -15,10 +15,16 @@ from praedixa.demand_forecast.backends.xgboost.model_fit import (
     fit_xgboost_model_and_predict_validation,
     predict_with_xgboost_model,
 )
+from praedixa.demand_forecast.backends.xgboost.runtime import (
+    XGBoostRuntimeResolution,
+    resolve_xgboost_runtime_profile,
+    xgboost_cuda_preflight_available,
+)
 
 __all__ = [
     "DEFAULT_XGBOOST_MODEL_PARAMS",
     "FittedXGBoostModel",
+    "XGBoostRuntimeResolution",
     "XGBoostBackendNotReadyError",
     "fit_xgboost_model",
     "fit_xgboost_model_and_predict_validation",
@@ -26,4 +32,6 @@ __all__ = [
     "predict_with_xgboost_model",
     "raise_if_xgboost_backend_required",
     "resolve_xgboost_model_params",
+    "resolve_xgboost_runtime_profile",
+    "xgboost_cuda_preflight_available",
 ]

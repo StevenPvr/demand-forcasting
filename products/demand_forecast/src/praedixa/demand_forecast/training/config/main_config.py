@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from praedixa.demand_forecast.backends.xgboost.runtime import (
+    XGBoostRuntimeResolution,
+    resolve_xgboost_runtime_profile,
+)
+
 
 def _load_optimisation_main_defaults() -> tuple[
     str, str, str, int, int, str, float, float, int, int, str, float, float
@@ -117,12 +122,8 @@ def mps_available() -> bool:
 
 def validate_runtime_profile(requested_profile: str, *, model_backend: str) -> None:
     if model_backend == "xgboost":
-        if requested_profile == "local_cpu":
-            return
-        raise RuntimeError(
-            "The XGBoost optimisation backend is currently wired as a CPU backend. "
-            "Edit `OFFICIAL_OPTIMISATION_MAIN_CONFIG.runtime_profile` yourself."
-        )
+        resolve_xgboost_runtime_profile(requested_profile)
+        return
     if requested_profile == "local_cpu":
         return
     if requested_profile == "mac_metal":
@@ -153,12 +154,26 @@ def _default_output_dir() -> Path:
 
 def _default_xgboost_n_jobs(runtime_profile: str) -> int:
     from praedixa.demand_forecast.training.config.constants import (
+        DEFAULT_XGBOOST_CUDA_MAX_THREADS,
         DEFAULT_XGBOOST_LOCAL_CPU_MAX_THREADS,
     )
 
     requested_threads = os.cpu_count() or 1
     if runtime_profile == "local_cpu":
         return max(1, min(requested_threads, DEFAULT_XGBOOST_LOCAL_CPU_MAX_THREADS))
+    return max(1, min(requested_threads, DEFAULT_XGBOOST_CUDA_MAX_THREADS))
+
+
+def _default_tft_n_jobs(runtime_profile: str) -> int:
+    from praedixa.demand_forecast.training.config.constants import (
+        DEFAULT_TFT_LOCAL_CPU_MAX_THREADS,
+    )
+
+    requested_threads = os.cpu_count() or 1
+    if runtime_profile == "local_cpu":
+        return max(1, min(requested_threads, DEFAULT_TFT_LOCAL_CPU_MAX_THREADS))
+    if runtime_profile == "mac_metal":
+        return 1
     return max(1, requested_threads)
 
 
@@ -169,7 +184,13 @@ def _is_h100_cuda_device() -> bool:
 
 def _default_runtime_profile(*, model_backend: str = DEFAULT_MODEL_BACKEND) -> str:
     if model_backend == "xgboost":
-        return DEFAULT_RUNTIME_PROFILE
+        from praedixa.demand_forecast.training.config.constants import (
+            DEFAULT_XGBOOST_RUNTIME_PROFILE,
+        )
+
+        return resolve_xgboost_runtime_profile(
+            DEFAULT_XGBOOST_RUNTIME_PROFILE
+        ).runtime_profile
     if _is_h100_cuda_device():
         return "nvidia_h100"
     if _cuda_available():
@@ -179,8 +200,10 @@ def _default_runtime_profile(*, model_backend: str = DEFAULT_MODEL_BACKEND) -> s
 
 def _default_budget_for_runtime(
     runtime_profile: str,
+    *,
+    model_backend: str = DEFAULT_MODEL_BACKEND,
 ) -> tuple[int, int, str, float, float]:
-    if runtime_profile == "nvidia_h100":
+    if model_backend != "xgboost" and runtime_profile == "nvidia_h100":
         return (
             DEFAULT_H100_N_FOLDS,
             DEFAULT_H100_MAX_TRIALS,
@@ -226,23 +249,43 @@ def build_tft_optimisation_main_config() -> OptimisationMainConfig:
 def build_optimisation_model_params(
     config: OptimisationMainConfig,
 ) -> dict[str, object]:
-    n_jobs = (
-        _default_xgboost_n_jobs(config.runtime_profile)
-        if config.model_backend == "xgboost"
-        else os.cpu_count() or 1
-    )
+    xgboost_runtime: XGBoostRuntimeResolution | None = None
+    runtime_profile = config.runtime_profile
+    if config.model_backend == "xgboost":
+        xgboost_runtime = resolve_xgboost_runtime_profile(config.runtime_profile)
+        runtime_profile = xgboost_runtime.runtime_profile
+        n_jobs = _default_xgboost_n_jobs(runtime_profile)
+    else:
+        n_jobs = _default_tft_n_jobs(runtime_profile)
     model_params: dict[str, object] = {
         "n_jobs": n_jobs,
         "model_backend": config.model_backend,
-        "runtime_profile": config.runtime_profile,
+        "runtime_profile": runtime_profile,
         "stage_budget": config.stage_budget,
     }
-    if config.model_backend == "xgboost":
+    if xgboost_runtime is not None:
         from praedixa.demand_forecast.training.config.constants import (
+            DEFAULT_XGBOOST_CUDA_FOLD_WORKERS,
             DEFAULT_XGBOOST_LOCAL_CPU_FOLD_WORKERS,
         )
 
-        model_params["max_parallel_fold_workers"] = DEFAULT_XGBOOST_LOCAL_CPU_FOLD_WORKERS
+        model_params["requested_runtime_profile"] = xgboost_runtime.requested_profile
+        model_params["device"] = xgboost_runtime.device
+        model_params["tree_method"] = xgboost_runtime.tree_method
+        model_params["accelerator"] = xgboost_runtime.accelerator
+        model_params["devices"] = xgboost_runtime.devices
+        model_params["cuda_available"] = xgboost_runtime.cuda_available
+        model_params["cuda_device_name"] = xgboost_runtime.cuda_device_name
+        if xgboost_runtime.fallback_reason is not None:
+            model_params["runtime_fallback_reason"] = xgboost_runtime.fallback_reason
+        if xgboost_runtime.device == "cuda":
+            model_params["max_parallel_fold_workers"] = (
+                DEFAULT_XGBOOST_CUDA_FOLD_WORKERS
+            )
+        else:
+            model_params["max_parallel_fold_workers"] = (
+                DEFAULT_XGBOOST_LOCAL_CPU_FOLD_WORKERS
+            )
     if config.tensorboard_logdir is not None:
         model_params["tensorboard_logdir"] = str(config.tensorboard_logdir)
     return model_params
@@ -258,7 +301,7 @@ def _build_backend_optimisation_main_config(
         stage_budget,
         train_sample_fraction,
         tuning_sample_fraction,
-    ) = _default_budget_for_runtime(runtime_profile)
+    ) = _default_budget_for_runtime(runtime_profile, model_backend=model_backend)
     return OptimisationMainConfig(
         model_backend=model_backend,
         runtime_profile=runtime_profile,

@@ -293,8 +293,21 @@ Le backend par défaut reste `xgboost` dans `SUPPORTED_MODEL_BACKENDS = ("xgboos
 Concrètement :
 
 - `xgboost` reste le chemin câblé par défaut pour les runs courants
+- `xgboost` sélectionne automatiquement CUDA quand le runtime XGBoost le supporte,
+  sinon il retombe sur CPU
 - `tft` est la direction cible pour le backend modèle de référence
 - les contrats `gold`, bundle, feature mapping et artefacts sont progressivement durcis pour cette bascule
+
+### Runtime XGBoost
+
+Le profil officiel XGBoost est `auto` au niveau du backend. Au démarrage, le
+code exécute un mini preflight XGBoost CUDA réel, pas seulement un test Torch.
+
+- preflight CUDA OK : `device="cuda"`, `tree_method="hist"`,
+  `QuantileDMatrix`, folds Optuna sérialisés sur un GPU;
+- preflight CUDA KO : `device="cpu"`, `tree_method="hist"`, folds Optuna
+  parallélisés côté CPU;
+- Metal/MPS n'est pas supporté par XGBoost et reste rejeté explicitement.
 
 ## Cold start, first-party et synthétique
 

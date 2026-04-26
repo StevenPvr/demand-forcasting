@@ -6,7 +6,10 @@ from typing import Any, cast
 import duckdb
 import pandas as pd
 
-from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN
+from praedixa.demand_forecast.backends.tft.feature_mapping import (
+    TFT_EXPLICIT_ROLE_BY_COLUMN,
+)
+from praedixa.demand_forecast.training.sampling.common import series_key_sql
 from praedixa.demand_forecast.training.sampling.models import (
     DEFAULT_IDENTIFIER_FEATURE_COLS,
     GoldSplitSamplingSpec,
@@ -32,6 +35,15 @@ def _per_stratum_primary_sample_expr(sample_fraction: float) -> str:
     return f"cast(floor(stratum_rows * {sample_fraction:.12f}) as bigint)"
 
 
+def _per_series_stratum_sample_expr(sample_fraction: float) -> str:
+    return (
+        "least("
+        "stratum_row_count, "
+        f"greatest(1, cast(ceil(stratum_row_count * {sample_fraction:.12f}) as bigint))"
+        ")"
+    )
+
+
 def load_sampling_metadata_from_relation(
     connection: duckdb.DuckDBPyConnection,
     *,
@@ -50,6 +62,29 @@ def load_sampling_metadata_from_relation(
         metadata_projection_cols=metadata_projection_cols,
     )
     return _relation_sampling_metadata_payload(sampled_counts=sampled_counts, spec=spec)
+
+
+def load_complete_series_sampling_metadata_from_relation(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    spec: RelationSamplingSpec,
+    available_columns: list[str],
+    series_col: str,
+) -> dict[str, object]:
+    metadata_projection_cols = _complete_series_metadata_projection_columns(
+        available_columns=available_columns,
+        dataset_source_col=spec.dataset_source_col,
+        date_col=spec.date_col,
+        sample_store_col=spec.sample_store_col,
+        series_col=series_col,
+    )
+    sampled_counts = _complete_series_relation_sampling_counts(
+        connection,
+        spec=spec,
+        metadata_projection_cols=metadata_projection_cols,
+        series_col=series_col,
+    )
+    return _gold_sampling_metadata_payload(sampled_counts, spec=spec)
 
 
 def _relation_sampling_metadata_payload(
@@ -104,13 +139,33 @@ def _relation_sampling_metadata_payload(
 
 
 def _metadata_projection_columns(
-    *, available_columns: list[str], dataset_source_col: str, date_col: str, sample_store_col: str
+    *,
+    available_columns: list[str],
+    dataset_source_col: str,
+    date_col: str,
+    sample_store_col: str,
 ) -> list[str]:
     projection_cols = [dataset_source_col, date_col, sample_store_col]
     for candidate in ("product_id", "client_id"):
         if candidate in available_columns and candidate not in projection_cols:
             projection_cols.append(candidate)
     return projection_cols
+
+
+def _complete_series_metadata_projection_columns(
+    *,
+    available_columns: list[str],
+    dataset_source_col: str,
+    date_col: str,
+    sample_store_col: str,
+    series_col: str,
+) -> list[str]:
+    projection_cols = [dataset_source_col, date_col, sample_store_col, series_col]
+    return [
+        column
+        for column in dict.fromkeys(projection_cols)
+        if column in available_columns
+    ]
 
 
 def _relation_sampling_dataset_metadata(
@@ -192,6 +247,98 @@ def _relation_sampling_counts(
     ).fetchall()
 
 
+def _complete_series_relation_sampling_counts(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    spec: RelationSamplingSpec,
+    metadata_projection_cols: list[str],
+    series_col: str,
+) -> list[tuple[object, object, object, object, object, object, object, object]]:
+    select_list = ", ".join(metadata_projection_cols)
+    series_key = f"coalesce(cast({series_col} as varchar), '')"
+    return connection.execute(
+        f"""
+        with scoped as (
+            select {select_list}
+            from ({spec.relation_sql}) as relation_source
+        ),
+        series_population as (
+            select
+                {spec.dataset_source_col} as dataset_source,
+                {spec.sample_store_col} as sample_store,
+                {series_key} as series_key,
+                count(*) as series_rows
+            from scoped
+            group by 1, 2, 3
+        ),
+        ranked_series as (
+            select
+                *,
+                row_number() over (
+                    partition by dataset_source, sample_store
+                    order by hash(series_key)
+                ) as rn_sample,
+                count(*) over (
+                    partition by dataset_source, sample_store
+                ) as stratum_row_count
+            from series_population
+        ),
+        selected_series as (
+            select *
+            from ranked_series
+            where rn_sample <= {_per_series_stratum_sample_expr(spec.sample_fraction)}
+        ),
+        dataset_stats as (
+            select
+                {spec.dataset_source_col} as dataset_source,
+                count(*) as original_rows,
+                count(distinct {spec.sample_store_col}) as store_count,
+                count(distinct {spec.date_col}) as unique_dates
+            from scoped
+            group by 1
+        ),
+        strata_stats as (
+            select dataset_source, count(*) as strata_count
+            from (
+                select distinct
+                    {spec.dataset_source_col} as dataset_source,
+                    {spec.date_col} as sampled_dt,
+                    {spec.sample_store_col} as sample_store
+                from scoped
+            ) as distinct_strata
+            group by 1
+        ),
+        series_stats as (
+            select dataset_source, count(*) as series_count
+            from series_population
+            group by 1
+        ),
+        sampled_stats as (
+            select
+                dataset_source,
+                sum(series_rows) as sampled_rows,
+                count(*) as sampled_series_count
+            from selected_series
+            group by 1
+        )
+        select
+            dataset_stats.dataset_source,
+            dataset_stats.original_rows,
+            coalesce(sampled_stats.sampled_rows, 0) as sampled_rows,
+            dataset_stats.store_count,
+            dataset_stats.unique_dates,
+            strata_stats.strata_count,
+            series_stats.series_count,
+            coalesce(sampled_stats.sampled_series_count, 0) as sampled_series_count
+        from dataset_stats
+        inner join strata_stats using (dataset_source)
+        inner join series_stats using (dataset_source)
+        left join sampled_stats using (dataset_source)
+        order by 1
+        """
+    ).fetchall()
+
+
 def _target_dataset_sample_size(
     *,
     dataset_original_rows: int,
@@ -237,7 +384,9 @@ def resolve_gold_projection_columns(
 
 
 def _is_numeric_or_bool_projection_column(series: pd.Series) -> bool:
-    return bool(pd.api.types.is_bool_dtype(series) or pd.api.types.is_numeric_dtype(series))
+    return bool(
+        pd.api.types.is_bool_dtype(series) or pd.api.types.is_numeric_dtype(series)
+    )
 
 
 def _is_explicit_model_feature_projection_column(column: str) -> bool:
@@ -249,28 +398,88 @@ def load_gold_split_sampling_metadata(
     *,
     spec: GoldSplitSamplingSpec,
 ) -> dict[str, object]:
+    series_key = series_key_sql(None, sample_store_col=spec.sample_store_col)
     original_counts = connection.execute(
         f"""
-        with strata as (
+        with scoped as (
             select
                 {spec.dataset_source_col} as dataset_source,
                 {spec.date_col} as sampled_dt,
                 {spec.sample_store_col} as sample_store,
-                count(*) as stratum_rows
+                {series_key} as series_key
             from {spec.gold_table}
             where split_bucket = '{spec.split_bucket}'
               and {dataset_source_not_in_filter(spec.dataset_source_col, spec.excluded_dataset_sources)}
+        ),
+        series_population as (
+            select
+                dataset_source,
+                sample_store,
+                series_key,
+                count(*) as series_rows
+            from scoped
             group by 1, 2, 3
+        ),
+        ranked_series as (
+            select
+                *,
+                row_number() over (
+                    partition by dataset_source, sample_store
+                    order by hash(series_key)
+                ) as rn_sample,
+                count(*) over (
+                    partition by dataset_source, sample_store
+                ) as stratum_row_count
+            from series_population
+        ),
+        selected_series as (
+            select *
+            from ranked_series
+            where rn_sample <= {_per_series_stratum_sample_expr(spec.sample_fraction)}
+        ),
+        dataset_stats as (
+            select
+                dataset_source,
+                count(*) as original_rows,
+                count(distinct sample_store) as store_count,
+                count(distinct sampled_dt) as unique_dates
+            from scoped
+            group by 1
+        ),
+        strata_stats as (
+            select dataset_source, count(*) as strata_count
+            from (
+                select distinct dataset_source, sampled_dt, sample_store
+                from scoped
+            ) as distinct_strata
+            group by 1
+        ),
+        series_stats as (
+            select dataset_source, count(*) as series_count
+            from series_population
+            group by 1
+        ),
+        sampled_stats as (
+            select
+                dataset_source,
+                sum(series_rows) as sampled_rows,
+                count(*) as sampled_series_count
+            from selected_series
+            group by 1
         )
         select
-            dataset_source,
-            sum(stratum_rows) as original_rows,
-            sum({_per_stratum_primary_sample_expr(spec.sample_fraction)}) as sampled_rows,
-            count(distinct sample_store) as store_count,
-            count(distinct sampled_dt) as unique_dates,
-            count(*) as strata_count
-        from strata
-        group by 1
+            dataset_stats.dataset_source,
+            dataset_stats.original_rows,
+            coalesce(sampled_stats.sampled_rows, 0) as sampled_rows,
+            dataset_stats.store_count,
+            dataset_stats.unique_dates,
+            strata_stats.strata_count,
+            series_stats.series_count,
+            coalesce(sampled_stats.sampled_series_count, 0) as sampled_series_count
+        from dataset_stats
+        inner join strata_stats using (dataset_source)
+        inner join series_stats using (dataset_source)
+        left join sampled_stats using (dataset_source)
         order by 1
         """
     ).fetchall()
@@ -278,14 +487,25 @@ def load_gold_split_sampling_metadata(
 
 
 def _gold_sampling_metadata_payload(
-    original_counts: list[tuple[object, object, object, object, object, object]],
+    original_counts: list[
+        tuple[object, object, object, object, object, object, object, object]
+    ],
     *,
-    spec: GoldSplitSamplingSpec,
+    spec: GoldSplitSamplingSpec | RelationSamplingSpec,
 ) -> dict[str, object]:
     datasets: dict[str, dict[str, int | float]] = {}
     total_original_rows = 0
     total_sampled_rows = 0
-    for dataset_source, original_rows, sampled_rows, store_count, unique_dates, strata_count in original_counts:
+    for (
+        dataset_source,
+        original_rows,
+        sampled_rows,
+        store_count,
+        unique_dates,
+        strata_count,
+        series_count,
+        sampled_series_count,
+    ) in original_counts:
         dataset_original_rows = int(cast(Any, original_rows))
         dataset_sampled_rows = int(cast(Any, sampled_rows))
         datasets[str(dataset_source)] = {
@@ -299,12 +519,14 @@ def _gold_sampling_metadata_payload(
             "store_count": int(cast(Any, store_count)),
             "unique_dates": int(cast(Any, unique_dates)),
             "strata_count": int(cast(Any, strata_count)),
+            "series_count": int(cast(Any, series_count)),
+            "sampled_series_count": int(cast(Any, sampled_series_count)),
         }
         total_original_rows += dataset_original_rows
         total_sampled_rows += dataset_sampled_rows
     return {
         "sample_fraction": float(spec.sample_fraction),
-        "sample_strategy": "date_store_stratified",
+        "sample_strategy": "complete_series_by_dataset_store",
         "sample_store_col": spec.sample_store_col,
         "original_rows": total_original_rows,
         "sampled_rows": total_sampled_rows,
@@ -333,7 +555,9 @@ def refresh_sampling_metadata_from_sampled_frame(
         },
     }
     refreshed_datasets = cast(dict[str, dict[str, object]], refreshed["datasets"])
-    sampled_counts = sampled_frame[dataset_source_col].value_counts(dropna=False).sort_index()
+    sampled_counts = (
+        sampled_frame[dataset_source_col].value_counts(dropna=False).sort_index()
+    )
     refreshed["sampled_rows"] = int(len(sampled_frame))
     refreshed["effective_sample_fraction"] = _effective_sample_fraction(
         sampled_rows=int(len(sampled_frame)),
@@ -370,9 +594,22 @@ def _refreshed_dataset_metadata(
             "original_rows": sampled_rows,
             "sample_fraction": float(cast(Any, metadata["sample_fraction"])),
             "effective_sample_fraction": 1.0,
-            "store_count": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source, sample_store_col].nunique()),
-            "unique_dates": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source, date_col].nunique()),
-            "strata_count": int(sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source].groupby([date_col, sample_store_col], sort=False).ngroups),
+            "store_count": int(
+                sampled_frame.loc[
+                    sampled_frame[dataset_source_col] == dataset_source,
+                    sample_store_col,
+                ].nunique()
+            ),
+            "unique_dates": int(
+                sampled_frame.loc[
+                    sampled_frame[dataset_source_col] == dataset_source, date_col
+                ].nunique()
+            ),
+            "strata_count": int(
+                sampled_frame.loc[sampled_frame[dataset_source_col] == dataset_source]
+                .groupby([date_col, sample_store_col], sort=False)
+                .ngroups
+            ),
             "sampled_rows": sampled_rows,
         }
     updated = dict(existing)
@@ -386,10 +623,14 @@ def _refreshed_dataset_metadata(
 
 def relation_sampling_requires_top_up(metadata: dict[str, object]) -> bool:
     datasets = cast(dict[str, dict[str, object]], metadata["datasets"])
-    return any(bool(dataset_metadata.get("top_up_required", False)) for dataset_metadata in datasets.values())
+    return any(
+        bool(dataset_metadata.get("top_up_required", False))
+        for dataset_metadata in datasets.values()
+    )
 
 
 __all__ = [
+    "load_complete_series_sampling_metadata_from_relation",
     "load_gold_split_sampling_metadata",
     "load_sampling_metadata_from_relation",
     "relation_sampling_requires_top_up",

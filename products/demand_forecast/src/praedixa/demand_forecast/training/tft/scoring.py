@@ -36,6 +36,7 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (
 from praedixa.demand_forecast.backends.tft.model_common import (
     lazy_import_tft_dependencies,
     resolve_model_params,
+    suppress_tft_runtime_noise,
 )
 from praedixa.demand_forecast.backends.tft.model_fit import (
     calibrate_tft_learning_rate,
@@ -56,6 +57,7 @@ from praedixa.demand_forecast.backends.tft.training_dataset import (
     filter_groups_with_sufficient_history,
     fit_real_feature_scalers,
 )
+from praedixa.demand_forecast.backends.tft.training_runtime import seed_tft_runtime
 from praedixa.demand_forecast.contracts.targets import TargetContract
 from praedixa.demand_forecast.training.shared.metrics import compute_wape
 from praedixa.demand_forecast.training.baselines import (
@@ -857,6 +859,7 @@ def _build_cached_fold_core_artifacts(
     feature_cols: list[str],
     target_contract: TargetContract,
     core_max_encoder_length: int,
+    resolved_params: dict[str, object],
     logger: logging.Logger,
 ) -> CachedFoldCoreArtifacts:
     prep_start = time.perf_counter()
@@ -912,6 +915,8 @@ def _build_cached_fold_core_artifacts(
         .to_numpy(dtype=np.float32, copy=False)
     )
     imports = lazy_import_tft_dependencies()
+    with suppress_tft_runtime_noise():
+        seed_tft_runtime(imports, resolved_params)
     training_frame = _build_core_training_frame(
         fold_number=fold_number,
         fold_train_frame=fold_train_frame,
@@ -1064,6 +1069,7 @@ def _cached_fold_cores(
     feature_cols: list[str],
     target_contract: TargetContract,
     core_max_encoder_length: int,
+    resolved_params: dict[str, object],
     logger: logging.Logger,
 ) -> dict[int, CachedFoldCoreArtifacts]:
     results_by_fold_id: dict[int, CachedFoldCoreArtifacts] = {}
@@ -1099,6 +1105,7 @@ def _cached_fold_cores(
             feature_cols=feature_cols,
             target_contract=target_contract,
             core_max_encoder_length=core_max_encoder_length,
+            resolved_params=resolved_params,
             logger=logger,
         )
         with _FOLD_CORE_CACHE_LOCK:
@@ -1136,6 +1143,7 @@ def _cached_fold_artifacts(
         feature_cols=feature_cols,
         target_contract=target_contract,
         core_max_encoder_length=core_max_encoder_length,
+        resolved_params=resolved_params,
         logger=logger,
     )
     results_by_fold_id: dict[int, CachedFoldArtifacts] = {}
@@ -1193,7 +1201,10 @@ def _resolved_tft_tuning_inputs(
                 "enable_csv_logger": False,
                 "enable_lr_monitor": False,
                 "enable_validation_metric_logging": False,
+                "enable_business_validation_metrics": False,
                 "enable_device_stats_monitor": False,
+                "validation_monitor_metric": "val_loss",
+                "loss_patience": 0,
                 "log_every_n_steps": 50,
                 "tensorboard_logdir": None,
             }
@@ -1299,6 +1310,7 @@ def prewarm_tft_fold_cores_for_optuna(
         feature_cols=feature_cols,
         target_contract=target_contract,
         core_max_encoder_length=core_max_encoder_length,
+        resolved_params=resolved_params,
         logger=logger,
     )
     duration_seconds = time.perf_counter() - warmup_start
@@ -1538,6 +1550,7 @@ def _build_single_fold_artifact(
     tuning_dataset_sources: np.ndarray,
     feature_cols: list[str],
     target_contract: TargetContract,
+    resolved_params: dict[str, object],
     max_encoder_length: int,
     core_max_encoder_length: int,
     logger: logging.Logger,
@@ -1550,6 +1563,7 @@ def _build_single_fold_artifact(
         feature_cols=feature_cols,
         target_contract=target_contract,
         core_max_encoder_length=core_max_encoder_length,
+        resolved_params=resolved_params,
         logger=logger,
     )
     cached_fold = _dataset_artifacts_from_core(
@@ -1595,6 +1609,7 @@ def _resolve_memory_safe_learning_rate(
         tuning_dataset_sources=tuning_dataset_sources,
         feature_cols=feature_cols,
         target_contract=target_contract,
+        resolved_params=resolved_params,
         max_encoder_length=max_encoder_length,
         core_max_encoder_length=core_max_encoder_length,
         logger=logger,
@@ -1730,6 +1745,7 @@ def _iterative_trial_scoring_memory_safe(
                 tuning_dataset_sources=tuning_dataset_sources,
                 feature_cols=feature_cols,
                 target_contract=target_contract,
+                resolved_params=resolved_params,
                 max_encoder_length=max_encoder_length,
                 core_max_encoder_length=core_max_encoder_length,
                 logger=logger,

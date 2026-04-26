@@ -5,7 +5,11 @@ import sys
 import unittest
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -17,12 +21,27 @@ from praedixa.platform.governance.source_registry import (  # noqa: E402
 
 
 class SourceRegistryTests(unittest.TestCase):
-    def test_allowed_training_dataset_sources_excludes_blocked_and_non_training_sources(self) -> None:
+    def test_allowed_training_dataset_sources_excludes_blocked_and_non_training_sources(
+        self,
+    ) -> None:
         allowed_sources = allowed_training_dataset_sources()
 
         self.assertEqual(
             allowed_sources,
-            ["bakery", "first_party_daily", "freshretail", "freshretail_lt"],
+            [
+                "bakery",
+                "first_party_daily",
+                "freshretail",
+                "freshretail_lt",
+                "m5_forecasting_accuracy",
+                "perishable_goods_management",
+                "restaurant_sales_report",
+                "synthetic_foodservice_bakery",
+                "synthetic_foodservice_qsr",
+                "synthetic_foodservice_restaurant",
+                "uci_online_retail",
+                "uci_online_retail_ii",
+            ],
         )
         self.assertNotIn("open_meteo_api", allowed_sources)
 
@@ -39,14 +58,28 @@ class SourceRegistryTests(unittest.TestCase):
         self.assertTrue(bool(insee_row["commercial_use_allowed"]))
         self.assertTrue(bool(insee_row["ml_training_allowed"]))
 
-        metadata_row = frame.loc[frame["source_id"].eq("praedixa_location_metadata")].iloc[0]
+        metadata_row = frame.loc[
+            frame["source_id"].eq("praedixa_location_metadata")
+        ].iloc[0]
         self.assertEqual(metadata_row["review_status"], "allowed")
         self.assertFalse(bool(metadata_row["contract_required"]))
 
-    def test_provider_runtime_enabled_requires_explicit_contract_opt_in_for_quarantine_sources(self) -> None:
-        self.assertFalse(is_provider_runtime_enabled("open_meteo_api", allow_contractual_providers=False))
-        self.assertTrue(is_provider_runtime_enabled("open_meteo_api", allow_contractual_providers=True))
-        self.assertTrue(is_provider_runtime_enabled("insee_bdm", allow_contractual_providers=False))
+    def test_provider_runtime_enabled_requires_explicit_contract_opt_in_for_quarantine_sources(
+        self,
+    ) -> None:
+        self.assertFalse(
+            is_provider_runtime_enabled(
+                "open_meteo_api", allow_contractual_providers=False
+            )
+        )
+        self.assertTrue(
+            is_provider_runtime_enabled(
+                "open_meteo_api", allow_contractual_providers=True
+            )
+        )
+        self.assertTrue(
+            is_provider_runtime_enabled("insee_bdm", allow_contractual_providers=False)
+        )
 
 
 if __name__ == "__main__":

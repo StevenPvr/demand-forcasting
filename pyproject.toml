@@ -25,6 +25,7 @@ dependencies = [
     "torch>=2.11.0",
     "lightning>=2.6.1",
     "pytorch-forecasting>=1.7.0",
+    "mypy>=1.19.1",
 ]
 
 [project.optional-dependencies]

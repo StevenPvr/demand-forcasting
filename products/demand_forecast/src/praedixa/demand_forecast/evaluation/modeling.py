@@ -43,7 +43,6 @@ from praedixa.demand_forecast.backends.xgboost.model_fit import (
 
 LOGGER = logging.getLogger(__name__)
 _native_categorical_eval_override_logged: bool = False
-_single_thread_eval_override_logged: bool = False
 
 
 def _model_param_as_int(params: dict[str, object], key: str) -> int:
@@ -391,30 +390,13 @@ def _stable_xgboost_evaluation_params(
     model_params: dict[str, object],
 ) -> dict[str, object]:
     resolved = dict(model_params)
+    resolved["n_jobs"] = 1
     if platform.system() != "Darwin":
         return resolved
     if bool(resolved.get("enable_categorical", False)):
         _log_native_categorical_evaluation_override()
         resolved["enable_categorical"] = False
-    if _int_param(resolved, "n_jobs", 1) != 1:
-        _log_single_thread_evaluation_override(resolved.get("n_jobs"))
-        resolved["n_jobs"] = 1
     return resolved
-
-
-def _int_param(params: dict[str, object], key: str, default: int) -> int:
-    value = params.get(key, default)
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(
-        f"Parameter `{key}` must be convertible to int, got {type(value).__name__}."
-    )
 
 
 def _log_native_categorical_evaluation_override() -> None:
@@ -423,21 +405,8 @@ def _log_native_categorical_evaluation_override() -> None:
         return
     _native_categorical_eval_override_logged = True
     LOGGER.debug(
-        "Disabling XGBoost native categorical for evaluation on macOS/Darwin because "
-        "xgboost.DMatrix can segfault while ingesting pandas categorical columns in this runtime. "
+        "Disabling XGBoost native categorical for evaluation on macOS/Darwin. "
         "Categorical identifiers remain enabled through the stable numeric-code preprocessing path."
-    )
-
-
-def _log_single_thread_evaluation_override(original_n_jobs: object) -> None:
-    global _single_thread_eval_override_logged
-    if _single_thread_eval_override_logged:
-        return
-    _single_thread_eval_override_logged = True
-    LOGGER.debug(
-        "Forcing XGBoost evaluation n_jobs=1 on macOS/Darwin because XGBoost/OpenMP can segfault "
-        "during DMatrix construction in this runtime. requested_n_jobs=%s",
-        original_n_jobs,
     )
 
 

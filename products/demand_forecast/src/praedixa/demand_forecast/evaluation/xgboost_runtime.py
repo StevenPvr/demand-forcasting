@@ -25,18 +25,34 @@ def evaluate_xgboost_daily_refit_predictions(
     model_params: dict[str, object],
     logger: logging.Logger,
 ) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    refit_model_params = _xgboost_daily_refit_model_params(model_params)
+    logger.info(
+        "XGBoost daily evaluation refit resources resolved: n_jobs=%s workers=%s runtime_profile=%s",
+        refit_model_params.get("n_jobs"),
+        refit_model_params.get("evaluation_daily_refit_workers"),
+        refit_model_params.get("runtime_profile"),
+    )
     return evaluate_daily_refit_predictions(
         train_frame=train_frame,
         valid_frame=valid_frame,
         test_frame=test_frame,
         feature_cols=feature_cols,
         target_contract=target_contract,
-        model_params=model_params,
+        model_params=refit_model_params,
         logger=logger,
         fit_model_fn=fit_xgboost_evaluation_model,
         predict_absolute_fn=predict_absolute_xgboost,
         predict_quantiles_absolute_fn=_empty_quantile_predictions,
     )
+
+
+def _xgboost_daily_refit_model_params(
+    model_params: dict[str, object],
+) -> dict[str, object]:
+    resolved = dict(model_params)
+    resolved["n_jobs"] = 1
+    resolved["evaluation_daily_refit_workers"] = 1
+    return resolved
 
 
 def _empty_quantile_predictions(*_: object, **__: object) -> pd.DataFrame:

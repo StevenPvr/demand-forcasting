@@ -61,6 +61,8 @@ Les briques partagees vivent sous `platform/python/src/praedixa/platform/` et `p
 Tant que TFT n'est pas le backend par défaut :
 
 - `xgboost` reste utilisable comme backend courant;
+- `xgboost` résout son runtime en `auto`: CUDA si le preflight XGBoost passe,
+  CPU sinon;
 - les contrats `gold`, bundle et feature mapping doivent rester compatibles TFT;
 - `optimisation` et `evaluation` doivent expliciter le backend réellement utilisé;
 - aucun code mort critique ne doit rester melange a l'orchestrateur public.

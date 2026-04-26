@@ -1,0 +1,51 @@
+{{ config(tags=["silver", "synthetic_foodservice"], materialized="table") }}
+
+select
+    cast(coalesce(dataset_source, source_policy_id) as varchar) as dataset_source,
+    cast(source_partition as varchar) as source_partition,
+    cast(source_run_id as varchar) as source_run_id,
+    cast(series_id as varchar) as series_id,
+    cast(dt as date) as dt,
+    cast(location_id as varchar) as location_id,
+    cast(product_id as varchar) as product_id,
+    cast(region_id as varchar) as region_id,
+    cast(org_group_id as varchar) as org_group_id,
+    cast(category_level_1 as varchar) as category_level_1,
+    cast(category_level_2 as varchar) as category_level_2,
+    cast(category_level_3 as varchar) as category_level_3,
+    try_cast(observed_demand_qty as double) as observed_demand_qty,
+    coalesce(target_semantics, 'observed_sales') as target_semantics,
+    coalesce(try_cast(censor_flag as boolean), false) as censor_flag,
+    coalesce(target_source, 'observed_sales') as target_source,
+    coalesce(
+        try_cast(label_quality_score as double),
+        case when coalesce(try_cast(censor_flag as boolean), false) then 0.5 else 1.0 end
+    ) as label_quality_score,
+    coalesce(
+        try_cast(usable_for_training_flag as boolean),
+        not coalesce(try_cast(censor_flag as boolean), false)
+    ) as usable_for_training_flag,
+    try_cast(observed_revenue_net as double) as observed_revenue_net,
+    try_cast(observed_discount_amount as double) as observed_discount_amount,
+    try_cast(promo_flag as boolean) as promo_flag,
+    try_cast(holiday_flag as boolean) as holiday_flag,
+    try_cast(activity_flag as boolean) as activity_flag,
+    try_cast(observed_stockout_flag as boolean) as observed_stockout_flag,
+    coalesce(try_cast(observed_stockout_available as boolean), false) as observed_stockout_available,
+    try_cast(observed_stockout_intensity as double) as observed_stockout_intensity,
+    try_cast(day_complete_flag as boolean) as day_complete_flag,
+    cast(calendar_weekday_name as varchar) as calendar_weekday_name,
+    try_cast(calendar_day_of_week as integer) as calendar_day_of_week,
+    try_cast(calendar_month as integer) as calendar_month,
+    try_cast(calendar_year as integer) as calendar_year,
+    try_cast(calendar_week_key as integer) as calendar_week_key,
+    cast(event_name_1 as varchar) as event_name_1,
+    cast(event_type_1 as varchar) as event_type_1,
+    cast(event_name_2 as varchar) as event_name_2,
+    cast(event_type_2 as varchar) as event_type_2,
+    try_cast(weather_precipitation as double) as weather_precipitation,
+    try_cast(weather_temperature as double) as weather_temperature,
+    try_cast(weather_humidity as double) as weather_humidity,
+    try_cast(weather_wind_level as double) as weather_wind_level,
+    cast(silver_run_id as varchar) as silver_run_id
+from {{ ref("stg_synthetic_foodservice_daily") }}

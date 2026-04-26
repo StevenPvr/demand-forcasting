@@ -6,7 +6,9 @@ import pandas as pd
 from praedixa.demand_forecast.training.sampling import (
     RelationSamplingQuery,
     RelationSamplingSpec,
+    build_complete_series_sampling_query_for_relation,
     build_sampling_query_for_relation,
+    load_complete_series_sampling_metadata_from_relation,
     load_sampling_metadata_from_relation,
 )
 
@@ -29,6 +31,21 @@ def sample_relation_frame(
     return connection.execute(
         build_sampling_query_for_relation(
             query=RelationSamplingQuery(spec=spec, selected_columns=selected_columns)
+        )
+    ).fetchdf()
+
+
+def sample_complete_series_relation_frame(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    spec: RelationSamplingSpec,
+    selected_columns: list[str],
+    series_col: str,
+) -> pd.DataFrame:
+    return connection.execute(
+        build_complete_series_sampling_query_for_relation(
+            query=RelationSamplingQuery(spec=spec, selected_columns=selected_columns),
+            series_col=series_col,
         )
     ).fetchdf()
 
@@ -60,12 +77,29 @@ def sampling_metadata_for_relation(
     )
 
 
+def complete_series_sampling_metadata_for_relation(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    spec: RelationSamplingSpec,
+    available_columns: list[str],
+    series_col: str,
+) -> dict[str, object]:
+    return load_complete_series_sampling_metadata_from_relation(
+        connection,
+        spec=spec,
+        available_columns=available_columns,
+        series_col=series_col,
+    )
+
+
 def full_relation_metadata(
     *,
     frame: pd.DataFrame,
     spec: RelationSamplingSpec,
 ) -> dict[str, object]:
-    from praedixa.demand_forecast.training.sampling import refresh_sampling_metadata_from_sampled_frame
+    from praedixa.demand_forecast.training.sampling import (
+        refresh_sampling_metadata_from_sampled_frame,
+    )
 
     return refresh_sampling_metadata_from_sampled_frame(
         {
@@ -85,9 +119,11 @@ def full_relation_metadata(
 
 
 __all__ = [
+    "complete_series_sampling_metadata_for_relation",
     "configure_sampling_connection",
     "full_relation_metadata",
     "load_full_relation_frame",
+    "sample_complete_series_relation_frame",
     "sample_relation_frame",
     "sampling_metadata_for_relation",
 ]

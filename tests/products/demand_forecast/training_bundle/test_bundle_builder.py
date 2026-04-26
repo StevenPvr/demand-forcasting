@@ -6,12 +6,17 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import duckdb
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
 PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
 for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
@@ -31,10 +36,27 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             tuning_path = root / "train_tuning_30_selected.parquet"
             valid_path = root / "validation_selected.parquet"
             output_dir = root / "bundle"
-            train_frame = self._frame("2024-01-01", [10.0, 11.0, 12.0, 13.0], [8.0, 9.0, 10.0, 11.0], [7.0, 8.0, 9.0, 10.0], [9.0, 10.0, 11.0, 12.0])
-            tuning_frame = self._frame("2024-01-05", [14.0, 15.0], [12.0, 13.0], [11.0, 12.0], [13.0, 14.0])
-            valid_frame = self._frame("2024-01-07", [16.0, 17.0], [14.0, 15.0], [13.0, 14.0], [15.0, 16.0])
-            self._write_inputs(train_frame, tuning_frame, valid_frame, train_path, tuning_path, valid_path)
+            train_frame = self._frame(
+                "2024-01-01",
+                [10.0, 11.0, 12.0, 13.0],
+                [8.0, 9.0, 10.0, 11.0],
+                [7.0, 8.0, 9.0, 10.0],
+                [9.0, 10.0, 11.0, 12.0],
+            )
+            tuning_frame = self._frame(
+                "2024-01-05", [14.0, 15.0], [12.0, 13.0], [11.0, 12.0], [13.0, 14.0]
+            )
+            valid_frame = self._frame(
+                "2024-01-07", [16.0, 17.0], [14.0, 15.0], [13.0, 14.0], [15.0, 16.0]
+            )
+            self._write_inputs(
+                train_frame,
+                tuning_frame,
+                valid_frame,
+                train_path,
+                tuning_path,
+                valid_path,
+            )
 
             artifacts = build_training_bundle(
                 train_input_path=train_path,
@@ -57,17 +79,21 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             gold_frame = self._gold_frame()
             self._write_gold_table(duckdb_path, gold_table, gold_frame)
 
-            artifacts = build_training_bundle(
-                train_input_path=None,
-                tuning_input_path=None,
-                valid_input_path=None,
-                output_dir=output_dir,
-                duckdb_path=duckdb_path,
-                gold_table=gold_table,
-            )
+            with patch(
+                "praedixa.demand_forecast.training_bundle.bundle_builder._read_frame"
+            ) as read_frame:
+                artifacts = build_training_bundle(
+                    train_input_path=None,
+                    tuning_input_path=None,
+                    valid_input_path=None,
+                    output_dir=output_dir,
+                    duckdb_path=duckdb_path,
+                    gold_table=gold_table,
+                )
 
             self._assert_artifacts_exist(artifacts)
             self._assert_gold_backed_bundle(artifacts)
+            read_frame.assert_not_called()
 
     def test_build_training_bundle_smoke_keeps_complete_series_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -95,14 +121,23 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             bundled_tuning = pd.read_parquet(artifacts["tuning"])
             bundled_valid = pd.read_parquet(artifacts["valid"])
 
-            self.assertEqual(sorted(bundled_train["client_id"].unique().tolist()), ["store_1__sku_1"])
-            self.assertEqual(sorted(bundled_tuning["client_id"].unique().tolist()), ["store_1__sku_1"])
-            self.assertEqual(sorted(bundled_valid["client_id"].unique().tolist()), ["store_1__sku_1"])
+            self.assertEqual(
+                sorted(bundled_train["client_id"].unique().tolist()), ["store_1__sku_1"]
+            )
+            self.assertEqual(
+                sorted(bundled_tuning["client_id"].unique().tolist()),
+                ["store_1__sku_1"],
+            )
+            self.assertEqual(
+                sorted(bundled_valid["client_id"].unique().tolist()), ["store_1__sku_1"]
+            )
             self.assertEqual(len(bundled_train), 4)
             self.assertEqual(len(bundled_tuning), 2)
             self.assertEqual(len(bundled_valid), 1)
 
-    def test_build_training_bundle_reports_holdout_and_training_exclusions(self) -> None:
+    def test_build_training_bundle_reports_holdout_and_training_exclusions(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             train_path = root / "train_selection_70_selected.parquet"
@@ -116,7 +151,12 @@ class TrainingBundleBuilderTests(unittest.TestCase):
                 [7.0, 8.0, 9.0, 10.0],
                 [9.0, 10.0, 11.0, 12.0],
             )
-            train_frame["dataset_source"] = ["freshretail", "freshretail", "bakery", "freshretail"]
+            train_frame["dataset_source"] = [
+                "freshretail",
+                "freshretail",
+                "bakery",
+                "freshretail",
+            ]
             train_frame["target_source"] = [
                 "observed_sales",
                 "dense_calendar_zero_fill",
@@ -126,13 +166,22 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             train_frame["usable_for_training_flag"] = True
             train_frame["censor_flag"] = False
             train_frame["label_quality_score"] = 1.0
-            tuning_frame = self._frame("2024-01-05", [14.0, 15.0], [12.0, 13.0], [11.0, 12.0], [13.0, 14.0])
+            tuning_frame = self._frame(
+                "2024-01-05", [14.0, 15.0], [12.0, 13.0], [11.0, 12.0], [13.0, 14.0]
+            )
             tuning_frame["target_source"] = "observed_sales"
             tuning_frame["usable_for_training_flag"] = True
             tuning_frame["censor_flag"] = False
             tuning_frame["label_quality_score"] = 1.0
             valid_frame = self._frame("2024-01-07", [16.0], [14.0], [13.0], [15.0])
-            self._write_inputs(train_frame, tuning_frame, valid_frame, train_path, tuning_path, valid_path)
+            self._write_inputs(
+                train_frame,
+                tuning_frame,
+                valid_frame,
+                train_path,
+                tuning_path,
+                valid_path,
+            )
 
             artifacts = build_training_bundle(
                 train_input_path=train_path,
@@ -142,7 +191,9 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             )
 
             bundled_train = pd.read_parquet(artifacts["train"])
-            report = json.loads(artifacts["training_exclusion_report"].read_text(encoding="utf-8"))
+            report = json.loads(
+                artifacts["training_exclusion_report"].read_text(encoding="utf-8")
+            )
             self.assertEqual(len(bundled_train), 2)
             self.assertEqual(report["holdout_exclusions"][0]["excluded_rows"], 1)
             self.assertEqual(report["splits"][0]["closed_or_dense_zero_rows"], 1)
@@ -274,10 +325,58 @@ class TrainingBundleBuilderTests(unittest.TestCase):
                     "sku_2",
                     "sku_2",
                 ],
-                "target_demand_qty_d_plus_1": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 20.0, 21.0, 22.0, 23.0],
-                "rolling_mean_7": [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 18.0, 19.0, 20.0, 21.0],
-                "lag_1": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 17.0, 18.0, 19.0, 20.0],
-                "current_day_demand_qty": [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 19.0, 20.0, 21.0, 22.0],
+                "target_demand_qty_d_plus_1": [
+                    10.0,
+                    11.0,
+                    12.0,
+                    13.0,
+                    14.0,
+                    15.0,
+                    16.0,
+                    20.0,
+                    21.0,
+                    22.0,
+                    23.0,
+                ],
+                "rolling_mean_7": [
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0,
+                    12.0,
+                    13.0,
+                    14.0,
+                    18.0,
+                    19.0,
+                    20.0,
+                    21.0,
+                ],
+                "lag_1": [
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                    11.0,
+                    12.0,
+                    13.0,
+                    17.0,
+                    18.0,
+                    19.0,
+                    20.0,
+                ],
+                "current_day_demand_qty": [
+                    9.0,
+                    10.0,
+                    11.0,
+                    12.0,
+                    13.0,
+                    14.0,
+                    15.0,
+                    19.0,
+                    20.0,
+                    21.0,
+                    22.0,
+                ],
             }
         )
 
@@ -290,9 +389,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         connection = duckdb.connect(str(duckdb_path))
         try:
             connection.register("gold_frame", gold_frame)
-            connection.execute(
-                f"create table {gold_table} as select * from gold_frame"
-            )
+            connection.execute(f"create table {gold_table} as select * from gold_frame")
         finally:
             connection.close()
 
@@ -315,24 +412,41 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             self.assertTrue(artifacts[key].exists())
 
     def _assert_feature_manifest(self, artifacts: dict[str, Path]) -> None:
-        feature_manifest = json.loads(artifacts["feature_manifest"].read_text(encoding="utf-8"))
-        self.assertEqual(feature_manifest["feature_columns"], ["dataset_source", "rolling_mean_7"])
+        feature_manifest = json.loads(
+            artifacts["feature_manifest"].read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            feature_manifest["feature_columns"], ["dataset_source", "rolling_mean_7"]
+        )
         self.assertEqual(feature_manifest["group_id_columns"], ["client_id"])
         self.assertIn("lag_1", feature_manifest["projection_columns"])
         self.assertIn("location_id", feature_manifest["projection_columns"])
         self.assertIn("product_id", feature_manifest["projection_columns"])
         self.assertEqual(feature_manifest["projection_dtypes"]["lag_1"], "float32")
-        self.assertEqual(feature_manifest["projection_dtypes"]["rolling_mean_7"], "float32")
-        self.assertEqual(feature_manifest["projection_dtypes"]["target_demand_qty_d_plus_1"], "float32")
-        self.assertTrue(feature_manifest["feature_contract"]["rolling_mean_7"]["available_at_prediction"])
+        self.assertEqual(
+            feature_manifest["projection_dtypes"]["rolling_mean_7"], "float32"
+        )
+        self.assertEqual(
+            feature_manifest["projection_dtypes"]["target_demand_qty_d_plus_1"],
+            "float32",
+        )
+        self.assertTrue(
+            feature_manifest["feature_contract"]["rolling_mean_7"][
+                "available_at_prediction"
+            ]
+        )
         self.assertNotIn("lag_1", feature_manifest["feature_columns"])
         self.assertNotIn("current_day_demand_qty", feature_manifest["feature_columns"])
         self.assertNotIn("series_id", feature_manifest["projection_columns"])
         self.assertNotIn("location_id", feature_manifest["feature_columns"])
         self.assertNotIn("product_id", feature_manifest["feature_columns"])
 
-        feature_roles = json.loads(artifacts["feature_roles"].read_text(encoding="utf-8"))
-        self.assertEqual(feature_roles["rolling_mean_7"]["role"], "time_varying_known_real")
+        feature_roles = json.loads(
+            artifacts["feature_roles"].read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            feature_roles["rolling_mean_7"]["role"], "time_varying_known_real"
+        )
         self.assertEqual(feature_roles["dataset_source"]["source_system"], "metadata")
 
     def _assert_bundled_train(self, artifacts: dict[str, Path]) -> None:
@@ -343,47 +457,89 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         self.assertIn("product_id", bundled_train.columns)
         self.assertNotIn("series_id", bundled_train.columns)
         self.assertEqual(str(bundled_train["rolling_mean_7"].dtype), "float32")
-        self.assertEqual(str(bundled_train["target_demand_qty_d_plus_1"].dtype), "float32")
+        self.assertEqual(
+            str(bundled_train["target_demand_qty_d_plus_1"].dtype), "float32"
+        )
         self.assertIn("__tft_group_id", optimisation_train.columns)
         self.assertIn("__tft_time_idx", optimisation_train.columns)
         self.assertEqual(str(optimisation_train["__tft_time_idx"].dtype), "int32")
 
     def _assert_target_contract(self, artifacts: dict[str, Path]) -> None:
-        target_contract = json.loads(artifacts["target_contract"].read_text(encoding="utf-8"))
-        self.assertEqual(target_contract["learning_target_col"], "target_demand_qty_d_plus_1")
-        self.assertEqual(target_contract["absolute_target_col"], "target_demand_qty_d_plus_1")
+        target_contract = json.loads(
+            artifacts["target_contract"].read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            target_contract["learning_target_col"], "target_demand_qty_d_plus_1"
+        )
+        self.assertEqual(
+            target_contract["absolute_target_col"], "target_demand_qty_d_plus_1"
+        )
 
     def _assert_bundle_manifest(self, artifacts: dict[str, Path]) -> None:
-        bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
-        optimisation_manifest = json.loads(artifacts["optimisation_manifest"].read_text(encoding="utf-8"))
+        bundle_manifest = json.loads(
+            artifacts["bundle_manifest"].read_text(encoding="utf-8")
+        )
+        optimisation_manifest = json.loads(
+            artifacts["optimisation_manifest"].read_text(encoding="utf-8")
+        )
         self.assertEqual(bundle_manifest["bundle_version"], 2)
         self.assertEqual(bundle_manifest["train_rows"], 4)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
         self.assertEqual(bundle_manifest["valid_rows"], 2)
         self.assertEqual(bundle_manifest["feature_count"], 2)
-        self.assertTrue(bundle_manifest["feature_roles_path"].endswith("feature_roles.json"))
-        self.assertTrue(bundle_manifest["split_manifest_path"].endswith("split_manifest.json"))
-        self.assertTrue(bundle_manifest["training_exclusion_report_path"].endswith("training_exclusion_report.json"))
-        self.assertEqual(bundle_manifest["train_sha256"], self._sha256(artifacts["train"]))
-        self.assertEqual(bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"]))
-        self.assertEqual(bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"]))
-        self.assertTrue(bundle_manifest["optimisation_train_path"].endswith("optimisation_train.parquet"))
-        self.assertTrue(bundle_manifest["optimisation_manifest_path"].endswith("optimisation_manifest.json"))
+        self.assertTrue(
+            bundle_manifest["feature_roles_path"].endswith("feature_roles.json")
+        )
+        self.assertTrue(
+            bundle_manifest["split_manifest_path"].endswith("split_manifest.json")
+        )
+        self.assertTrue(
+            bundle_manifest["training_exclusion_report_path"].endswith(
+                "training_exclusion_report.json"
+            )
+        )
+        self.assertEqual(
+            bundle_manifest["train_sha256"], self._sha256(artifacts["train"])
+        )
+        self.assertEqual(
+            bundle_manifest["tuning_sha256"], self._sha256(artifacts["tuning"])
+        )
+        self.assertEqual(
+            bundle_manifest["valid_sha256"], self._sha256(artifacts["valid"])
+        )
+        self.assertTrue(
+            bundle_manifest["optimisation_train_path"].endswith(
+                "optimisation_train.parquet"
+            )
+        )
+        self.assertTrue(
+            bundle_manifest["optimisation_manifest_path"].endswith(
+                "optimisation_manifest.json"
+            )
+        )
         self.assertTrue(optimisation_manifest["precomputed_tft_support"])
-        self.assertEqual(optimisation_manifest["support_columns"], ["__tft_group_id", "__tft_time_idx"])
-        split_manifest = json.loads(artifacts["split_manifest"].read_text(encoding="utf-8"))
+        self.assertEqual(
+            optimisation_manifest["support_columns"],
+            ["__tft_group_id", "__tft_time_idx"],
+        )
+        split_manifest = json.loads(
+            artifacts["split_manifest"].read_text(encoding="utf-8")
+        )
         self.assertEqual(split_manifest["train"]["rows"], 4)
         self.assertEqual(split_manifest["tuning"]["rows"], 2)
         self.assertEqual(split_manifest["valid"]["rows"], 2)
 
     def _assert_gold_backed_bundle(self, artifacts: dict[str, Path]) -> None:
-        bundle_manifest = json.loads(artifacts["bundle_manifest"].read_text(encoding="utf-8"))
+        bundle_manifest = json.loads(
+            artifacts["bundle_manifest"].read_text(encoding="utf-8")
+        )
         self.assertEqual(bundle_manifest["train_rows"], 3)
         self.assertEqual(bundle_manifest["tuning_rows"], 2)
         self.assertEqual(bundle_manifest["valid_rows"], 2)
-        self.assertIn("_cache/train.parquet", bundle_manifest["train_input_path"])
-        self.assertIn("_cache/val.parquet", bundle_manifest["tuning_input_path"])
-        self.assertIn("_cache/test.parquet", bundle_manifest["valid_input_path"])
+        self.assertIn("duckdb://", bundle_manifest["train_input_path"])
+        self.assertIn("[split=train]", bundle_manifest["train_input_path"])
+        self.assertIn("[split=val]", bundle_manifest["tuning_input_path"])
+        self.assertIn("[split=test]", bundle_manifest["valid_input_path"])
         bundled_train = pd.read_parquet(artifacts["train"])
         bundled_tuning = pd.read_parquet(artifacts["tuning"])
         bundled_valid = pd.read_parquet(artifacts["valid"])

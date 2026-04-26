@@ -8,11 +8,14 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from praedixa.demand_forecast.backends.tft.frame_utils import GROUP_COL
 from praedixa.platform.utils.memory import downcast_pandas_frame
 from praedixa.demand_forecast.training.sampling.execution import (
+    complete_series_sampling_metadata_for_relation,
     configure_sampling_connection,
     full_relation_metadata,
     load_full_relation_frame,
+    sample_complete_series_relation_frame,
     sample_relation_frame,
     sampling_metadata_for_relation,
 )
@@ -270,6 +273,67 @@ def _parquet_sampling_context(
     )
 
 
+def _can_sample_complete_precomputed_series(columns: list[str]) -> bool:
+    return GROUP_COL in columns
+
+
+def _load_sampled_parquet_frame(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    spec: RelationSamplingSpec,
+    selected_columns: list[str],
+    logger: logging.Logger,
+    source_path: Path,
+    label: str,
+) -> tuple[pd.DataFrame, dict[str, object], RelationSamplingSpec]:
+    if _can_sample_complete_precomputed_series(selected_columns):
+        metadata = complete_series_sampling_metadata_for_relation(
+            connection=connection,
+            spec=spec,
+            available_columns=selected_columns,
+            series_col=GROUP_COL,
+        )
+        logger.info(
+            "Executing complete-series sampled parquet %s query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s series_col=%s",
+            label,
+            source_path,
+            metadata["original_rows"],
+            metadata["sampled_rows"],
+            len(selected_columns),
+            GROUP_COL,
+        )
+        frame = sample_complete_series_relation_frame(
+            connection=connection,
+            spec=replace(spec, allow_top_up=False),
+            selected_columns=selected_columns,
+            series_col=GROUP_COL,
+        )
+        return frame, metadata, replace(spec, allow_top_up=False)
+    metadata = sampling_metadata_for_relation(
+        connection=connection,
+        spec=spec,
+        available_columns=selected_columns,
+    )
+    resolved_spec = replace(
+        spec,
+        allow_top_up=relation_sampling_requires_top_up(metadata),
+    )
+    logger.info(
+        "Executing sampled parquet %s query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s",
+        label,
+        source_path,
+        metadata["original_rows"],
+        metadata["sampled_rows"],
+        len(selected_columns),
+    )
+    frame = sample_relation_frame(
+        connection=connection,
+        spec=resolved_spec,
+        selected_columns=selected_columns,
+    )
+    return frame, metadata, resolved_spec
+
+
 def _load_parquet_from_connections(
     *,
     train_connection: duckdb.DuckDBPyConnection,
@@ -319,26 +383,15 @@ def _load_parquet_from_connections(
             spec=train_sampling_spec,
         )
     else:
-        train_sampling_metadata = sampling_metadata_for_relation(
-            connection=train_connection,
-            spec=train_sampling_spec,
-            available_columns=train_columns,
-        )
-        train_sampling_spec = replace(
-            train_sampling_spec,
-            allow_top_up=relation_sampling_requires_top_up(train_sampling_metadata),
-        )
-        logger.info(
-            "Executing sampled parquet train query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s",
-            train_path,
-            train_sampling_metadata["original_rows"],
-            train_sampling_metadata["sampled_rows"],
-            len(train_columns),
-        )
-        train_frame = sample_relation_frame(
-            connection=train_connection,
-            spec=train_sampling_spec,
-            selected_columns=train_columns,
+        train_frame, train_sampling_metadata, train_sampling_spec = (
+            _load_sampled_parquet_frame(
+                connection=train_connection,
+                spec=train_sampling_spec,
+                selected_columns=train_columns,
+                logger=logger,
+                source_path=train_path,
+                label="train",
+            )
         )
     if tuning_full_load:
         tuning_sampling_spec = replace(tuning_sampling_spec, allow_top_up=False)
@@ -355,26 +408,15 @@ def _load_parquet_from_connections(
             spec=tuning_sampling_spec,
         )
     else:
-        tuning_sampling_metadata = sampling_metadata_for_relation(
-            connection=tuning_connection,
-            spec=tuning_sampling_spec,
-            available_columns=tuning_columns,
-        )
-        tuning_sampling_spec = replace(
-            tuning_sampling_spec,
-            allow_top_up=relation_sampling_requires_top_up(tuning_sampling_metadata),
-        )
-        logger.info(
-            "Executing sampled parquet validation query: source=%s original_rows=%s planned_sampled_rows=%s columns=%s",
-            tuning_path,
-            tuning_sampling_metadata["original_rows"],
-            tuning_sampling_metadata["sampled_rows"],
-            len(tuning_columns),
-        )
-        tuning_frame = sample_relation_frame(
-            connection=tuning_connection,
-            spec=tuning_sampling_spec,
-            selected_columns=tuning_columns,
+        tuning_frame, tuning_sampling_metadata, tuning_sampling_spec = (
+            _load_sampled_parquet_frame(
+                connection=tuning_connection,
+                spec=tuning_sampling_spec,
+                selected_columns=tuning_columns,
+                logger=logger,
+                source_path=tuning_path,
+                label="validation",
+            )
         )
     log_sampling_summary("Planned train", train_sampling_metadata, logger=logger)
     log_sampling_summary("Planned validation", tuning_sampling_metadata, logger=logger)
@@ -403,7 +445,9 @@ def load_gold_train_tuning_frames(
     dataset_source_col: str = DEFAULT_DATASET_SOURCE_COL,
     train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION,
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION,
-    excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    excluded_dataset_sources: tuple[
+        str, ...
+    ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     logger.info(
         "Loading sampled gold train/validation splits: duckdb_path=%s gold_table=%s train_split=train tuning_split=val train_sample_fraction=%.4f tuning_sample_fraction=%.4f",
@@ -455,7 +499,9 @@ def load_parquet_train_tuning_frames(
     target_col: str,
     train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION,
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION,
-    excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    excluded_dataset_sources: tuple[
+        str, ...
+    ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     train_path, tuning_path = _resolved_parquet_paths(
         train_input_path=train_input_path,

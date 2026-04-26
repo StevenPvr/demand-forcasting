@@ -17,6 +17,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from praedixa.demand_forecast.evaluation import pipeline as evaluation_pipeline  # noqa: E402
 import praedixa.demand_forecast.evaluation.orchestrator_runtime as evaluation_orchestrator_runtime  # noqa: E402
+import praedixa.demand_forecast.evaluation.modeling as evaluation_modeling  # noqa: E402
+import praedixa.demand_forecast.evaluation.xgboost_runtime as xgboost_runtime  # noqa: E402
 from praedixa.demand_forecast.evaluation.modeling import select_feature_columns  # noqa: E402
 from praedixa.demand_forecast.evaluation.bakery_metrics import (  # noqa: E402
     build_predictions_frame,
@@ -556,6 +558,68 @@ class EvaluationPipelineTests(unittest.TestCase):
                 }
             ),
         )
+
+    def test_xgboost_refit_uses_single_worker_and_single_thread(self) -> None:
+        train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
+        recorded: dict[str, object] = {}
+
+        def _record_refit_call(**kwargs: object) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+            recorded["model_params"] = kwargs["model_params"]
+            return pd.DataFrame(), pd.DataFrame(), 7
+
+        with patch.object(
+            xgboost_runtime,
+            "evaluate_daily_refit_predictions",
+            side_effect=_record_refit_call,
+        ):
+            _, _, best_iteration = xgboost_runtime.evaluate_xgboost_daily_refit_predictions(
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                test_frame=test_frame,
+                feature_cols=["feat"],
+                target_contract=target_contract,
+                model_params={"model_backend": "xgboost", "n_jobs": 1},
+                logger=__import__("logging").getLogger(__name__),
+            )
+
+        refit_params = cast(dict[str, object], recorded["model_params"])
+        self.assertEqual(best_iteration, 7)
+        self.assertEqual(refit_params["n_jobs"], 1)
+        self.assertEqual(refit_params["evaluation_daily_refit_workers"], 1)
+
+    def test_xgboost_evaluation_forces_single_thread(self) -> None:
+        train_frame, valid_frame, _, target_contract = _build_refit_frames()
+        recorded: dict[str, object] = {}
+
+        def _record_fit_call(*_: object, **kwargs: object) -> SimpleNamespace:
+            recorded["model_params"] = kwargs["model_params"]
+            return SimpleNamespace(
+                model=SimpleNamespace(best_iteration=3),
+                params={"n_estimators": 10},
+            )
+
+        with (
+            patch.object(
+                evaluation_modeling,
+                "fit_xgboost_model",
+                side_effect=_record_fit_call,
+            ),
+        ):
+            _, best_iteration = evaluation_modeling.fit_xgboost_evaluation_model(
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                feature_cols=["feat"],
+                target_contract=target_contract,
+                model_params={
+                    "model_backend": "xgboost",
+                    "n_jobs": 12,
+                    "enable_categorical": False,
+                },
+            )
+
+        fit_params = cast(dict[str, object], recorded["model_params"])
+        self.assertEqual(best_iteration, 4)
+        self.assertEqual(fit_params["n_jobs"], 1)
 
     def test_final_model_fit_aligns_test_frame_to_train_valid_schema(self) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()

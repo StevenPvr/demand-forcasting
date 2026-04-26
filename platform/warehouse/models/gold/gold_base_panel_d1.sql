@@ -203,6 +203,8 @@ dense_panel as (
         case
             when dense.dataset_source = 'bakery' then 'bakery'
             when dense.dataset_source = 'first_party_daily' then 'food_service'
+            when dense.dataset_source like 'synthetic_foodservice_%' then 'food_service'
+            when dense.dataset_source = 'restaurant_sales_report' then 'food_service'
             else 'retail'
         end as vertical_level_1,
         case
@@ -210,6 +212,14 @@ dense_panel as (
             when dense.dataset_source = 'freshretail_lt' then 'grocery_delivery'
             when dense.dataset_source = 'bakery' then 'bakery_pastry'
             when dense.dataset_source = 'first_party_daily' then 'client_operation'
+            when dense.dataset_source = 'm5_forecasting_accuracy' then 'grocery_retail'
+            when dense.dataset_source = 'uci_online_retail_ii' then 'online_retail'
+            when dense.dataset_source = 'uci_online_retail' then 'online_retail'
+            when dense.dataset_source = 'restaurant_sales_report' then 'qsr_fast_food'
+            when dense.dataset_source = 'perishable_goods_management' then 'perishable_grocery_synthetic'
+            when dense.dataset_source = 'synthetic_foodservice_qsr' then 'qsr_fast_food'
+            when dense.dataset_source = 'synthetic_foodservice_bakery' then 'bakery_snacking'
+            when dense.dataset_source = 'synthetic_foodservice_restaurant' then 'traditional_restaurant'
             else null
         end as vertical_level_2,
         coalesce(
@@ -218,6 +228,12 @@ dense_panel as (
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
                 when dense.dataset_source = 'bakery' then 'FR'
+                when dense.dataset_source = 'm5_forecasting_accuracy' then 'US'
+                when dense.dataset_source = 'uci_online_retail_ii' then 'GB'
+                when dense.dataset_source = 'uci_online_retail' then 'GB'
+                when dense.dataset_source = 'restaurant_sales_report' then 'IN'
+                when dense.dataset_source = 'perishable_goods_management' then 'US'
+                when dense.dataset_source like 'synthetic_foodservice_%' then 'FR'
                 else null
             end
         ) as country_code,
@@ -229,6 +245,8 @@ dense_panel as (
         coalesce(source_policy.source_review_status, 'unknown') as source_legal_status_snapshot,
         case
             when dense.dataset_source = 'first_party_daily' then 'pilot'
+            when dense.dataset_source = 'perishable_goods_management' then 'synthetic'
+            when dense.dataset_source like 'synthetic_foodservice_%' then 'synthetic'
             else 'benchmark'
         end as source_role,
         '{{ env_var("PRAEDIXA_GOLD_RUN_ID", "manual") }}' as gold_run_id
@@ -268,6 +286,12 @@ dense_panel as (
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
                 when dense.dataset_source = 'bakery' then 'FR'
+                when dense.dataset_source = 'm5_forecasting_accuracy' then 'US'
+                when dense.dataset_source = 'uci_online_retail_ii' then 'GB'
+                when dense.dataset_source = 'uci_online_retail' then 'GB'
+                when dense.dataset_source = 'restaurant_sales_report' then 'IN'
+                when dense.dataset_source = 'perishable_goods_management' then 'US'
+                when dense.dataset_source like 'synthetic_foodservice_%' then 'FR'
                 else null
             end
          ) = country_calendar.country_code
@@ -283,6 +307,12 @@ dense_panel as (
                 when dense.dataset_source = 'freshretail' then 'CN'
                 when dense.dataset_source = 'freshretail_lt' then 'CN'
                 when dense.dataset_source = 'bakery' then 'FR'
+                when dense.dataset_source = 'm5_forecasting_accuracy' then 'US'
+                when dense.dataset_source = 'uci_online_retail_ii' then 'GB'
+                when dense.dataset_source = 'uci_online_retail' then 'GB'
+                when dense.dataset_source = 'restaurant_sales_report' then 'IN'
+                when dense.dataset_source = 'perishable_goods_management' then 'US'
+                when dense.dataset_source like 'synthetic_foodservice_%' then 'FR'
                 else null
             end
          ) = macro_country.country_code

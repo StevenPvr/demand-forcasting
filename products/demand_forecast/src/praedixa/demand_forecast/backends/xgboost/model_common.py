@@ -3,10 +3,20 @@ from __future__ import annotations
 from typing import Any, cast
 
 from praedixa.demand_forecast.training.config.constants import (
+    DEFAULT_XGBOOST_CUDA_FOLD_WORKERS,
+    DEFAULT_XGBOOST_GPU_INPUT_BACKEND,
+    DEFAULT_XGBOOST_CUDA_MAX_THREADS,
+    DEFAULT_XGBOOST_CUDA_MATRIX_TYPE,
     DEFAULT_XGBOOST_MAX_CAT_THRESHOLD,
     DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT,
     DEFAULT_XGBOOST_N_ESTIMATORS,
     DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
+)
+from praedixa.demand_forecast.backends.xgboost.runtime import (
+    SUPPORTED_XGBOOST_RUNTIME_PROFILES,
+    XGBOOST_CUDA_RUNTIME_PROFILES,
+    resolve_xgboost_runtime_profile,
+    xgboost_uses_cuda,
 )
 
 
@@ -14,6 +24,8 @@ DEFAULT_XGBOOST_MODEL_PARAMS: dict[str, object] = {
     "model_backend": "xgboost",
     "runtime_profile": "local_cpu",
     "device": "cpu",
+    "xgboost_matrix_type": "dmatrix",
+    "xgboost_gpu_input_backend": "cpu",
     "objective": "reg:squarederror",
     "eval_metric": "mae",
     "tree_method": "hist",
@@ -72,6 +84,55 @@ def resolve_xgboost_model_params(
         **(model_params or {}),
     }
     resolved["model_backend"] = "xgboost"
+    resolved["tree_method"] = "hist"
+    runtime_profile = str(resolved.get("runtime_profile", "local_cpu")).lower()
+    requested_device = str(resolved.get("device", "")).lower()
+    should_resolve_runtime = (
+        runtime_profile == "auto"
+        or requested_device == "cuda"
+        or runtime_profile in XGBOOST_CUDA_RUNTIME_PROFILES
+    )
+    if runtime_profile not in SUPPORTED_XGBOOST_RUNTIME_PROFILES:
+        resolve_xgboost_runtime_profile(runtime_profile)
+    if should_resolve_runtime:
+        requested_profile = runtime_profile
+        if requested_device == "cuda" and runtime_profile in {"", "auto", "local_cpu"}:
+            requested_profile = "cuda"
+        runtime_resolution = resolve_xgboost_runtime_profile(requested_profile)
+        resolved["runtime_profile"] = runtime_resolution.runtime_profile
+        resolved["device"] = runtime_resolution.device
+        resolved["tree_method"] = runtime_resolution.tree_method
+        resolved["accelerator"] = runtime_resolution.accelerator
+        resolved["devices"] = runtime_resolution.devices
+        resolved["cuda_available"] = runtime_resolution.cuda_available
+        resolved["cuda_device_name"] = runtime_resolution.cuda_device_name
+        if runtime_resolution.fallback_reason is not None:
+            resolved["runtime_fallback_reason"] = runtime_resolution.fallback_reason
+    if xgboost_uses_cuda(resolved):
+        requested_matrix_type = (model_params or {}).get(
+            "xgboost_matrix_type",
+            DEFAULT_XGBOOST_CUDA_MATRIX_TYPE,
+        )
+        requested_gpu_input_backend = (model_params or {}).get(
+            "xgboost_gpu_input_backend",
+            DEFAULT_XGBOOST_GPU_INPUT_BACKEND,
+        )
+        requested_runtime_profile = str(resolved.get("runtime_profile", "cuda"))
+        if requested_runtime_profile == "local_cpu":
+            requested_runtime_profile = "cuda"
+        resolved["device"] = "cuda"
+        resolved["runtime_profile"] = requested_runtime_profile
+        resolved["n_jobs"] = max(
+            1,
+            min(int(cast(Any, resolved["n_jobs"])), DEFAULT_XGBOOST_CUDA_MAX_THREADS),
+        )
+        resolved["max_parallel_fold_workers"] = DEFAULT_XGBOOST_CUDA_FOLD_WORKERS
+        resolved["xgboost_matrix_type"] = str(requested_matrix_type)
+        resolved["xgboost_gpu_input_backend"] = str(requested_gpu_input_backend)
+    else:
+        resolved["device"] = "cpu"
+        resolved["xgboost_matrix_type"] = "dmatrix"
+        resolved["xgboost_gpu_input_backend"] = "cpu"
     return resolved
 
 

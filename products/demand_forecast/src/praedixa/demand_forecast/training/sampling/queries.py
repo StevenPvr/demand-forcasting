@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from praedixa.demand_forecast.training.sampling.common import (
     resolve_sampling_order_columns,
+    series_key_sql,
 )
 from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
@@ -29,6 +30,15 @@ _TRAINING_ELIGIBILITY_SQL_COLUMNS: set[str] = {
 
 def _per_stratum_sample_target_sql(sample_fraction: float) -> str:
     return f"cast(floor(stratum_row_count * {sample_fraction:.12f}) as bigint)"
+
+
+def _per_series_stratum_sample_target_sql(sample_fraction: float) -> str:
+    return (
+        "least("
+        "stratum_row_count, "
+        f"greatest(1, cast(ceil(stratum_row_count * {sample_fraction:.12f}) as bigint))"
+        ")"
+    )
 
 
 def _sql_tuple(values: tuple[str, ...]) -> str:
@@ -59,7 +69,9 @@ def build_gold_split_sampling_query(
     sample_store_col: str,
     sample_fraction: float,
     selected_columns: list[str] | None = None,
-    excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    excluded_dataset_sources: tuple[
+        str, ...
+    ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 ) -> str:
     select_list = "*" if selected_columns is None else ", ".join(selected_columns)
     training_eligibility_filter = (
@@ -71,6 +83,10 @@ def build_gold_split_sampling_query(
         dataset_source_col,
         excluded_dataset_sources,
     )
+    series_key = series_key_sql(
+        selected_columns,
+        sample_store_col=sample_store_col,
+    )
     return f"""
 with scoped as (
     select {select_list}
@@ -79,24 +95,40 @@ with scoped as (
       and {dataset_scope_filter}
       and {training_eligibility_filter}
 ),
-ranked as (
+series_population as (
+    select
+        {dataset_source_col} as __sample_dataset_source,
+        {sample_store_col} as __sample_store,
+        {series_key} as __sample_series_key
+    from scoped
+    group by 1, 2, 3
+),
+ranked_series as (
     select
         *,
         row_number() over (
-            partition by {dataset_source_col}, {date_col}, {sample_store_col}
-            order by hash(
-                coalesce(cast(product_id as varchar), ''),
-                coalesce(cast(client_id as varchar), '')
-            )
+            partition by __sample_dataset_source, __sample_store
+            order by hash(__sample_series_key)
         ) as rn_sample,
         count(*) over (
-            partition by {dataset_source_col}, {date_col}, {sample_store_col}
+            partition by __sample_dataset_source, __sample_store
         ) as stratum_row_count
-    from scoped
+    from series_population
+),
+selected_series as (
+    select *
+    from ranked_series
+    where rn_sample <= {_per_series_stratum_sample_target_sql(sample_fraction)}
 )
-select *
-from ranked
-where rn_sample <= {_per_stratum_sample_target_sql(sample_fraction)}
+select
+    scoped.*,
+    selected_series.rn_sample,
+    selected_series.stratum_row_count
+from scoped
+inner join selected_series
+  on scoped.{dataset_source_col} = selected_series.__sample_dataset_source
+ and scoped.{sample_store_col} = selected_series.__sample_store
+ and {series_key} = selected_series.__sample_series_key
 """
 
 
@@ -148,6 +180,53 @@ def build_sampling_query_for_relation(*, query: RelationSamplingQuery) -> str:
         final_order_by=final_order_by,
         hash_expression=hash_expression,
     )
+
+
+def build_complete_series_sampling_query_for_relation(
+    *,
+    query: RelationSamplingQuery,
+    series_col: str,
+) -> str:
+    select_list = ", ".join(query.selected_columns)
+    series_key = f"coalesce(cast({series_col} as varchar), '')"
+    scoped_series_key = f"coalesce(cast(scoped.{series_col} as varchar), '')"
+    return f"""
+with scoped as (
+    select {select_list}
+    from ({query.spec.relation_sql}) as relation_source
+),
+series_population as (
+    select
+        {query.spec.dataset_source_col} as __sample_dataset_source,
+        {query.spec.sample_store_col} as __sample_store,
+        {series_key} as __sample_series_key
+    from scoped
+    group by 1, 2, 3
+),
+ranked_series as (
+    select
+        *,
+        row_number() over (
+            partition by __sample_dataset_source, __sample_store
+            order by hash(__sample_series_key)
+        ) as rn_sample,
+        count(*) over (
+            partition by __sample_dataset_source, __sample_store
+        ) as stratum_row_count
+    from series_population
+),
+selected_series as (
+    select *
+    from ranked_series
+    where rn_sample <= {_per_series_stratum_sample_target_sql(query.spec.sample_fraction)}
+)
+select {select_list}
+from scoped
+inner join selected_series
+  on scoped.{query.spec.dataset_source_col} = selected_series.__sample_dataset_source
+ and scoped.{query.spec.sample_store_col} = selected_series.__sample_store
+ and {scoped_series_key} = selected_series.__sample_series_key
+"""
 
 
 def _sampling_query_without_topup(
@@ -313,7 +392,9 @@ def build_gold_sampling_spec(
     dataset_source_col: str,
     sample_store_col: str,
     sample_fraction: float,
-    excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    excluded_dataset_sources: tuple[
+        str, ...
+    ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 ) -> GoldSplitSamplingSpec:
     return GoldSplitSamplingSpec(
         gold_table=gold_table,
@@ -327,6 +408,7 @@ def build_gold_sampling_spec(
 
 
 __all__ = [
+    "build_complete_series_sampling_query_for_relation",
     "build_gold_sampling_spec",
     "build_gold_split_sampling_query",
     "build_sampling_query_for_relation",

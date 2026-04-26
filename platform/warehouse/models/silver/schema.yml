@@ -14,6 +14,14 @@ models:
                     "freshretail_lt",
                     "bakery",
                     "first_party_daily",
+                    "m5_forecasting_accuracy",
+                    "uci_online_retail_ii",
+                    "uci_online_retail",
+                    "restaurant_sales_report",
+                    "perishable_goods_management",
+                    "synthetic_foodservice_qsr",
+                    "synthetic_foodservice_bakery",
+                    "synthetic_foodservice_restaurant",
                   ]
       - name: dt
         tests:

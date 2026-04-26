@@ -12,6 +12,15 @@ models:
                     "freshretail",
                     "freshretail_lt",
                     "bakery",
+                    "first_party_daily",
+                    "m5_forecasting_accuracy",
+                    "uci_online_retail_ii",
+                    "uci_online_retail",
+                    "restaurant_sales_report",
+                    "perishable_goods_management",
+                    "synthetic_foodservice_qsr",
+                    "synthetic_foodservice_bakery",
+                    "synthetic_foodservice_restaurant",
                   ]
       - name: dt
       - name: split_bucket
@@ -68,7 +77,21 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values: ["freshretail", "freshretail_lt", "bakery"]
+                values:
+                  [
+                    "freshretail",
+                    "freshretail_lt",
+                    "bakery",
+                    "first_party_daily",
+                    "m5_forecasting_accuracy",
+                    "uci_online_retail_ii",
+                    "uci_online_retail",
+                    "restaurant_sales_report",
+                    "perishable_goods_management",
+                    "synthetic_foodservice_qsr",
+                    "synthetic_foodservice_bakery",
+                    "synthetic_foodservice_restaurant",
+                  ]
       - name: dt
       - name: target_dt
       - name: split_bucket
@@ -107,7 +130,21 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ["freshretail", "freshretail_lt", "bakery"]
+                values:
+                  [
+                    "freshretail",
+                    "freshretail_lt",
+                    "bakery",
+                    "first_party_daily",
+                    "m5_forecasting_accuracy",
+                    "uci_online_retail_ii",
+                    "uci_online_retail",
+                    "restaurant_sales_report",
+                    "perishable_goods_management",
+                    "synthetic_foodservice_qsr",
+                    "synthetic_foodservice_bakery",
+                    "synthetic_foodservice_restaurant",
+                  ]
       - name: dt
         tests:
           - not_null

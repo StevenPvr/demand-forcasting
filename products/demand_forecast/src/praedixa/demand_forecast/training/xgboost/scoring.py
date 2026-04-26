@@ -14,9 +14,13 @@ from praedixa.demand_forecast.backends.xgboost.model_common import (
     resolve_xgboost_model_params,
 )
 from praedixa.demand_forecast.backends.xgboost.model_fit import (
+    XGBoostPreparedTrainingMatrices,
     fit_xgboost_model_and_predict_validation,
+    fit_prepared_xgboost_matrices_and_predict_validation,
+    prepare_xgboost_training_matrices,
     warm_up_xgboost_runtime,
 )
+from praedixa.demand_forecast.backends.xgboost.runtime import xgboost_uses_cuda
 from praedixa.demand_forecast.contracts.targets import (
     TargetContract,
     reconstruct_absolute_predictions,
@@ -51,6 +55,9 @@ def _param_snapshot(params: dict[str, object]) -> dict[str, object]:
         "reg_lambda",
         "subsample",
         "tree_method",
+        "device",
+        "xgboost_matrix_type",
+        "xgboost_gpu_input_backend",
     )
     return {key: params[key] for key in keys if key in params}
 
@@ -78,21 +85,201 @@ def xgboost_execution_policy(
     fold_count: int | None = None,
 ) -> dict[str, object]:
     folds = int(fold_count or 1)
-    fold_workers = _resolve_fold_workers(
-        fold_count=folds,
-        resolved_params=resolved_params,
-    )
-    threads_per_fold = int(cast(Any, resolved_params["n_jobs"]))
+    uses_cuda = xgboost_uses_cuda(resolved_params)
+    if uses_cuda:
+        fold_workers = 1
+        threads_per_fold = 1
+    else:
+        fold_workers = _resolve_fold_workers(
+            fold_count=folds,
+            resolved_params=resolved_params,
+        )
+        threads_per_fold = int(cast(Any, resolved_params["n_jobs"]))
     return {
         "backend": "xgboost",
         "runtime_profile": str(resolved_params.get("runtime_profile", "local_cpu")),
-        "accelerator": "cpu",
+        "accelerator": "gpu" if uses_cuda else "cpu",
         "devices": 1,
-        "gpu_safe_mode": False,
+        "gpu_safe_mode": uses_cuda,
+        "gpu_input_backend": str(
+            resolved_params.get("xgboost_gpu_input_backend", "cpu")
+        ),
         "fold_workers": fold_workers,
         "threads_per_fold": threads_per_fold,
         "total_threads": fold_workers * threads_per_fold,
     }
+
+
+@dataclass(frozen=True)
+class XGBoostFoldMatrixCache:
+    resolved_params: dict[str, object]
+    folds: list["_CachedXGBoostFold"]
+
+
+@dataclass(frozen=True)
+class _CachedXGBoostFold:
+    fold: dict[str, object]
+    fold_position: int
+    fold_valid: pd.DataFrame
+    prepared_matrices: XGBoostPreparedTrainingMatrices
+
+
+def build_xgboost_fold_matrix_cache(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    logger: logging.Logger,
+    model_params: dict[str, object],
+    total_threads: int | None = None,
+    train_frame_is_eligible: bool = False,
+) -> XGBoostFoldMatrixCache | None:
+    resolved_params = _resolved_scoring_params(model_params, total_threads)
+    if not _should_cache_xgboost_fold_matrices(resolved_params):
+        return None
+    cache_start = time.perf_counter()
+    base_train_frame = _eligible_base_train_frame(
+        train_frame,
+        logger=logger,
+        train_frame_is_eligible=train_frame_is_eligible,
+    )
+    try:
+        cached_folds = _build_cached_xgboost_folds(
+            train_frame=base_train_frame,
+            tuning_frame=tuning_frame,
+            folds=folds,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            resolved_params=resolved_params,
+            logger=logger,
+        )
+    except Exception as exc:
+        logger.warning(
+            "XGBoost fold matrix cache disabled after build failure: %s",
+            exc,
+        )
+        return None
+    logger.info(
+        "XGBoost fold matrix cache ready: folds=%s matrix_type=%s gpu_input_backend=%s max_bin=%s duration_seconds=%.3f",
+        len(cached_folds),
+        resolved_params.get("xgboost_matrix_type"),
+        resolved_params.get("xgboost_gpu_input_backend"),
+        resolved_params.get("max_bin"),
+        time.perf_counter() - cache_start,
+    )
+    return XGBoostFoldMatrixCache(
+        resolved_params=resolved_params,
+        folds=cached_folds,
+    )
+
+
+def _resolved_scoring_params(
+    model_params: dict[str, object] | None,
+    total_threads: int | None,
+) -> dict[str, object]:
+    resolved_params = resolve_xgboost_model_params(model_params)
+    resolved_params["n_jobs"] = int(
+        total_threads or cast(Any, resolved_params["n_jobs"])
+    )
+    if xgboost_uses_cuda(resolved_params):
+        resolved_params["n_jobs"] = 1
+        resolved_params["max_parallel_fold_workers"] = 1
+    return resolved_params
+
+
+def _eligible_base_train_frame(
+    train_frame: pd.DataFrame,
+    *,
+    logger: logging.Logger,
+    train_frame_is_eligible: bool,
+) -> pd.DataFrame:
+    if train_frame_is_eligible:
+        return train_frame
+    return filter_training_eligible_rows(
+        train_frame,
+        label="xgboost_optuna_shared_train",
+        logger=logger,
+    )
+
+
+def _should_cache_xgboost_fold_matrices(params: dict[str, object]) -> bool:
+    matrix_type = str(params.get("xgboost_matrix_type", "dmatrix"))
+    if matrix_type == "quantile":
+        return params.get("max_bin") is not None
+    return matrix_type == "dmatrix"
+
+
+def _build_cached_xgboost_folds(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+) -> list[_CachedXGBoostFold]:
+    cached_folds: list[_CachedXGBoostFold] = []
+    for position, fold in enumerate(folds, start=1):
+        cached_folds.append(
+            _build_cached_xgboost_fold(
+                train_frame=train_frame,
+                tuning_frame=tuning_frame,
+                fold=fold,
+                fold_position=position,
+                feature_cols=feature_cols,
+                target_contract=target_contract,
+                resolved_params=resolved_params,
+                logger=logger,
+            )
+        )
+    return cached_folds
+
+
+def _build_cached_xgboost_fold(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    fold: dict[str, object],
+    fold_position: int,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+) -> _CachedXGBoostFold:
+    fold_start = time.perf_counter()
+    fold_train, fold_valid = _fold_frames(
+        train_frame=train_frame,
+        tuning_frame=tuning_frame,
+        fold=fold,
+        logger=logger,
+    )
+    prepared_matrices = prepare_xgboost_training_matrices(
+        fold_train,
+        fold_valid,
+        feature_cols,
+        target_col=target_contract.learning_target_col,
+        model_params=resolved_params,
+        train_sample_weight=_sample_weights(fold_train)
+        if bool(resolved_params.get("enable_dataset_sample_weight", False))
+        else None,
+    )
+    logger.debug(
+        "XGBoost cached fold matrix built: fold=%s position=%s train_rows=%s valid_rows=%s duration_seconds=%.3f",
+        int(cast(Any, fold["fold"])),
+        fold_position,
+        len(fold_train),
+        len(fold_valid),
+        time.perf_counter() - fold_start,
+    )
+    return _CachedXGBoostFold(
+        fold=fold,
+        fold_position=fold_position,
+        fold_valid=fold_valid,
+        prepared_matrices=prepared_matrices,
+    )
 
 
 def fit_and_score_xgboost_model_on_tuning(
@@ -108,18 +295,22 @@ def fit_and_score_xgboost_model_on_tuning(
     target_transform: str = DEFAULT_TARGET_TRANSFORM,
     trial: optuna.trial.Trial | None = None,
     train_frame_is_eligible: bool = False,
+    fold_matrix_cache: XGBoostFoldMatrixCache | None = None,
 ) -> dict[str, object]:
     _ = target_transform
     trial_number = trial.number if trial is not None else None
     scoring_start = time.perf_counter()
-    resolved_params = resolve_xgboost_model_params(model_params)
-    resolved_params["n_jobs"] = int(
-        total_threads or cast(Any, resolved_params["n_jobs"])
-    )
+    resolved_params = _resolved_scoring_params(model_params, total_threads)
     execution_policy = xgboost_execution_policy(
         resolved_params,
         fold_count=len(folds),
     )
+    if fold_matrix_cache is not None:
+        execution_policy = {
+            **execution_policy,
+            "fold_matrix_cache": "prebuilt",
+            "fold_matrix_cache_folds": len(fold_matrix_cache.folds),
+        }
     logger.debug(
         "XGBoost scoring started: trial=%s train_rows=%s tuning_rows=%s folds=%s features=%s execution_policy=%s params=%s",
         trial_number,
@@ -144,7 +335,7 @@ def fit_and_score_xgboost_model_on_tuning(
         len(train_frame),
         len(base_train_frame),
     )
-    fold_results, folds_completed = _score_xgboost_folds(
+    fold_results, folds_completed = _score_xgboost_folds_with_optional_cache(
         train_frame=base_train_frame,
         tuning_frame=tuning_frame,
         folds=folds,
@@ -155,6 +346,7 @@ def fit_and_score_xgboost_model_on_tuning(
         trial=trial,
         trial_number=trial_number,
         fold_workers=int(cast(Any, execution_policy["fold_workers"])),
+        fold_matrix_cache=fold_matrix_cache,
     )
     dataset_mean_wape = _dataset_macro_scores(fold_results)
     selected_n_estimators = _mean_metric(
@@ -187,6 +379,78 @@ def fit_and_score_xgboost_model_on_tuning(
         time.perf_counter() - scoring_start,
     )
     return result
+
+
+def _score_xgboost_folds_with_optional_cache(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+    trial: optuna.trial.Trial | None,
+    trial_number: int | None,
+    fold_workers: int,
+    fold_matrix_cache: XGBoostFoldMatrixCache | None,
+) -> tuple[list[dict[str, object]], int]:
+    if fold_matrix_cache is not None:
+        return _score_cached_xgboost_folds(
+            fold_matrix_cache=fold_matrix_cache,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            resolved_params=resolved_params,
+            logger=logger,
+            trial=trial,
+            trial_number=trial_number,
+            fold_workers=fold_workers,
+        )
+    return _score_xgboost_folds(
+        train_frame=train_frame,
+        tuning_frame=tuning_frame,
+        folds=folds,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        resolved_params=resolved_params,
+        logger=logger,
+        trial=trial,
+        trial_number=trial_number,
+        fold_workers=fold_workers,
+    )
+
+
+def _score_cached_xgboost_folds(
+    *,
+    fold_matrix_cache: XGBoostFoldMatrixCache,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+    trial: optuna.trial.Trial | None,
+    trial_number: int | None,
+    fold_workers: int,
+) -> tuple[list[dict[str, object]], int]:
+    if fold_workers <= 1:
+        return _score_cached_xgboost_folds_sequential(
+            fold_matrix_cache=fold_matrix_cache,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            resolved_params=resolved_params,
+            logger=logger,
+            trial=trial,
+            trial_number=trial_number,
+        )
+    return _score_cached_xgboost_folds_parallel(
+        fold_matrix_cache=fold_matrix_cache,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        resolved_params=resolved_params,
+        logger=logger,
+        trial=trial,
+        trial_number=trial_number,
+        fold_workers=fold_workers,
+    )
 
 
 def _score_xgboost_folds(
@@ -225,6 +489,172 @@ def _score_xgboost_folds(
         trial=trial,
         trial_number=trial_number,
         fold_workers=fold_workers,
+    )
+
+
+def _score_cached_xgboost_folds_sequential(
+    *,
+    fold_matrix_cache: XGBoostFoldMatrixCache,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+    trial: optuna.trial.Trial | None,
+    trial_number: int | None,
+) -> tuple[list[dict[str, object]], int]:
+    fold_results: list[dict[str, object]] = []
+    folds_completed = 0
+    fold_count = len(fold_matrix_cache.folds)
+    for folds_completed, cached_fold in enumerate(
+        fold_matrix_cache.folds,
+        start=1,
+    ):
+        single_fold_results, duration_seconds = _score_cached_fold_with_logging(
+            cached_fold=cached_fold,
+            fold_count=fold_count,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            resolved_params=resolved_params,
+            logger=logger,
+            trial_number=trial_number,
+        )
+        fold_results.extend(single_fold_results)
+        _log_fold_completed(
+            logger=logger,
+            trial_number=trial_number,
+            fold=cached_fold.fold,
+            fold_position=cached_fold.fold_position,
+            fold_count=fold_count,
+            single_fold_results=single_fold_results,
+            duration_seconds=duration_seconds,
+        )
+        if trial is not None:
+            _report_trial_progress(trial, fold_results, step=folds_completed)
+            if trial.should_prune():
+                trial.set_user_attr("fold_results", fold_results)
+                trial.set_user_attr("folds_completed", folds_completed)
+                raise optuna.TrialPruned(
+                    f"XGBoost trial pruned after fold {folds_completed}."
+                )
+    return fold_results, folds_completed
+
+
+def _score_cached_xgboost_folds_parallel(
+    *,
+    fold_matrix_cache: XGBoostFoldMatrixCache,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+    trial: optuna.trial.Trial | None,
+    trial_number: int | None,
+    fold_workers: int,
+) -> tuple[list[dict[str, object]], int]:
+    logger.debug(
+        "XGBoost cached folds parallel execution starting: trial=%s folds=%s workers=%s threads_per_worker=%s",
+        trial_number,
+        len(fold_matrix_cache.folds),
+        fold_workers,
+        int(cast(Any, resolved_params["n_jobs"])),
+    )
+    if int(cast(Any, resolved_params["n_jobs"])) > 1:
+        warm_up_xgboost_runtime(int(cast(Any, resolved_params["n_jobs"])))
+    completed: list[_FoldResult] = []
+    with ThreadPoolExecutor(max_workers=fold_workers) as executor:
+        future_to_position = {
+            executor.submit(
+                _score_cached_fold_with_logging,
+                cached_fold=cached_fold,
+                fold_count=len(fold_matrix_cache.folds),
+                feature_cols=feature_cols,
+                target_contract=target_contract,
+                resolved_params=resolved_params,
+                logger=logger,
+                trial_number=trial_number,
+            ): position
+            for position, cached_fold in enumerate(fold_matrix_cache.folds, start=1)
+        }
+        for future in as_completed(future_to_position):
+            position = future_to_position[future]
+            results, duration_seconds = future.result()
+            cached_fold = fold_matrix_cache.folds[position - 1]
+            completed.append(
+                _FoldResult(
+                    position=position,
+                    results=results,
+                    duration_seconds=duration_seconds,
+                )
+            )
+            _log_fold_completed(
+                logger=logger,
+                trial_number=trial_number,
+                fold=cached_fold.fold,
+                fold_position=position,
+                fold_count=len(fold_matrix_cache.folds),
+                single_fold_results=results,
+                duration_seconds=duration_seconds,
+            )
+    fold_results = [
+        row for fold_result in sorted(completed) for row in fold_result.results
+    ]
+    if trial is not None:
+        _report_trial_progress(trial, fold_results, step=len(fold_matrix_cache.folds))
+    return fold_results, len(completed)
+
+
+def _score_cached_fold_with_logging(
+    *,
+    cached_fold: _CachedXGBoostFold,
+    fold_count: int,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+    logger: logging.Logger,
+    trial_number: int | None,
+) -> tuple[list[dict[str, object]], float]:
+    fold_start = time.perf_counter()
+    _log_fold_starting(
+        logger=logger,
+        trial_number=trial_number,
+        fold=cached_fold.fold,
+        fold_position=cached_fold.fold_position,
+        fold_count=fold_count,
+    )
+    return (
+        _score_cached_fold(
+            cached_fold=cached_fold,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            resolved_params=resolved_params,
+        ),
+        time.perf_counter() - fold_start,
+    )
+
+
+def _score_cached_fold(
+    *,
+    cached_fold: _CachedXGBoostFold,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    resolved_params: dict[str, object],
+) -> list[dict[str, object]]:
+    model, raw_predictions = fit_prepared_xgboost_matrices_and_predict_validation(
+        cached_fold.prepared_matrices,
+        model_params=resolved_params,
+    )
+    predictions = reconstruct_absolute_predictions(
+        raw_predictions,
+        cached_fold.fold_valid,
+        target_contract,
+    )
+    return _score_predictions_by_dataset(
+        frame=cached_fold.fold_valid,
+        predictions=predictions,
+        absolute_target_col=target_contract.absolute_target_col,
+        fold_number=int(cast(Any, cached_fold.fold["fold"])),
+        feature_cols=feature_cols,
+        selected_n_estimators=_selected_n_estimators(model.model),
+        native_best_score=_native_best_score(model.model),
     )
 
 
@@ -642,6 +1072,8 @@ def _mean_metric(
 
 
 __all__ = [
+    "XGBoostFoldMatrixCache",
+    "build_xgboost_fold_matrix_cache",
     "fit_and_score_xgboost_model_on_tuning",
     "xgboost_execution_policy",
 ]

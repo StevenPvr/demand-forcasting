@@ -198,11 +198,11 @@ class OptimisationPipelineTests(unittest.TestCase):
     def test_training_defaults_to_model_facing_gold_panel(self) -> None:
         self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_model_training_panel_d1")
 
-    def test_optimisation_request_defaults_to_full_sampling(self) -> None:
+    def test_optimisation_request_defaults_to_ten_percent_sampling(self) -> None:
         request = OptimisationBuildRequest()
 
-        self.assertEqual(request.train_sample_fraction, 1.0)
-        self.assertEqual(request.tuning_sample_fraction, 1.0)
+        self.assertEqual(request.train_sample_fraction, 0.10)
+        self.assertEqual(request.tuning_sample_fraction, 0.10)
         self.assertEqual(request.model_backend, "xgboost")
 
     def test_xgboost_context_keeps_store_product_and_client_identifiers_as_features(

@@ -291,6 +291,15 @@ def supplemental_corpus_daily_ddl(schema_name: str) -> str:
     return _supplemental_corpus_daily_ddl(schema_name)
 
 
+def synthetic_foodservice_daily_ddl(schema_name: str) -> str:
+    """Return the bronze DDL for the one-shot synthetic foodservice CSV."""
+
+    return _supplemental_corpus_daily_ddl(schema_name).replace(
+        "bronze_supplemental_corpus_daily",
+        "bronze_synthetic_foodservice_daily",
+    )
+
+
 def _bakery_ddl(schema_name: str) -> str:
     return f"""
     CREATE SCHEMA IF NOT EXISTS {schema_name};
@@ -447,6 +456,47 @@ def _open_macro_timeseries_expected_columns() -> tuple[str, ...]:
     )
 
 
+def _synthetic_foodservice_expected_columns() -> tuple[str, ...]:
+    return (
+        "dataset_source",
+        "source_partition",
+        "source_run_id",
+        "series_id",
+        "dt",
+        "location_id",
+        "product_id",
+        "observed_demand_qty",
+        "target_semantics",
+        "censor_flag",
+        "target_source",
+        "label_quality_score",
+        "usable_for_training_flag",
+    )
+
+
+def _supplemental_corpus_expected_columns() -> tuple[str, ...]:
+    return _synthetic_foodservice_expected_columns()
+
+
+def supplemental_corpus_daily_spec(
+    *,
+    source_path: str | Path,
+    schema_name: str,
+) -> BronzeTableSpec:
+    """Return the bronze spec for the standardized supplemental corpus parquet."""
+
+    return BronzeTableSpec(
+        table_name="bronze_supplemental_corpus_daily",
+        source_path=Path(source_path),
+        ddl=supplemental_corpus_daily_ddl(schema_name),
+        source_name="supplemental_corpus_daily",
+        required=False,
+        allow_empty=True,
+        expected_columns=_supplemental_corpus_expected_columns(),
+        source_policy_id="supplemental_corpus_daily",
+    )
+
+
 def default_core_bronze_specs(
     data_dir: str | Path,
     schema_name: str,
@@ -479,6 +529,19 @@ def default_core_bronze_specs(
             expected_columns=_bakery_expected_columns(),
             source_policy_id="bakery",
         ),
+        BronzeTableSpec(
+            table_name="bronze_synthetic_foodservice_daily",
+            source_path=root
+            / "commercial_datasets"
+            / "raw"
+            / "synthetic_foodservice_daily.csv",
+            ddl=synthetic_foodservice_daily_ddl(schema_name),
+            source_name="synthetic_foodservice_daily",
+            required=False,
+            allow_empty=True,
+            expected_columns=_synthetic_foodservice_expected_columns(),
+            source_policy_id="synthetic_foodservice_qsr",
+        ),
     ]
 
 
@@ -498,7 +561,11 @@ def default_open_exogenous_bronze_specs(
 ) -> list[BronzeTableSpec]:
     """Return the local open-source exogenous bronze files used by the gold pipeline."""
 
-    root = Path(open_exogenous_dir) if open_exogenous_dir is not None else Path(data_dir) / "external_open"
+    root = (
+        Path(open_exogenous_dir)
+        if open_exogenous_dir is not None
+        else Path(data_dir) / "external_open"
+    )
     spec_definitions = [
         (
             "bronze_open_location_metadata",

@@ -579,6 +579,25 @@ synthetic_product_profile.csv
 synthetic_foodservice_manifest.json
 ```
 
+Run the generator once, before the medallion pipeline:
+
+```bash
+/Users/steven/Programmation/research_praedixa/.venv/bin/python /Users/steven/Programmation/research_praedixa/platform/python/src/praedixa/platform/datasets/synthetic_foodservice/main.py
+```
+
+Operational contract:
+
+- this command is a one-shot source-generation step;
+- it writes the stable source CSV under `var/sources/commercial_datasets/raw/synthetic_foodservice_daily.csv`;
+- the medallion pipeline ingests that CSV afterward;
+- the medallion pipeline must not regenerate synthetic data on each run.
+- synthetic foodservice rows are training-only augmentation data in gold:
+  `split_bucket = 'train'` only, never `val` and never `test`;
+- the default generation scale is intentionally reduced to roughly one tenth of
+  the previous reduced run, and about one three-hundredth of the first full-scale
+  run: 180 sites, 180 cities, 12 months of history, compact realistic top-SKU
+  assortments, and about 1 million daily source rows.
+
 ### Phase 2: Canonical standardization
 
 Add a standardizer that maps synthetic output into the existing canonical schema, similar to:
@@ -647,9 +666,10 @@ Implement a **calibrated structural simulator** with hidden latent demand and vi
 
 For the first version, target:
 
-- 24 months daily history
-- 10 to 30 locations
-- 50 to 200 products
+- 12 months daily history
+- hundreds of locations
+- hundreds of cities
+- compact vertical-specific product assortments
 - 3 vertical archetypes: bakery, QSR/fast-food, traditional restaurant
 - 5% to 20% censored rows depending scenario
 - 5% to 15% promo days
@@ -658,4 +678,3 @@ For the first version, target:
 - output compatible with first-party onboarding and canonical schema
 
 This gives Praedixa a credible commercial demo asset and a serious engineering testbed for the wedge: demand and staffing forecast for foodservice/perishable operations, with measurable ROI logic.
-

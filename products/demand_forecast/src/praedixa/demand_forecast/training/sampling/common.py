@@ -16,6 +16,25 @@ def resolve_sampling_store_col(frame: pd.DataFrame) -> str:
     )
 
 
+def series_key_sql(
+    selected_columns: list[str] | None,
+    *,
+    sample_store_col: str,
+) -> str:
+    candidate_columns = ("client_id", sample_store_col, "location_id", "product_id")
+    selected = set(selected_columns) if selected_columns is not None else None
+    key_columns: list[str] = []
+    for column in candidate_columns:
+        if column in key_columns:
+            continue
+        if selected is None or column in selected:
+            key_columns.append(column)
+    if not key_columns:
+        raise ValueError("Sampling requires at least one stable series identifier.")
+    parts = [f"coalesce(cast({column} as varchar), '')" for column in key_columns]
+    return " || '|' || ".join(parts)
+
+
 def log_sampling_summary(
     label: str,
     metadata: dict[str, object],
@@ -85,4 +104,5 @@ __all__ = [
     "resolve_sampling_order_cols",
     "resolve_sampling_order_columns",
     "resolve_sampling_store_col",
+    "series_key_sql",
 ]

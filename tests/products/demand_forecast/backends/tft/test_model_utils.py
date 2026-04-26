@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
 PRODUCT_SRC = PROJECT_ROOT / "products" / "demand_forecast" / "src"
 for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
@@ -37,7 +41,9 @@ import praedixa.demand_forecast.backends.tft.model_fit as model_fit_module  # no
 class TFTModelUtilsTests(unittest.TestCase):
     def test_default_tft_model_params_enable_native_progress_bar(self) -> None:
         self.assertTrue(bool(DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
-        self.assertEqual(int(cast(Any, DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"])), 1)
+        self.assertEqual(
+            int(cast(Any, DEFAULT_TFT_MODEL_PARAMS["progress_bar_refresh_rate"])), 1
+        )
 
     def test_business_validation_metrics_payload_scores_absolute_target_directly(
         self,
@@ -101,9 +107,17 @@ class TFTModelUtilsTests(unittest.TestCase):
                     },
                 ),
             ),
-            patch.object(model_fit_module, "suppress_tft_runtime_noise", return_value=nullcontext()),
+            patch.object(
+                model_fit_module,
+                "suppress_tft_runtime_noise",
+                return_value=nullcontext(),
+            ),
             patch.object(model_fit_module, "seed_tft_runtime"),
-            patch.object(model_fit_module, "_resolved_dataset_artifacts", return_value=dataset_artifacts),
+            patch.object(
+                model_fit_module,
+                "_resolved_dataset_artifacts",
+                return_value=dataset_artifacts,
+            ),
             patch.object(
                 model_fit_module,
                 "_business_validation_logging_callback",
@@ -114,8 +128,14 @@ class TFTModelUtilsTests(unittest.TestCase):
                 "_fit_resolved_model",
                 return_value=(sentinel_model, None, 0, {}),
             ) as mocked_fit,
-            patch.object(model_fit_module, "extract_interpretability_payload", return_value=None),
-            patch.object(model_fit_module, "build_fitted_tft_model", return_value=mocked_callback_builder),
+            patch.object(
+                model_fit_module, "extract_interpretability_payload", return_value=None
+            ),
+            patch.object(
+                model_fit_module,
+                "build_fitted_tft_model",
+                return_value=mocked_callback_builder,
+            ),
         ):
             result = model_fit_module.fit_tft_model(
                 train_frame=train_frame,
@@ -125,6 +145,87 @@ class TFTModelUtilsTests(unittest.TestCase):
 
         self.assertIs(result, mocked_callback_builder)
         self.assertEqual(mocked_fit.call_args.kwargs["extra_callbacks"], [])
+
+    def test_business_validation_callback_restores_parent_trainer_context(
+        self,
+    ) -> None:
+        class _FakeLightningModule:
+            def __init__(self, trainer: object) -> None:
+                self._trainer = trainer
+                self.training = True
+                self.device = None
+                self.train_calls = 0
+
+            def train(self) -> "_FakeLightningModule":
+                self.training = True
+                self.train_calls += 1
+                return self
+
+            def eval(self) -> "_FakeLightningModule":
+                self.training = False
+                return self
+
+        parent_trainer = SimpleNamespace(callback_metrics={}, current_epoch=1)
+        predict_trainer = SimpleNamespace(callback_metrics={}, current_epoch=0)
+        pl_module = _FakeLightningModule(parent_trainer)
+        train_frame = pd.DataFrame({"target": [1.0]})
+        valid_frame = pd.DataFrame({"target": [2.0]})
+        dataset_artifacts = cast(
+            Any,
+            SimpleNamespace(
+                training_dataset=SimpleNamespace(get_parameters=lambda: {}),
+                training_slice=pd.DataFrame({"target": [1.0]}),
+                feature_scalers={},
+                normalization_strategy={},
+            ),
+        )
+
+        callback = cast(
+            Any,
+            model_fit_module._business_validation_logging_callback(
+                {"Callback": object},
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                feature_cols=[],
+                target_col="target",
+                dataset_artifacts=dataset_artifacts,
+                resolved_params={"batch_size": 8, "quantiles": [0.1, 0.5, 0.9]},
+            ),
+        )
+
+        def _fake_predict(
+            transient_model: object, *_: object, **__: object
+        ) -> np.ndarray:
+            self.assertIs(getattr(transient_model, "model"), pl_module)
+            pl_module._trainer = predict_trainer
+            pl_module.eval()
+            return np.asarray([2.0], dtype=float)
+
+        with (
+            patch.object(
+                model_fit_module,
+                "predict_with_tft_model",
+                side_effect=_fake_predict,
+            ),
+            patch.object(
+                model_fit_module,
+                "_business_validation_metrics_payload",
+                return_value={
+                    "business_val_wape": 0.25,
+                    "business_val_abs_bias": 1.5,
+                },
+            ),
+        ):
+            callback.on_validation_epoch_end(parent_trainer, pl_module)
+
+        self.assertIs(pl_module._trainer, parent_trainer)
+        self.assertTrue(pl_module.training)
+        self.assertEqual(pl_module.train_calls, 1)
+        self.assertEqual(parent_trainer.callback_metrics["business_val_wape"], 0.25)
+        self.assertEqual(
+            parent_trainer.callback_metrics["business_val_abs_bias"],
+            1.5,
+        )
 
     def _build_training_frame(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         dates = pd.date_range("2024-01-01", periods=32, freq="D")
@@ -145,7 +246,9 @@ class TFTModelUtilsTests(unittest.TestCase):
                         "rolling_mean_7": float(signal[index]),
                     }
                 )
-        frame = pd.DataFrame(rows).sort_values(["client_id", "dt"]).reset_index(drop=True)
+        frame = (
+            pd.DataFrame(rows).sort_values(["client_id", "dt"]).reset_index(drop=True)
+        )
         train_frame = frame[frame["dt"] < "2024-01-25"].copy().reset_index(drop=True)
         valid_frame = frame[frame["dt"] >= "2024-01-25"].copy().reset_index(drop=True)
         return train_frame, valid_frame
@@ -182,7 +285,9 @@ class TFTModelUtilsTests(unittest.TestCase):
 
     def test_fit_predict_and_save_tft_model(self) -> None:
         train_frame, valid_frame = self._build_training_frame()
-        feature_cols = select_tft_feature_columns(train_frame, excluded_cols={"dt", "target"})
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
 
         model = fit_tft_model(
             train_frame,
@@ -224,9 +329,51 @@ class TFTModelUtilsTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertGreater(output_path.stat().st_size, 0)
 
+    def test_fit_tft_model_reaches_second_epoch_after_business_validation(
+        self,
+    ) -> None:
+        train_frame, valid_frame = self._build_training_frame()
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
+
+        model = fit_tft_model(
+            train_frame,
+            feature_cols,
+            target_col="target",
+            valid_frame=valid_frame,
+            model_params={
+                "accelerator": "cpu",
+                "devices": 1,
+                "max_epochs": 2,
+                "batch_size": 8,
+                "hidden_size": 8,
+                "hidden_continuous_size": 4,
+                "attention_head_size": 1,
+                "dropout": 0.1,
+                "learning_rate": 0.03,
+                "max_encoder_length": 7,
+                "patience": 2,
+                "loss_patience": 0,
+                "enable_progress_bar": False,
+                "enable_csv_logger": False,
+                "enable_lr_monitor": False,
+                "enable_validation_metric_logging": False,
+                "enable_device_stats_monitor": False,
+            },
+            default_max_iter=2,
+        )
+
+        self.assertGreaterEqual(model.best_iteration, 0)
+        self.assertTrue(
+            np.isfinite(predict_with_tft_model(model, valid_frame, feature_cols)).all()
+        )
+
     def test_predict_quantiles_with_tft_model_returns_aligned_quantiles(self) -> None:
         train_frame, valid_frame = self._build_training_frame()
-        feature_cols = select_tft_feature_columns(train_frame, excluded_cols={"dt", "target"})
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
 
         model = fit_tft_model(
             train_frame,
@@ -250,7 +397,9 @@ class TFTModelUtilsTests(unittest.TestCase):
             default_max_iter=1,
         )
 
-        quantile_predictions = predict_quantiles_with_tft_model(model, valid_frame, feature_cols)
+        quantile_predictions = predict_quantiles_with_tft_model(
+            model, valid_frame, feature_cols
+        )
 
         self.assertEqual(
             list(quantile_predictions.columns),
@@ -267,7 +416,9 @@ class TFTModelUtilsTests(unittest.TestCase):
 
     def test_fit_tft_model_registers_train_only_real_feature_scalers(self) -> None:
         train_frame, valid_frame = self._build_training_frame()
-        feature_cols = select_tft_feature_columns(train_frame, excluded_cols={"dt", "target"})
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
 
         model = fit_tft_model(
             train_frame,
@@ -296,7 +447,10 @@ class TFTModelUtilsTests(unittest.TestCase):
         self.assertIn("current_day_demand_qty", scalers)
         self.assertNotIn("location_id", scalers)
         self.assertIsNone(model.target_scaler)
-        self.assertEqual(getattr(model.dataset_parameters.get("target_normalizer"), "method", None), "standard")
+        self.assertEqual(
+            getattr(model.dataset_parameters.get("target_normalizer"), "method", None),
+            "standard",
+        )
         self.assertIn("peak_ram_mb", model.runtime_metrics)
         self.assertEqual(model.normalization_strategy["kind"], "group_normalizer")
         self.assertIn("variable_selection", model.interpretability_payload or {})
@@ -305,7 +459,9 @@ class TFTModelUtilsTests(unittest.TestCase):
         train_frame, valid_frame = self._build_training_frame()
         valid_frame = valid_frame.copy()
         valid_frame.loc[valid_frame.index[0], "location_id"] = "store_99"
-        feature_cols = select_tft_feature_columns(train_frame, excluded_cols={"dt", "target"})
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
 
         model = fit_tft_model(
             train_frame,
@@ -335,7 +491,9 @@ class TFTModelUtilsTests(unittest.TestCase):
 
     def test_predict_with_tft_model_handles_weighted_training_contract(self) -> None:
         train_frame, valid_frame = self._build_training_frame()
-        feature_cols = select_tft_feature_columns(train_frame, excluded_cols={"dt", "target"})
+        feature_cols = select_tft_feature_columns(
+            train_frame, excluded_cols={"dt", "target"}
+        )
         train_weights = np.linspace(0.8, 1.2, len(train_frame), dtype=float)
         valid_weights = np.linspace(0.9, 1.1, len(valid_frame), dtype=float)
 
@@ -408,7 +566,9 @@ class TFTModelUtilsTests(unittest.TestCase):
                 "client_id": ["store_1__sku_1"] * 4,
                 "location_id": ["store_1"] * 4,
                 "product_id": ["sku_1"] * 4,
-                "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-05", "2024-01-06"]),
+                "dt": pd.to_datetime(
+                    ["2024-01-01", "2024-01-02", "2024-01-05", "2024-01-06"]
+                ),
                 "__tft_group_id": ["store_1__sku_1"] * 4,
                 "__tft_time_idx": [0, 1, 4, 5],
                 "target": [1.0, 2.0, 3.0, 4.0],

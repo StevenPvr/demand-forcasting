@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Mapping, cast
+from typing import Mapping, Sequence, cast
 
 import duckdb
 import numpy as np
@@ -14,10 +14,18 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (
     TIME_IDX_COL,
     build_group_identifier,
 )
-from praedixa.demand_forecast.backends.tft.feature_mapping_spec import TFT_GROUP_ID_COLUMNS
-from praedixa.demand_forecast.backends.tft.feature_mapping import TFT_EXPLICIT_ROLE_BY_COLUMN
-from praedixa.demand_forecast.backends.tft.feature_mapping import select_explicit_tft_group_id_columns
-from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
+from praedixa.demand_forecast.backends.tft.feature_mapping_spec import (
+    TFT_GROUP_ID_COLUMNS,
+)
+from praedixa.demand_forecast.backends.tft.feature_mapping import (
+    TFT_EXPLICIT_ROLE_BY_COLUMN,
+)
+from praedixa.demand_forecast.backends.tft.feature_mapping import (
+    select_explicit_tft_group_id_columns,
+)
+from praedixa.demand_forecast.backends.tft.feature_contract import (
+    build_feature_contract,
+)
 from praedixa.demand_forecast.backends.tft.model_utils import select_tft_feature_columns
 from praedixa.demand_forecast.contracts.targets import (
     DEFAULT_ABSOLUTE_TARGET_COL,
@@ -76,9 +84,9 @@ class BundleProjectionMetadata:
 
 @dataclass(frozen=True)
 class BundleSplitMetadata:
-    train_path: Path
-    tuning_path: Path
-    valid_path: Path | None
+    train_path: str | Path
+    tuning_path: str | Path
+    valid_path: str | Path | None
     train_rows: int
     tuning_rows: int
     valid_rows: int
@@ -138,7 +146,34 @@ def _gold_projection_sql(
     if schema_preview.empty and not list(schema_preview.columns):
         raise ValueError(f"Gold table `{gold_table}` exposes no columns.")
     prefix = "" if table_alias is None else f"{table_alias}."
-    return ", ".join(f"{prefix}{_quote_identifier(column)}" for column in schema_preview.columns)
+    return ", ".join(
+        f"{prefix}{_quote_identifier(column)}" for column in schema_preview.columns
+    )
+
+
+def _gold_schema_columns(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+) -> list[str]:
+    rows = connection.execute(f"describe select * from {gold_table} limit 0").fetchall()
+    columns = [str(row[0]) for row in rows]
+    if not columns:
+        raise ValueError(f"Gold table `{gold_table}` exposes no columns.")
+    return columns
+
+
+def _gold_schema_types(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+) -> dict[str, str]:
+    rows = connection.execute(f"describe select * from {gold_table} limit 0").fetchall()
+    return {str(row[0]): str(row[1]).upper() for row in rows}
+
+
+def _empty_schema_frame(columns: Sequence[str]) -> pd.DataFrame:
+    return pd.DataFrame(columns=list(columns))
 
 
 def _gold_split_row_count(
@@ -169,24 +204,28 @@ def _gold_training_eligibility_filter(
     *,
     gold_table: str,
     split_bucket: str,
+    table_alias: str | None = None,
 ) -> str:
     if split_bucket not in {"train", "val"}:
         return "true"
     schema_preview = connection.execute(f"select * from {gold_table} limit 0").fetchdf()
     available_columns = set(schema_preview.columns)
-    required_columns = {"usable_for_training_flag", "censor_flag", "label_quality_score"}
+    required_columns = {
+        "usable_for_training_flag",
+        "censor_flag",
+        "label_quality_score",
+    }
     if not required_columns.issubset(available_columns):
         return "true"
+    prefix = "" if table_alias is None else f"{table_alias}."
     target_source_filter = ""
     if "target_source" in available_columns:
-        target_source_filter = (
-            f"and coalesce(target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}"
-        )
+        target_source_filter = f"and coalesce({prefix}target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}"
     return f"""
 (
-    coalesce(usable_for_training_flag, false)
-    and not coalesce(censor_flag, false)
-    and coalesce(label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
+    coalesce({prefix}usable_for_training_flag, false)
+    and not coalesce({prefix}censor_flag, false)
+    and coalesce({prefix}label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
     {target_source_filter}
 )""".strip()
 
@@ -371,7 +410,9 @@ def _materialize_smoke_gold_split(
         )
     finally:
         connection.close()
-    return output_path if output_path.exists() and output_path.stat().st_size > 0 else None
+    return (
+        output_path if output_path.exists() and output_path.stat().st_size > 0 else None
+    )
 
 
 def _load_materialized_gold_frame(path: Path | None) -> pd.DataFrame | None:
@@ -513,11 +554,15 @@ def _training_exclusion_report(
         "dropped_rows": int((~mask).sum()),
     }
     if "censor_flag" in frame.columns:
-        report["censored_rows"] = int(frame["censor_flag"].fillna(False).astype(bool).sum())
+        report["censored_rows"] = int(
+            frame["censor_flag"].fillna(False).astype(bool).sum()
+        )
     if "label_quality_score" in frame.columns:
         label_quality = pd.to_numeric(frame["label_quality_score"], errors="coerce")
         report["low_quality_rows"] = int(
-            label_quality.lt(DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE).fillna(True).sum()
+            label_quality.lt(DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE)
+            .fillna(True)
+            .sum()
         )
     if "usable_for_training_flag" in frame.columns:
         report["not_usable_rows"] = int(
@@ -589,6 +634,177 @@ def _filter_bundle_training_frames(
     )
 
 
+def _gold_count_where(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    where_clause: str,
+) -> int:
+    row = connection.execute(
+        f"select count(*) from {gold_table} where {where_clause}"
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(cast(int, row[0]))
+
+
+def _gold_holdout_exclusion_report(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    split_bucket: str,
+    label: str,
+    excluded_dataset_sources: tuple[str, ...],
+) -> dict[str, object]:
+    split_filter = f"split_bucket = {_sql_literal(split_bucket)}"
+    input_rows = _gold_count_where(
+        connection,
+        gold_table=gold_table,
+        where_clause=split_filter,
+    )
+    if not excluded_dataset_sources:
+        return {
+            "label": label,
+            "input_rows": input_rows,
+            "excluded_dataset_sources": [],
+            "excluded_rows": 0,
+            "kept_rows": input_rows,
+        }
+    kept_filter = dataset_source_not_in_filter(
+        DEFAULT_DATASET_SOURCE_COL,
+        excluded_dataset_sources,
+    )
+    kept_rows = _gold_count_where(
+        connection,
+        gold_table=gold_table,
+        where_clause=f"{split_filter} and {kept_filter}",
+    )
+    return {
+        "label": label,
+        "input_rows": input_rows,
+        "excluded_dataset_sources": list(excluded_dataset_sources),
+        "excluded_rows": int(input_rows - kept_rows),
+        "kept_rows": kept_rows,
+    }
+
+
+def _gold_training_split_exclusion_report(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    split_bucket: str,
+    label: str,
+    excluded_dataset_sources: tuple[str, ...],
+    available_columns: set[str],
+) -> dict[str, object]:
+    split_filter = f"split_bucket = {_sql_literal(split_bucket)}"
+    scope_filter = dataset_source_not_in_filter(
+        DEFAULT_DATASET_SOURCE_COL,
+        excluded_dataset_sources,
+    )
+    scoped_where = f"{split_filter} and {scope_filter}"
+    eligibility_filter = _gold_training_eligibility_filter(
+        connection,
+        gold_table=gold_table,
+        split_bucket=split_bucket,
+    )
+    input_rows = _gold_count_where(
+        connection,
+        gold_table=gold_table,
+        where_clause=scoped_where,
+    )
+    kept_rows = _gold_count_where(
+        connection,
+        gold_table=gold_table,
+        where_clause=f"{scoped_where} and {eligibility_filter}",
+    )
+    report: dict[str, object] = {
+        "label": label,
+        "input_rows": input_rows,
+        "kept_rows": kept_rows,
+        "dropped_rows": int(input_rows - kept_rows),
+    }
+    if "censor_flag" in available_columns:
+        report["censored_rows"] = _gold_count_where(
+            connection,
+            gold_table=gold_table,
+            where_clause=f"{scoped_where} and coalesce(censor_flag, false)",
+        )
+    if "label_quality_score" in available_columns:
+        report["low_quality_rows"] = _gold_count_where(
+            connection,
+            gold_table=gold_table,
+            where_clause=(
+                f"{scoped_where} and "
+                f"coalesce(label_quality_score < {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}, true)"
+            ),
+        )
+    if "usable_for_training_flag" in available_columns:
+        report["not_usable_rows"] = _gold_count_where(
+            connection,
+            gold_table=gold_table,
+            where_clause=(
+                f"{scoped_where} and not coalesce(usable_for_training_flag, false)"
+            ),
+        )
+    if "target_source" in available_columns:
+        report["closed_or_dense_zero_rows"] = _gold_count_where(
+            connection,
+            gold_table=gold_table,
+            where_clause=(
+                f"{scoped_where} and target_source in "
+                "('closed_or_missing_observation', 'dense_calendar_zero_fill')"
+            ),
+        )
+    return report
+
+
+def _gold_training_exclusion_report(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    excluded_dataset_sources: tuple[str, ...],
+    available_columns: set[str],
+) -> dict[str, object]:
+    return {
+        "min_label_quality_score": DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE,
+        "holdout_exclusions": [
+            _gold_holdout_exclusion_report(
+                connection,
+                gold_table=gold_table,
+                split_bucket="train",
+                label="train",
+                excluded_dataset_sources=excluded_dataset_sources,
+            ),
+            _gold_holdout_exclusion_report(
+                connection,
+                gold_table=gold_table,
+                split_bucket="val",
+                label="tuning",
+                excluded_dataset_sources=excluded_dataset_sources,
+            ),
+        ],
+        "splits": [
+            _gold_training_split_exclusion_report(
+                connection,
+                gold_table=gold_table,
+                split_bucket="train",
+                label="train",
+                excluded_dataset_sources=excluded_dataset_sources,
+                available_columns=available_columns,
+            ),
+            _gold_training_split_exclusion_report(
+                connection,
+                gold_table=gold_table,
+                split_bucket="val",
+                label="tuning",
+                excluded_dataset_sources=excluded_dataset_sources,
+                available_columns=available_columns,
+            ),
+        ],
+    }
+
+
 def _bundle_projection_columns(
     feature_cols: list[str],
     *,
@@ -614,6 +830,141 @@ def _bundle_projection_columns(
     return ordered
 
 
+def _bool_like_duckdb_type(type_name: str) -> bool:
+    return type_name.upper() in {"BOOLEAN", "BOOL"}
+
+
+def _integer_like_duckdb_type(type_name: str) -> bool:
+    normalized = type_name.upper()
+    return any(
+        token in normalized
+        for token in (
+            "TINYINT",
+            "SMALLINT",
+            "INTEGER",
+            "BIGINT",
+            "HUGEINT",
+            "UTINYINT",
+            "USMALLINT",
+            "UINTEGER",
+            "UBIGINT",
+        )
+    )
+
+
+def _float32_projection_columns(
+    *,
+    feature_cols: list[str],
+    learning_target_col: str,
+    absolute_target_col: str,
+    reconstruction_anchor_col: str | None,
+) -> set[str]:
+    return {
+        column
+        for column in [
+            learning_target_col,
+            absolute_target_col,
+            reconstruction_anchor_col,
+            *BASELINE_SUPPORT_COLUMNS,
+            *feature_cols,
+        ]
+        if column is not None
+        and (
+            column
+            in {
+                learning_target_col,
+                absolute_target_col,
+                reconstruction_anchor_col,
+                *BASELINE_SUPPORT_COLUMNS,
+            }
+            or TFT_EXPLICIT_ROLE_BY_COLUMN.get(column, "").endswith("_real")
+        )
+    }
+
+
+def _categorical_projection_columns(
+    *,
+    feature_cols: list[str],
+    group_id_columns: list[str],
+) -> set[str]:
+    return set(group_id_columns).union(
+        {
+            column
+            for column in feature_cols
+            if not TFT_EXPLICIT_ROLE_BY_COLUMN.get(column, "").endswith("_real")
+        }
+    )
+
+
+def _gold_projection_expression(
+    column: str,
+    *,
+    table_alias: str,
+    column_types: Mapping[str, str],
+    float32_columns: set[str],
+    categorical_columns: set[str],
+) -> str:
+    source = f"{table_alias}.{_quote_identifier(column)}"
+    output = _quote_identifier(column)
+    column_type = column_types.get(column, "")
+    if column == DEFAULT_DATE_COL:
+        return f"cast({source} as date) as {output}"
+    if column in float32_columns:
+        return f"try_cast({source} as real) as {output}"
+    if _bool_like_duckdb_type(column_type):
+        return f"cast(try_cast({source} as boolean) as tinyint) as {output}"
+    if column.endswith("_status") and _integer_like_duckdb_type(column_type):
+        return f"try_cast({source} as tinyint) as {output}"
+    if column in categorical_columns:
+        return f"cast({source} as varchar) as {output}"
+    return f"{source} as {output}"
+
+
+def _gold_projection_select_sql(
+    *,
+    projection_columns: list[str],
+    table_alias: str,
+    column_types: Mapping[str, str],
+    feature_cols: list[str],
+    group_id_columns: list[str],
+    target_contract: TargetContract,
+) -> str:
+    float32_columns = _float32_projection_columns(
+        feature_cols=feature_cols,
+        learning_target_col=target_contract.learning_target_col,
+        absolute_target_col=target_contract.absolute_target_col,
+        reconstruction_anchor_col=target_contract.reconstruction_anchor_col,
+    )
+    categorical_columns = _categorical_projection_columns(
+        feature_cols=feature_cols,
+        group_id_columns=group_id_columns,
+    )
+    return ",\n                ".join(
+        _gold_projection_expression(
+            column,
+            table_alias=table_alias,
+            column_types=column_types,
+            float32_columns=float32_columns,
+            categorical_columns=categorical_columns,
+        )
+        for column in projection_columns
+    )
+
+
+def _sql_group_identifier_expr(
+    *,
+    table_alias: str,
+    group_id_columns: list[str],
+) -> str:
+    if not group_id_columns:
+        return "'global_series'"
+    parts = [
+        f"coalesce(cast({table_alias}.{_quote_identifier(column)} as varchar), '<NA>')"
+        for column in group_id_columns
+    ]
+    return " || '__' || ".join(parts)
+
+
 def _optimize_projection_frame(
     projected: pd.DataFrame,
     *,
@@ -634,7 +985,8 @@ def _optimize_projection_frame(
         ]
         if column is not None
         and (
-            column in {
+            column
+            in {
                 learning_target_col,
                 absolute_target_col,
                 reconstruction_anchor_col,
@@ -655,13 +1007,19 @@ def _optimize_projection_frame(
         if column == DEFAULT_DATE_COL:
             continue
         if column in float32_columns:
-            optimized[column] = pd.to_numeric(optimized[column], errors="coerce").astype("float32")
+            optimized[column] = pd.to_numeric(
+                optimized[column], errors="coerce"
+            ).astype("float32")
             continue
         if pd.api.types.is_bool_dtype(optimized[column]):
             optimized[column] = optimized[column].astype("int8")
             continue
-        if column.endswith("_status") and pd.api.types.is_numeric_dtype(optimized[column]):
-            optimized[column] = pd.to_numeric(optimized[column], errors="coerce").astype("Int8")
+        if column.endswith("_status") and pd.api.types.is_numeric_dtype(
+            optimized[column]
+        ):
+            optimized[column] = pd.to_numeric(
+                optimized[column], errors="coerce"
+            ).astype("Int8")
             continue
         if column in categorical_columns:
             optimized[column] = optimized[column].astype("string")
@@ -678,7 +1036,12 @@ def _projected_frame(
     absolute_target_col: str,
     reconstruction_anchor_col: str | None,
 ) -> pd.DataFrame:
-    projected = frame.loc[:, columns].copy().sort_values(DEFAULT_DATE_COL).reset_index(drop=True)
+    projected = (
+        frame.loc[:, columns]
+        .copy()
+        .sort_values(DEFAULT_DATE_COL)
+        .reset_index(drop=True)
+    )
     return _optimize_projection_frame(
         projected,
         feature_cols=feature_cols,
@@ -698,7 +1061,9 @@ def _build_optimisation_projection(
     projected = frame.copy()
     projected[DEFAULT_DATE_COL] = pd.to_datetime(projected[DEFAULT_DATE_COL])
     projected[GROUP_COL] = build_group_identifier(projected, group_id_columns)
-    projected = projected.sort_values([GROUP_COL, DEFAULT_DATE_COL]).reset_index(drop=True)
+    projected = projected.sort_values([GROUP_COL, DEFAULT_DATE_COL]).reset_index(
+        drop=True
+    )
     time_idx = projected.groupby(GROUP_COL, sort=False).cumcount().astype(np.int32)
     if train_group_sizes is not None:
         offsets = projected[GROUP_COL].map(train_group_sizes).fillna(0).astype(np.int32)
@@ -746,7 +1111,9 @@ def _feature_manifest_payload(
         "group_id_columns": group_id_columns,
         "projection_columns": projection_columns,
         "projection_dtypes": projection_dtypes,
-        "feature_roles": {column: TFT_EXPLICIT_ROLE_BY_COLUMN[column] for column in feature_cols},
+        "feature_roles": {
+            column: TFT_EXPLICIT_ROLE_BY_COLUMN[column] for column in feature_cols
+        },
         "feature_contract": feature_contract,
     }
 
@@ -796,7 +1163,9 @@ def _resolve_bundle_contract(
     valid_frame: pd.DataFrame | None,
     target_col: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None, TargetContract]:
-    target_contract = resolve_target_contract(train_frame, tuning_frame, requested_target_col=target_col)
+    target_contract = resolve_target_contract(
+        train_frame, tuning_frame, requested_target_col=target_col
+    )
     train_frame = ensure_learning_target_column(train_frame, target_contract)
     tuning_frame = ensure_learning_target_column(tuning_frame, target_contract)
     if valid_frame is not None:
@@ -830,6 +1199,259 @@ def _resolve_bundle_features(
         available_columns=set(train_frame.columns),
     )
     return feature_cols, group_id_columns, projection_columns
+
+
+def _resolve_bundle_projection_from_columns(
+    *,
+    columns: Sequence[str],
+    target_col: str,
+) -> tuple[TargetContract, list[str], list[str], list[str]]:
+    schema_columns = [
+        column for column in columns if column not in DEFAULT_REMOVED_MODEL_INPUT_COLS
+    ]
+    schema_frame = _empty_schema_frame(schema_columns)
+    target_contract = resolve_target_contract(
+        schema_frame,
+        schema_frame,
+        requested_target_col=target_col,
+    )
+    feature_cols, group_id_columns, projection_columns = _resolve_bundle_features(
+        train_frame=schema_frame,
+        target_contract=target_contract,
+    )
+    return target_contract, feature_cols, group_id_columns, projection_columns
+
+
+def _gold_split_source_sql(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    gold_table: str,
+    split_bucket: str,
+    excluded_dataset_sources: tuple[str, ...],
+    smoke_series_limit: int | None,
+    smoke_dataset_source: str | None,
+    smoke_min_train_rows: int,
+    smoke_min_tuning_rows: int,
+    smoke_min_valid_rows: int,
+) -> str:
+    training_eligibility_filter = _gold_training_eligibility_filter(
+        connection,
+        gold_table=gold_table,
+        split_bucket=split_bucket,
+        table_alias="gold",
+    )
+    if smoke_series_limit is not None:
+        train_eligibility_filter = _gold_training_eligibility_filter(
+            connection,
+            gold_table=gold_table,
+            split_bucket="train",
+        )
+        tuning_eligibility_filter = _gold_training_eligibility_filter(
+            connection,
+            gold_table=gold_table,
+            split_bucket="val",
+        )
+        selected_series_query = _smoke_series_selection_query(
+            gold_table=gold_table,
+            series_limit=smoke_series_limit,
+            dataset_source=smoke_dataset_source,
+            min_train_rows=smoke_min_train_rows,
+            min_tuning_rows=smoke_min_tuning_rows,
+            min_valid_rows=smoke_min_valid_rows,
+            excluded_dataset_sources=excluded_dataset_sources,
+            train_eligibility_filter=train_eligibility_filter,
+            tuning_eligibility_filter=tuning_eligibility_filter,
+        )
+        return f"""
+        with selected_series as (
+            {selected_series_query}
+        )
+        select gold.*
+        from {gold_table} as gold
+        inner join selected_series
+            on gold.dataset_source = selected_series.dataset_source
+           and gold.{CANONICAL_GROUP_ID_COL} = selected_series.{CANONICAL_GROUP_ID_COL}
+        where gold.split_bucket = {_sql_literal(split_bucket)}
+          and {training_eligibility_filter}
+        """
+    dataset_scope_filter = dataset_source_not_in_filter(
+        f"gold.{DEFAULT_DATASET_SOURCE_COL}",
+        excluded_dataset_sources,
+    )
+    return f"""
+    select gold.*
+    from {gold_table} as gold
+    where gold.split_bucket = {_sql_literal(split_bucket)}
+      and {dataset_scope_filter}
+      and {training_eligibility_filter}
+    """
+
+
+def _count_query_rows(
+    connection: duckdb.DuckDBPyConnection,
+    query: str,
+) -> int:
+    row = connection.execute(
+        f"select count(*) from ({query}) as counted_rows"
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(cast(int, row[0]))
+
+
+def _copy_query_to_parquet(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    query: str,
+    output_path: Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    connection.execute(
+        f"""
+        copy (
+            {query}
+        ) to ? (
+            format parquet,
+            compression zstd,
+            row_group_size 122880
+        )
+        """,
+        [str(output_path)],
+    )
+
+
+def _regular_gold_projection_query(
+    *,
+    source_sql: str,
+    projection_columns: list[str],
+    column_types: Mapping[str, str],
+    feature_cols: list[str],
+    group_id_columns: list[str],
+    target_contract: TargetContract,
+) -> str:
+    projection_sql = _gold_projection_select_sql(
+        projection_columns=projection_columns,
+        table_alias="source",
+        column_types=column_types,
+        feature_cols=feature_cols,
+        group_id_columns=group_id_columns,
+        target_contract=target_contract,
+    )
+    return f"""
+    select
+        {projection_sql}
+    from ({source_sql}) as source
+    """
+
+
+def _train_group_sizes_sql(
+    *,
+    train_source_sql: str,
+    group_id_columns: list[str],
+) -> str:
+    group_expr = _sql_group_identifier_expr(
+        table_alias="train_source",
+        group_id_columns=group_id_columns,
+    )
+    return f"""
+    select
+        {group_expr} as {_quote_identifier(GROUP_COL)},
+        count(*) as train_rows
+    from ({train_source_sql}) as train_source
+    group by 1
+    """
+
+
+def _optimisation_gold_projection_query(
+    *,
+    source_sql: str,
+    train_source_sql: str,
+    projection_columns: list[str],
+    column_types: Mapping[str, str],
+    feature_cols: list[str],
+    group_id_columns: list[str],
+    target_contract: TargetContract,
+    offset_with_train_sizes: bool,
+) -> str:
+    projection_sql = _gold_projection_select_sql(
+        projection_columns=projection_columns,
+        table_alias="source",
+        column_types=column_types,
+        feature_cols=feature_cols,
+        group_id_columns=group_id_columns,
+        target_contract=target_contract,
+    )
+    group_expr = _sql_group_identifier_expr(
+        table_alias="source",
+        group_id_columns=group_id_columns,
+    )
+    local_time_idx = (
+        f"row_number() over (partition by {group_expr} "
+        f"order by source.{_quote_identifier(DEFAULT_DATE_COL)}) - 1"
+    )
+    if not offset_with_train_sizes:
+        return f"""
+        select
+            {projection_sql},
+            {group_expr} as {_quote_identifier(GROUP_COL)},
+            cast({local_time_idx} as integer) as {_quote_identifier(TIME_IDX_COL)}
+        from ({source_sql}) as source
+        """
+    base_columns_sql = ",\n            ".join(
+        f"split_projected.{_quote_identifier(column)}"
+        for column in [*projection_columns, GROUP_COL]
+    )
+    train_group_sizes_sql = _train_group_sizes_sql(
+        train_source_sql=train_source_sql,
+        group_id_columns=group_id_columns,
+    )
+    return f"""
+    with train_group_sizes as (
+        {train_group_sizes_sql}
+    ),
+    split_projected as (
+        select
+            {projection_sql},
+            {group_expr} as {_quote_identifier(GROUP_COL)},
+            cast({local_time_idx} as integer) as "__tft_local_time_idx"
+        from ({source_sql}) as source
+    )
+    select
+        {base_columns_sql},
+        cast(
+            split_projected."__tft_local_time_idx" + coalesce(train_group_sizes.train_rows, 0)
+            as integer
+        ) as {_quote_identifier(TIME_IDX_COL)}
+    from split_projected
+    left join train_group_sizes using ({_quote_identifier(GROUP_COL)})
+    """
+
+
+def _fetch_train_group_sizes(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    train_source_sql: str,
+    group_id_columns: list[str],
+) -> dict[str, int]:
+    rows = connection.execute(
+        _train_group_sizes_sql(
+            train_source_sql=train_source_sql,
+            group_id_columns=group_id_columns,
+        )
+    ).fetchall()
+    return {str(row[0]): int(cast(int, row[1])) for row in rows}
+
+
+def _parquet_projection_dtypes(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    path: Path,
+) -> dict[str, str]:
+    preview = connection.execute(
+        "select * from read_parquet(?) limit 0",
+        [str(path)],
+    ).fetchdf()
+    return {str(column): str(dtype) for column, dtype in preview.dtypes.items()}
 
 
 def _write_bundle_frames(
@@ -885,7 +1507,10 @@ def _write_bundle_frames(
             train_projected,
             group_id_columns=group_id_columns,
             train_group_sizes=None,
-        ).groupby(GROUP_COL, sort=False).size().items()
+        )
+        .groupby(GROUP_COL, sort=False)
+        .size()
+        .items()
     }
     optimisation_train = _build_optimisation_projection(
         train_projected,
@@ -906,16 +1531,20 @@ def _write_bundle_frames(
             train_group_sizes=train_group_sizes,
         )
         optimisation_valid.to_parquet(output_paths["optimisation_valid"], index=False)
-    raw_projection_dtypes = pd.read_parquet(output_paths["train"]).dtypes.astype(str).to_dict()
-    projection_dtypes = {str(column): str(dtype) for column, dtype in raw_projection_dtypes.items()}
+    raw_projection_dtypes = (
+        pd.read_parquet(output_paths["train"]).dtypes.astype(str).to_dict()
+    )
+    projection_dtypes = {
+        str(column): str(dtype) for column, dtype in raw_projection_dtypes.items()
+    }
     return train_rows, tuning_rows, valid_rows, projection_dtypes, train_group_sizes
 
 
 def _bundle_manifest_payload(
     *,
-    train_path: Path,
-    tuning_path: Path,
-    valid_path: Path | None,
+    train_path: str | Path,
+    tuning_path: str | Path,
+    valid_path: str | Path | None,
     output_paths: dict[str, Path],
     train_rows: int,
     tuning_rows: int,
@@ -950,7 +1579,9 @@ def _bundle_manifest_payload(
     }
     if valid_path is not None:
         bundle_manifest["valid_sha256"] = sha256_file(output_paths["valid"])
-        bundle_manifest["optimisation_valid_path"] = str(output_paths["optimisation_valid"])
+        bundle_manifest["optimisation_valid_path"] = str(
+            output_paths["optimisation_valid"]
+        )
     return bundle_manifest
 
 
@@ -1032,6 +1663,203 @@ def _persist_bundle_metadata(
     )
 
 
+def _gold_input_descriptor(
+    *,
+    duckdb_path: str | Path,
+    gold_table: str,
+    split_bucket: str,
+) -> str:
+    return f"duckdb://{Path(duckdb_path).as_posix()}#{gold_table}[split={split_bucket}]"
+
+
+def _copy_regular_and_optimisation_gold_splits(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    output_paths: dict[str, Path],
+    train_source_sql: str,
+    tuning_source_sql: str,
+    valid_source_sql: str | None,
+    projection_columns: list[str],
+    column_types: Mapping[str, str],
+    feature_cols: list[str],
+    group_id_columns: list[str],
+    target_contract: TargetContract,
+) -> None:
+    split_specs: tuple[tuple[str, str, str, bool], ...] = (
+        ("train", "optimisation_train", train_source_sql, False),
+        ("tuning", "optimisation_tuning", tuning_source_sql, True),
+    )
+    if valid_source_sql is not None:
+        split_specs = (
+            *split_specs,
+            ("valid", "optimisation_valid", valid_source_sql, True),
+        )
+    for regular_key, optimisation_key, source_sql, offset in split_specs:
+        regular_query = _regular_gold_projection_query(
+            source_sql=source_sql,
+            projection_columns=projection_columns,
+            column_types=column_types,
+            feature_cols=feature_cols,
+            group_id_columns=group_id_columns,
+            target_contract=target_contract,
+        )
+        _copy_query_to_parquet(
+            connection,
+            query=regular_query,
+            output_path=output_paths[regular_key],
+        )
+        optimisation_query = _optimisation_gold_projection_query(
+            source_sql=source_sql,
+            train_source_sql=train_source_sql,
+            projection_columns=projection_columns,
+            column_types=column_types,
+            feature_cols=feature_cols,
+            group_id_columns=group_id_columns,
+            target_contract=target_contract,
+            offset_with_train_sizes=offset,
+        )
+        _copy_query_to_parquet(
+            connection,
+            query=optimisation_query,
+            output_path=output_paths[optimisation_key],
+        )
+
+
+def _build_training_bundle_from_gold(
+    *,
+    output_dir: Path,
+    duckdb_path: str | Path,
+    gold_table: str,
+    smoke_series_limit: int | None,
+    smoke_dataset_source: str | None,
+    smoke_min_train_rows: int,
+    smoke_min_tuning_rows: int,
+    smoke_min_valid_rows: int,
+    target_col: str,
+    excluded_optimisation_dataset_sources: tuple[str, ...],
+) -> dict[str, Path]:
+    connection = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        columns = _gold_schema_columns(connection, gold_table=gold_table)
+        column_types = _gold_schema_types(connection, gold_table=gold_table)
+        target_contract, feature_cols, group_id_columns, projection_columns = (
+            _resolve_bundle_projection_from_columns(
+                columns=columns,
+                target_col=target_col,
+            )
+        )
+        train_source_sql = _gold_split_source_sql(
+            connection,
+            gold_table=gold_table,
+            split_bucket="train",
+            excluded_dataset_sources=excluded_optimisation_dataset_sources,
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
+        )
+        tuning_source_sql = _gold_split_source_sql(
+            connection,
+            gold_table=gold_table,
+            split_bucket="val",
+            excluded_dataset_sources=excluded_optimisation_dataset_sources,
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
+        )
+        valid_source_sql = _gold_split_source_sql(
+            connection,
+            gold_table=gold_table,
+            split_bucket="test",
+            excluded_dataset_sources=(),
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
+        )
+        train_rows = _count_query_rows(connection, train_source_sql)
+        tuning_rows = _count_query_rows(connection, tuning_source_sql)
+        valid_rows = _count_query_rows(connection, valid_source_sql)
+        if train_rows == 0 or tuning_rows == 0:
+            raise ValueError(
+                "Training bundle train/tuning splits are empty after excluding "
+                "holdout dataset sources and non-trainable labels."
+            )
+        include_valid = valid_rows > 0
+        output_paths = _bundle_output_paths(output_dir, include_valid=include_valid)
+        _copy_regular_and_optimisation_gold_splits(
+            connection,
+            output_paths=output_paths,
+            train_source_sql=train_source_sql,
+            tuning_source_sql=tuning_source_sql,
+            valid_source_sql=valid_source_sql if include_valid else None,
+            projection_columns=projection_columns,
+            column_types=column_types,
+            feature_cols=feature_cols,
+            group_id_columns=group_id_columns,
+            target_contract=target_contract,
+        )
+        projection_dtypes = _parquet_projection_dtypes(
+            connection,
+            path=output_paths["train"],
+        )
+        train_group_sizes = _fetch_train_group_sizes(
+            connection,
+            train_source_sql=train_source_sql,
+            group_id_columns=group_id_columns,
+        )
+        training_exclusion_report = _gold_training_exclusion_report(
+            connection,
+            gold_table=gold_table,
+            excluded_dataset_sources=excluded_optimisation_dataset_sources,
+            available_columns=set(columns),
+        )
+    finally:
+        connection.close()
+
+    valid_input_path: str | None = None
+    if include_valid:
+        valid_input_path = _gold_input_descriptor(
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            split_bucket="test",
+        )
+    _persist_bundle_metadata(
+        output_paths=output_paths,
+        projection=BundleProjectionMetadata(
+            feature_cols=feature_cols,
+            group_id_columns=group_id_columns,
+            projection_columns=projection_columns,
+            projection_dtypes=projection_dtypes,
+            target_contract=target_contract,
+            train_group_sizes=train_group_sizes,
+        ),
+        splits=BundleSplitMetadata(
+            train_path=_gold_input_descriptor(
+                duckdb_path=duckdb_path,
+                gold_table=gold_table,
+                split_bucket="train",
+            ),
+            tuning_path=_gold_input_descriptor(
+                duckdb_path=duckdb_path,
+                gold_table=gold_table,
+                split_bucket="val",
+            ),
+            valid_path=valid_input_path,
+            train_rows=train_rows,
+            tuning_rows=tuning_rows,
+            valid_rows=valid_rows,
+            excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
+        ),
+        training_exclusion_report=training_exclusion_report,
+    )
+    return output_paths
+
+
 def build_training_bundle(
     *,
     train_input_path: str | Path | None = DEFAULT_TRAIN_INPUT_PATH,
@@ -1052,19 +1880,34 @@ def build_training_bundle(
 ) -> dict[str, Path]:
     resolved_output_dir = Path(output_dir)
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
-    train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame = _load_bundle_frames(
-        output_dir=resolved_output_dir,
-        train_input_path=train_input_path,
-        tuning_input_path=tuning_input_path,
-        valid_input_path=valid_input_path,
-        duckdb_path=duckdb_path,
-        gold_table=gold_table,
-        smoke_series_limit=smoke_series_limit,
-        smoke_dataset_source=smoke_dataset_source,
-        smoke_min_train_rows=smoke_min_train_rows,
-        smoke_min_tuning_rows=smoke_min_tuning_rows,
-        smoke_min_valid_rows=smoke_min_valid_rows,
-        excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
+    if train_input_path is None and tuning_input_path is None:
+        return _build_training_bundle_from_gold(
+            output_dir=resolved_output_dir,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
+            target_col=target_col,
+            excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
+        )
+    train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame = (
+        _load_bundle_frames(
+            output_dir=resolved_output_dir,
+            train_input_path=train_input_path,
+            tuning_input_path=tuning_input_path,
+            valid_input_path=valid_input_path,
+            duckdb_path=duckdb_path,
+            gold_table=gold_table,
+            smoke_series_limit=smoke_series_limit,
+            smoke_dataset_source=smoke_dataset_source,
+            smoke_min_train_rows=smoke_min_train_rows,
+            smoke_min_tuning_rows=smoke_min_tuning_rows,
+            smoke_min_valid_rows=smoke_min_valid_rows,
+            excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
+        )
     )
     train_frame_before_holdout = train_frame
     tuning_frame_before_holdout = tuning_frame
@@ -1076,12 +1919,14 @@ def build_training_bundle(
         tuning_frame,
         excluded_dataset_sources=excluded_optimisation_dataset_sources,
     )
-    train_frame, tuning_frame, training_exclusion_report = _filter_bundle_training_frames(
-        train_frame=train_frame,
-        tuning_frame=tuning_frame,
-        train_frame_before_holdout=train_frame_before_holdout,
-        tuning_frame_before_holdout=tuning_frame_before_holdout,
-        excluded_dataset_sources=excluded_optimisation_dataset_sources,
+    train_frame, tuning_frame, training_exclusion_report = (
+        _filter_bundle_training_frames(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            train_frame_before_holdout=train_frame_before_holdout,
+            tuning_frame_before_holdout=tuning_frame_before_holdout,
+            excluded_dataset_sources=excluded_optimisation_dataset_sources,
+        )
     )
     if train_frame.empty or tuning_frame.empty:
         raise ValueError(
@@ -1094,17 +1939,23 @@ def build_training_bundle(
         valid_frame=valid_frame,
         target_col=target_col,
     )
-    feature_cols, group_id_columns, projection_columns = _resolve_bundle_features(train_frame=train_frame, target_contract=target_contract)
-    output_paths = _bundle_output_paths(resolved_output_dir, include_valid=valid_frame is not None)
-    train_rows, tuning_rows, valid_rows, projection_dtypes, train_group_sizes = _write_bundle_frames(
-        train_frame=train_frame,
-        tuning_frame=tuning_frame,
-        valid_frame=valid_frame,
-        output_paths=output_paths,
-        feature_cols=feature_cols,
-        group_id_columns=group_id_columns,
-        projection_columns=projection_columns,
-        target_contract=target_contract,
+    feature_cols, group_id_columns, projection_columns = _resolve_bundle_features(
+        train_frame=train_frame, target_contract=target_contract
+    )
+    output_paths = _bundle_output_paths(
+        resolved_output_dir, include_valid=valid_frame is not None
+    )
+    train_rows, tuning_rows, valid_rows, projection_dtypes, train_group_sizes = (
+        _write_bundle_frames(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            valid_frame=valid_frame,
+            output_paths=output_paths,
+            feature_cols=feature_cols,
+            group_id_columns=group_id_columns,
+            projection_columns=projection_columns,
+            target_contract=target_contract,
+        )
     )
     _persist_bundle_metadata(
         output_paths=output_paths,

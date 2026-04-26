@@ -41,6 +41,8 @@ from praedixa.demand_forecast.training.validation.eligibility import (
     filter_training_eligible_rows,
 )
 from praedixa.demand_forecast.training.xgboost.scoring import (
+    XGBoostFoldMatrixCache,
+    build_xgboost_fold_matrix_cache,
     fit_and_score_xgboost_model_on_tuning,
     xgboost_execution_policy,
 )
@@ -161,6 +163,22 @@ def _build_tuning_report(study: optuna.study.Study) -> pd.DataFrame:
     )
 
 
+def _fixed_tuning_max_bin() -> int | None:
+    choices = {int(choice) for choice in DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES}
+    if len(choices) != 1:
+        return None
+    return next(iter(choices))
+
+
+def _fold_matrix_cache_params(
+    model_params: dict[str, object] | None,
+) -> dict[str, object] | None:
+    fixed_max_bin = _fixed_tuning_max_bin()
+    if fixed_max_bin is None:
+        return None
+    return {**(model_params or {}), "max_bin": fixed_max_bin}
+
+
 def _best_completed_trial(study: optuna.study.Study) -> optuna.trial.FrozenTrial:
     completed = [
         trial
@@ -193,7 +211,7 @@ def _final_best_params(
     best_params["enable_categorical"] = True
     best_params["enable_early_stopping"] = True
     best_params["early_stopping_rounds"] = DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS
-    return best_params
+    return resolve_xgboost_model_params(best_params)
 
 
 def _build_objective(
@@ -222,6 +240,16 @@ def _build_objective(
         "XGBoost Optuna shared train frame filtered once: rows_before=%s rows_after=%s",
         len(train_frame),
         len(base_train_frame),
+    )
+    fold_matrix_cache = _build_fold_matrix_cache_for_objective(
+        train_frame=base_train_frame,
+        tuning_frame=tuning_frame,
+        folds=folds,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        logger=logger,
+        model_params=model_params,
+        total_threads=total_threads,
     )
 
     def objective(trial: optuna.trial.Trial) -> float:
@@ -279,6 +307,7 @@ def _build_objective(
                 total_threads=total_threads,
                 trial=trial,
                 train_frame_is_eligible=True,
+                fold_matrix_cache=fold_matrix_cache,
             )
             objective_score = _record_trial_result(
                 trial=trial,
@@ -320,6 +349,36 @@ def _build_objective(
             raise
 
     return objective
+
+
+def _build_fold_matrix_cache_for_objective(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    folds: list[dict[str, object]],
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    logger: logging.Logger,
+    model_params: dict[str, object] | None,
+    total_threads: int,
+) -> XGBoostFoldMatrixCache | None:
+    cache_params = _fold_matrix_cache_params(model_params)
+    if cache_params is None:
+        logger.debug(
+            "XGBoost fold matrix cache skipped: max_bin search space is not fixed."
+        )
+        return None
+    return build_xgboost_fold_matrix_cache(
+        train_frame=train_frame,
+        tuning_frame=tuning_frame,
+        folds=folds,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        logger=logger,
+        model_params=cache_params,
+        total_threads=total_threads,
+        train_frame_is_eligible=True,
+    )
 
 
 def _record_trial_result(
@@ -402,6 +461,7 @@ def optimize_xgboost_model_params(
     resolved_base_params = resolve_xgboost_model_params(
         {**(model_params or {}), "n_jobs": total_threads}
     )
+    total_threads = int(cast(Any, resolved_base_params["n_jobs"]))
     execution_policy = xgboost_execution_policy(
         resolved_base_params,
         fold_count=len(folds),

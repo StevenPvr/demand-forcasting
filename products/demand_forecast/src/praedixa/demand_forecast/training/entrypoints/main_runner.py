@@ -13,6 +13,9 @@ from praedixa.demand_forecast.training.config.main_config import (
     mps_available,
     validate_runtime_profile,
 )
+from praedixa.demand_forecast.backends.xgboost.runtime import (
+    xgboost_cuda_preflight_available,
+)
 
 
 VERBOSE_TRAINING_LOGS_ENV = "PRAEDIXA_VERBOSE_TRAINING_LOGS"
@@ -40,9 +43,11 @@ def _validate_bundle_dir(bundle_dir: Path) -> tuple[Path, Path, Path]:
     return train_path, tuning_path, bundle_dir
 
 
-def _accelerator_availability_for_log(config: OptimisationMainConfig) -> tuple[bool, bool]:
+def _accelerator_availability_for_log(
+    config: OptimisationMainConfig,
+) -> tuple[bool, bool]:
     if config.model_backend == "xgboost":
-        return False, False
+        return xgboost_cuda_preflight_available(), False
     return cuda_available(), mps_available()
 
 

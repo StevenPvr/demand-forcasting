@@ -8,7 +8,9 @@ from unittest import mock
 
 
 PROJECT_ROOT = next(
-    parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists()
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
 )
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
 for path in (PROJECT_ROOT, PLATFORM_SRC):
@@ -87,9 +89,9 @@ class RunLocalSilverTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "praedixa.platform.warehouse.local_silver.build_supplemental_corpus_frame",
-                return_value=mock.MagicMock(
-                    to_pandas=mock.MagicMock(return_value=mock.sentinel.frame)
+                "praedixa.platform.warehouse.local_silver.build_supplemental_corpus_standardized_dataset",
+                return_value=Path(
+                    "var/datasets/global_dataset/supplemental_corpus_daily.parquet"
                 ),
             ) as supplemental_corpus_mock,
             mock.patch(
@@ -105,10 +107,12 @@ class RunLocalSilverTests(unittest.TestCase):
                 return_value={"ok": True},
             ) as load_mock,
             mock.patch(
-                "praedixa.platform.warehouse.local_silver.load_inline_bronze_frame",
-                return_value={"local": 12},
-            ) as inline_load_mock,
-            mock.patch("praedixa.platform.warehouse.local_silver.DbtStageRunner") as runner_cls,
+                "praedixa.platform.warehouse.local_silver.supplemental_corpus_daily_spec",
+                return_value="supplemental_spec",
+            ) as supplemental_spec_mock,
+            mock.patch(
+                "praedixa.platform.warehouse.local_silver.DbtStageRunner"
+            ) as runner_cls,
         ):
             runner_cls.return_value.run_stage.return_value = DbtStageResult(
                 deps=False,
@@ -121,8 +125,10 @@ class RunLocalSilverTests(unittest.TestCase):
         supplemental_corpus_mock.assert_called_once()
         core_specs_mock.assert_called_once()
         open_specs_mock.assert_called_once()
-        load_mock.assert_called_once_with(specs=["core_specs", "open_exogenous_specs"])
-        inline_load_mock.assert_called_once()
+        supplemental_spec_mock.assert_called_once()
+        load_mock.assert_called_once_with(
+            specs=["core_specs", "open_exogenous_specs", "supplemental_spec"]
+        )
         runner_cls.return_value.run_stage.assert_called_once()
         stage_config = runner_cls.return_value.run_stage.call_args.kwargs["config"]
         self.assertEqual(stage_config.selector, "tag:silver")
@@ -142,15 +148,14 @@ class RunLocalSilverTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "praedixa.platform.warehouse.local_silver.build_supplemental_corpus_frame"
+                "praedixa.platform.warehouse.local_silver.build_supplemental_corpus_standardized_dataset"
             ) as supplemental_corpus_mock,
-            mock.patch(
-                "praedixa.platform.warehouse.local_silver.load_inline_bronze_frame"
-            ) as inline_load_mock,
             mock.patch(
                 "praedixa.platform.warehouse.local_silver.load_selected_bronze_specs"
             ) as load_mock,
-            mock.patch("praedixa.platform.warehouse.local_silver.DbtStageRunner") as runner_cls,
+            mock.patch(
+                "praedixa.platform.warehouse.local_silver.DbtStageRunner"
+            ) as runner_cls,
         ):
             runner_cls.return_value.run_stage.return_value = DbtStageResult(
                 deps=False,
@@ -161,7 +166,6 @@ class RunLocalSilverTests(unittest.TestCase):
             result = run_local_silver(config)
 
         supplemental_corpus_mock.assert_not_called()
-        inline_load_mock.assert_not_called()
         load_mock.assert_not_called()
         stage_config = runner_cls.return_value.run_stage.call_args.kwargs["config"]
         self.assertFalse(stage_config.run_tests)

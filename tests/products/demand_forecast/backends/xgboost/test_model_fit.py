@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -20,15 +21,23 @@ for path in (PROJECT_ROOT, PLATFORM_SRC, PRODUCT_SRC):
         sys.path.insert(0, str(path))
 
 from praedixa.demand_forecast.backends.xgboost.model_fit import (  # noqa: E402
+    FittedXGBoostModel,
     fit_xgboost_model,
     fit_xgboost_model_and_predict_validation,
+    fit_prepared_xgboost_matrices_and_predict_validation,
     predict_with_xgboost_model,
+    prepare_xgboost_training_matrices,
 )
 from praedixa.demand_forecast.backends.xgboost.model_common import (  # noqa: E402
     DEFAULT_XGBOOST_MODEL_PARAMS,
+    resolve_xgboost_model_params,
     xgboost_early_stopping_rounds,
     xgboost_num_boost_round,
     xgboost_train_params,
+)
+import praedixa.demand_forecast.backends.xgboost.model_fit as xgboost_model_fit_module  # noqa: E402
+from praedixa.demand_forecast.backends.xgboost.runtime import (  # noqa: E402
+    XGBoostRuntimeResolution,
 )
 from praedixa.demand_forecast.backends.xgboost.preprocessing import (  # noqa: E402
     UNKNOWN_CATEGORY,
@@ -179,6 +188,82 @@ class XGBoostModelFitTests(unittest.TestCase):
             atol=1.0e-6,
         )
 
+    def test_prebuilt_matrices_can_be_reused_for_trial_fit(self) -> None:
+        train_frame, valid_frame = self._frames()
+        base_params = {
+            "n_estimators": 5,
+            "early_stopping_rounds": 2,
+            "max_depth": 2,
+            "max_bin": 128,
+            "n_jobs": 1,
+            "random_state": 7,
+        }
+        prepared = prepare_xgboost_training_matrices(
+            train_frame,
+            valid_frame,
+            ["client_id", "location_id", "target_day_of_week", "rolling_mean_7"],
+            target_col="target_demand_qty_d_plus_1",
+            model_params=base_params,
+        )
+
+        model, validation_predictions = (
+            fit_prepared_xgboost_matrices_and_predict_validation(
+                prepared,
+                model_params={**base_params, "learning_rate": 0.05},
+            )
+        )
+        public_predictions = predict_with_xgboost_model(model, valid_frame)
+
+        self.assertEqual(validation_predictions.shape, (len(valid_frame),))
+        np.testing.assert_allclose(
+            validation_predictions,
+            public_predictions,
+            rtol=0.0,
+            atol=1.0e-6,
+        )
+
+    def test_public_predict_falls_back_to_cpu_when_cuda_is_unavailable(self) -> None:
+        train_frame, valid_frame = self._frames()
+
+        model = fit_xgboost_model(
+            train_frame,
+            valid_frame,
+            ["client_id", "location_id", "target_day_of_week", "rolling_mean_7"],
+            target_col="target_demand_qty_d_plus_1",
+            model_params={
+                "n_estimators": 5,
+                "early_stopping_rounds": 2,
+                "max_depth": 2,
+                "n_jobs": 1,
+                "random_state": 7,
+            },
+        )
+        cuda_model = FittedXGBoostModel(
+            model=model.model,
+            feature_spec=model.feature_spec,
+            params={
+                **model.params,
+                "runtime_profile": "scaleway_l40s",
+                "device": "cuda",
+                "xgboost_matrix_type": "quantile",
+            },
+        )
+
+        with (
+            mock.patch(
+                "praedixa.demand_forecast.backends.xgboost.model_fit.xgboost_cuda_preflight_available",
+                return_value=False,
+            ),
+            self.assertLogs(
+                "praedixa.demand_forecast.backends.xgboost.model_fit",
+                level="WARNING",
+            ),
+        ):
+            predictions = predict_with_xgboost_model(cuda_model, valid_frame)
+
+        self.assertEqual(predictions.shape, (len(valid_frame),))
+        self.assertTrue(bool(np.isfinite(predictions).all()))
+
     def test_train_params_default_to_native_categorical_mode(self) -> None:
         params = xgboost_train_params(DEFAULT_XGBOOST_MODEL_PARAMS)
 
@@ -206,6 +291,108 @@ class XGBoostModelFitTests(unittest.TestCase):
 
         self.assertEqual(params["max_cat_to_onehot"], 8)
         self.assertEqual(params["max_cat_threshold"], 64)
+
+    def test_resolved_cuda_params_force_single_gpu_worker_policy(self) -> None:
+        with mock.patch(
+            "praedixa.demand_forecast.backends.xgboost.model_common.resolve_xgboost_runtime_profile",
+            return_value=XGBoostRuntimeResolution(
+                requested_profile="scaleway_l40s",
+                runtime_profile="scaleway_l40s",
+                device="cuda",
+                tree_method="hist",
+                accelerator="gpu",
+                devices=1,
+                cuda_available=True,
+                cuda_device_name="NVIDIA L40S",
+            ),
+        ):
+            resolved = resolve_xgboost_model_params(
+                {
+                    "runtime_profile": "scaleway_l40s",
+                    "device": "cuda",
+                    "n_jobs": 8,
+                    "max_parallel_fold_workers": 5,
+                }
+            )
+        params = xgboost_train_params(resolved)
+
+        self.assertEqual(resolved["device"], "cuda")
+        self.assertEqual(resolved["tree_method"], "hist")
+        self.assertEqual(resolved["xgboost_matrix_type"], "quantile")
+        self.assertEqual(resolved["xgboost_gpu_input_backend"], "auto")
+        self.assertEqual(resolved["n_jobs"], 1)
+        self.assertEqual(resolved["max_parallel_fold_workers"], 1)
+        self.assertEqual(params["device"], "cuda")
+        self.assertEqual(params["nthread"], 1)
+
+    def test_device_only_cuda_params_promote_runtime_profile(self) -> None:
+        with mock.patch(
+            "praedixa.demand_forecast.backends.xgboost.model_common.resolve_xgboost_runtime_profile",
+            return_value=XGBoostRuntimeResolution(
+                requested_profile="cuda",
+                runtime_profile="cuda",
+                device="cuda",
+                tree_method="hist",
+                accelerator="gpu",
+                devices=1,
+                cuda_available=True,
+                cuda_device_name="NVIDIA L40S",
+            ),
+        ):
+            resolved = resolve_xgboost_model_params({"device": "cuda", "n_jobs": 8})
+
+        self.assertEqual(resolved["device"], "cuda")
+        self.assertEqual(resolved["runtime_profile"], "cuda")
+        self.assertEqual(resolved["xgboost_matrix_type"], "quantile")
+        self.assertEqual(resolved["xgboost_gpu_input_backend"], "auto")
+
+    def test_device_cuda_with_auto_profile_does_not_fall_back_to_cpu(self) -> None:
+        with (
+            mock.patch(
+                "praedixa.demand_forecast.backends.xgboost.model_common.resolve_xgboost_runtime_profile",
+                side_effect=RuntimeError("CUDA preflight failed"),
+            ) as mocked_resolve_runtime,
+            self.assertRaisesRegex(RuntimeError, "CUDA preflight failed"),
+        ):
+            resolve_xgboost_model_params(
+                {"runtime_profile": "auto", "device": "cuda", "n_jobs": 8}
+            )
+
+        mocked_resolve_runtime.assert_called_once_with("cuda")
+
+    def test_cuda_quantile_matrix_failure_is_not_silently_downgraded(self) -> None:
+        class _FailingXGBoostModule:
+            @staticmethod
+            def QuantileDMatrix(**_: object) -> object:
+                raise RuntimeError("quantile unavailable")
+
+            @staticmethod
+            def DMatrix(**_: object) -> object:
+                return object()
+
+        train_frame, valid_frame = self._frames()
+        matrices = prepare_xgboost_matrices(
+            train_frame=train_frame,
+            valid_frame=valid_frame,
+            feature_cols=["client_id", "location_id", "target_day_of_week"],
+            target_col="target_demand_qty_d_plus_1",
+            native_categorical=True,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "requires QuantileDMatrix"):
+            xgboost_model_fit_module._build_dmatrix(
+                _FailingXGBoostModule(),
+                matrices.train_x,
+                matrices.feature_spec,
+                params={
+                    "runtime_profile": "scaleway_l40s",
+                    "device": "cuda",
+                    "xgboost_matrix_type": "quantile",
+                    "max_bin": 128,
+                    "n_jobs": 1,
+                },
+                label=matrices.train_y,
+            )
 
 
 if __name__ == "__main__":

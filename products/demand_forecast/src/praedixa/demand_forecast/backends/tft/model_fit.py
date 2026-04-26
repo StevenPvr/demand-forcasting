@@ -285,6 +285,24 @@ def _business_validation_metrics_payload(
     }
 
 
+def _restore_lightning_training_context(
+    *,
+    pl_module: Any,
+    parent_trainer: Any,
+    was_training: bool,
+) -> None:
+    try:
+        setattr(pl_module, "_trainer", parent_trainer)
+    except (AttributeError, RuntimeError):
+        pass
+    mode_switcher = getattr(pl_module, "train" if was_training else "eval", None)
+    if callable(mode_switcher):
+        try:
+            mode_switcher()
+        except (AttributeError, RuntimeError, TypeError):
+            pass
+
+
 def _business_validation_logging_callback(
     imports: dict[str, Any],
     *,
@@ -300,8 +318,7 @@ def _business_validation_logging_callback(
     callback_base: type[Any] = cast(type[Any], imports["Callback"])
 
     def _update_trainer_callback_metrics(
-        pl_module: Any,
-        trainer: Any, metrics_payload: dict[str, float]
+        pl_module: Any, trainer: Any, metrics_payload: dict[str, float]
     ) -> None:
         callback_metrics = getattr(trainer, "callback_metrics", None)
         if callback_metrics is None:
@@ -329,18 +346,27 @@ def _business_validation_logging_callback(
 
     class _BusinessValidationLoggingCallback(callback_base):
         def on_validation_epoch_end(self, trainer: Any, pl_module: Any) -> None:
-            transient_model = _temporary_fitted_model(
-                model=pl_module,
-                dataset_artifacts=dataset_artifacts,
-                target_col=target_col,
-                resolved_params=resolved_params,
-            )
-            raw_predictions = predict_with_tft_model(
-                transient_model,
-                valid_frame,
-                feature_cols,
-                fallback_policy="raise",
-            )
+            parent_trainer = getattr(pl_module, "_trainer", None) or trainer
+            was_training = bool(getattr(pl_module, "training", False))
+            try:
+                transient_model = _temporary_fitted_model(
+                    model=pl_module,
+                    dataset_artifacts=dataset_artifacts,
+                    target_col=target_col,
+                    resolved_params=resolved_params,
+                )
+                raw_predictions = predict_with_tft_model(
+                    transient_model,
+                    valid_frame,
+                    feature_cols,
+                    fallback_policy="raise",
+                )
+            finally:
+                _restore_lightning_training_context(
+                    pl_module=pl_module,
+                    parent_trainer=parent_trainer,
+                    was_training=was_training,
+                )
             business_metrics = _business_validation_metrics_payload(
                 valid_frame=valid_frame,
                 raw_predictions=raw_predictions,

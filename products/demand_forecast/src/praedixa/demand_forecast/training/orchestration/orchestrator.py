@@ -20,6 +20,7 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TUNING_INPUT_PATH,
     DEFAULT_TUNING_SAMPLE_FRACTION,
     DEFAULT_TUNING_TRIALS,
+    DEFAULT_TFT_LOCAL_CPU_MAX_THREADS,
     DEFAULT_XGBOOST_LOCAL_CPU_MAX_THREADS,
 )
 from praedixa.demand_forecast.training.shared.model_backends import (
@@ -91,18 +92,36 @@ def _resolve_requested_n_jobs(model_params: dict[str, object] | None) -> int:
     return default_n_jobs
 
 
+def _resolve_tft_n_jobs(
+    *, requested_n_jobs: int, model_params: dict[str, object] | None
+) -> int:
+    runtime_profile = str((model_params or {}).get("runtime_profile", "local_cpu"))
+    if runtime_profile == "local_cpu":
+        return max(1, min(requested_n_jobs, DEFAULT_TFT_LOCAL_CPU_MAX_THREADS))
+    if runtime_profile == "mac_metal":
+        return 1
+    return max(1, requested_n_jobs)
+
+
 def _loaded_context_and_run_config(
     *,
     request: OptimisationBuildRequest,
     logger: logging.Logger,
-) -> tuple[LoadedOptimisationFrames, PreparedOptimisationContext, OptimisationRunConfig]:
+) -> tuple[
+    LoadedOptimisationFrames, PreparedOptimisationContext, OptimisationRunConfig
+]:
     resolved_backend = request.model_backend.strip().lower()
     requested_n_jobs = _resolve_requested_n_jobs(request.model_params)
-    resolved_n_jobs = (
-        max(1, min(requested_n_jobs, DEFAULT_XGBOOST_LOCAL_CPU_MAX_THREADS))
-        if resolved_backend == "xgboost"
-        else max(1, requested_n_jobs)
-    )
+    if resolved_backend == "xgboost":
+        resolved_n_jobs = max(
+            1,
+            min(requested_n_jobs, DEFAULT_XGBOOST_LOCAL_CPU_MAX_THREADS),
+        )
+    else:
+        resolved_n_jobs = _resolve_tft_n_jobs(
+            requested_n_jobs=requested_n_jobs,
+            model_params=request.model_params,
+        )
     resolved_model_params = {
         **(request.model_params or {}),
         "n_jobs": resolved_n_jobs,
@@ -126,17 +145,22 @@ def _loaded_context_and_run_config(
         model_backend=resolved_backend,
         logger=logger,
     )
-    return loaded, context, OptimisationRunConfig(
-        bundle_dir=request.bundle_dir,
-        model_backend=resolved_backend,
-        date_col=request.date_col,
-        n_folds=request.n_folds,
-        tuning_trials=request.tuning_trials,
-        tuning_random_seed=request.tuning_random_seed,
-        resolved_model_params=resolved_model_params,
-        resolved_target_transform=context.target_contract.target_mode or DEFAULT_TARGET_TRANSFORM,
-        duckdb_path=request.duckdb_path,
-        gold_table=request.gold_table,
+    return (
+        loaded,
+        context,
+        OptimisationRunConfig(
+            bundle_dir=request.bundle_dir,
+            model_backend=resolved_backend,
+            date_col=request.date_col,
+            n_folds=request.n_folds,
+            tuning_trials=request.tuning_trials,
+            tuning_random_seed=request.tuning_random_seed,
+            resolved_model_params=resolved_model_params,
+            resolved_target_transform=context.target_contract.target_mode
+            or DEFAULT_TARGET_TRANSFORM,
+            duckdb_path=request.duckdb_path,
+            gold_table=request.gold_table,
+        ),
     )
 
 

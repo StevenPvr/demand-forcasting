@@ -55,10 +55,66 @@ violations as (
     union all
 
     select
+        'supplemental_corpus_train_val_contract' as violation,
+        source_splits.*
+    from source_splits
+    where dataset_source in (
+        'first_party_daily',
+        'm5_forecasting_accuracy',
+        'uci_online_retail_ii',
+        'uci_online_retail',
+        'restaurant_sales_report',
+        'perishable_goods_management'
+    )
+      and (
+        split_count <> 2
+        or train_rows = 0
+        or val_rows = 0
+        or test_rows <> 0
+        or train_max_dt >= val_min_dt
+        or train_min_dt is null
+        or val_min_dt is null
+      )
+
+    union all
+
+    select
+        'synthetic_foodservice_train_only_contract' as violation,
+        source_splits.*
+    from source_splits
+    where dataset_source in (
+        'synthetic_foodservice_qsr',
+        'synthetic_foodservice_bakery',
+        'synthetic_foodservice_restaurant'
+    )
+      and (
+        split_count <> 1
+        or train_rows = 0
+        or val_rows <> 0
+        or test_rows <> 0
+        or train_min_dt is null
+      )
+
+    union all
+
+    select
         'unexpected_dataset_source' as violation,
         source_splits.*
     from source_splits
-    where dataset_source not in ('freshretail', 'freshretail_lt', 'bakery')
+    where dataset_source not in (
+        'freshretail',
+        'freshretail_lt',
+        'bakery',
+        'first_party_daily',
+        'm5_forecasting_accuracy',
+        'uci_online_retail_ii',
+        'uci_online_retail',
+        'restaurant_sales_report',
+        'perishable_goods_management',
+        'synthetic_foodservice_qsr',
+        'synthetic_foodservice_bakery',
+        'synthetic_foodservice_restaurant'
+    )
 )
 select *
 from violations

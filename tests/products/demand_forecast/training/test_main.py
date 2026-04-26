@@ -31,6 +31,9 @@ from praedixa.demand_forecast.training.main import (  # noqa: E402
 from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
     build_optimisation_model_params,
 )
+from praedixa.demand_forecast.backends.xgboost.runtime import (  # noqa: E402
+    XGBoostRuntimeResolution,
+)
 from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR  # noqa: E402
 
 
@@ -74,6 +77,25 @@ def _assert_bundle_request(
     assert request.model_params["tensorboard_logdir"] == str(bundle_dir / "tensorboard")
 
 
+def _xgboost_runtime_resolution(
+    *,
+    requested_profile: str = "auto",
+    runtime_profile: str = "local_cpu",
+    device: str = "cpu",
+) -> XGBoostRuntimeResolution:
+    return XGBoostRuntimeResolution(
+        requested_profile=requested_profile,
+        runtime_profile=runtime_profile,
+        device=device,
+        tree_method="hist",
+        accelerator="gpu" if device == "cuda" else "cpu",
+        devices=1,
+        cuda_available=device == "cuda",
+        cuda_device_name="NVIDIA L40S" if device == "cuda" else None,
+        fallback_reason=None if device == "cuda" else "test fallback",
+    )
+
+
 class OptimisationMainTests(unittest.TestCase):
     def test_official_main_config_uses_official_defaults(self) -> None:
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG
@@ -88,27 +110,20 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.tuning_sample_fraction, rebuilt.tuning_sample_fraction)
         self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
 
-    def test_default_xgboost_config_keeps_cpu_profile_when_cuda_is_available(
+    def test_default_xgboost_config_uses_cuda_profile_when_preflight_passes(
         self,
     ) -> None:
-        with (
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_available",
-                return_value=True,
-            ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
-                return_value="NVIDIA L40S",
-            ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._mps_available",
-                return_value=False,
+        with mock.patch(
+            "praedixa.demand_forecast.training.config.main_config.resolve_xgboost_runtime_profile",
+            return_value=_xgboost_runtime_resolution(
+                runtime_profile="scaleway_l40s",
+                device="cuda",
             ),
         ):
             config = build_default_optimisation_main_config()
 
         self.assertEqual(config.model_backend, "xgboost")
-        self.assertEqual(config.runtime_profile, "local_cpu")
+        self.assertEqual(config.runtime_profile, "scaleway_l40s")
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
@@ -116,29 +131,22 @@ class OptimisationMainTests(unittest.TestCase):
     def test_default_xgboost_config_keeps_standard_budget_when_h100_is_available(
         self,
     ) -> None:
-        with (
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_available",
-                return_value=True,
-            ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
-                return_value="NVIDIA H100 PCIe",
-            ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._mps_available",
-                return_value=False,
+        with mock.patch(
+            "praedixa.demand_forecast.training.config.main_config.resolve_xgboost_runtime_profile",
+            return_value=_xgboost_runtime_resolution(
+                runtime_profile="nvidia_h100",
+                device="cuda",
             ),
         ):
             config = build_default_optimisation_main_config()
 
         self.assertEqual(config.model_backend, "xgboost")
-        self.assertEqual(config.runtime_profile, "local_cpu")
+        self.assertEqual(config.runtime_profile, "nvidia_h100")
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 1.0)
-        self.assertEqual(config.tuning_sample_fraction, 1.0)
+        self.assertEqual(config.train_sample_fraction, 0.10)
+        self.assertEqual(config.tuning_sample_fraction, 0.10)
 
     def test_xgboost_model_params_use_two_threads_per_parallel_fold(self) -> None:
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
@@ -152,20 +160,44 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(int(cast(Any, params["max_parallel_fold_workers"])), 5)
         self.assertEqual(params["model_backend"], "xgboost")
 
-    def test_default_config_keeps_local_cpu_when_only_mps_is_available(self) -> None:
-        with (
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_available",
-                return_value=False,
+    def test_tft_model_params_use_single_thread_on_local_cpu(self) -> None:
+        config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
+            model_backend="tft",
+            runtime_profile="local_cpu",
+        )
+
+        params = build_optimisation_model_params(config)
+
+        self.assertEqual(int(cast(Any, params["n_jobs"])), 1)
+        self.assertEqual(params["model_backend"], "tft")
+
+    def test_xgboost_model_params_use_single_fold_worker_on_cuda(self) -> None:
+        config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
+            model_backend="xgboost",
+            runtime_profile="scaleway_l40s",
+        )
+
+        with mock.patch(
+            "praedixa.demand_forecast.training.config.main_config.resolve_xgboost_runtime_profile",
+            return_value=_xgboost_runtime_resolution(
+                requested_profile="scaleway_l40s",
+                runtime_profile="scaleway_l40s",
+                device="cuda",
             ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._cuda_device_name",
-                return_value=None,
-            ),
-            mock.patch(
-                "praedixa.demand_forecast.training.config.main_config._mps_available",
-                return_value=True,
-            ),
+        ):
+            params = build_optimisation_model_params(config)
+
+        self.assertEqual(int(cast(Any, params["n_jobs"])), 1)
+        self.assertEqual(int(cast(Any, params["max_parallel_fold_workers"])), 1)
+        self.assertEqual(params["device"], "cuda")
+        self.assertEqual(params["model_backend"], "xgboost")
+
+    def test_default_xgboost_config_falls_back_to_cpu_when_preflight_fails(
+        self,
+    ) -> None:
+        with mock.patch(
+            "praedixa.demand_forecast.training.config.main_config.resolve_xgboost_runtime_profile",
+            return_value=_xgboost_runtime_resolution(),
         ):
             config = build_default_optimisation_main_config()
 
@@ -173,8 +205,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 1.0)
-        self.assertEqual(config.tuning_sample_fraction, 1.0)
+        self.assertEqual(config.train_sample_fraction, 0.10)
+        self.assertEqual(config.tuning_sample_fraction, 0.10)
 
     def test_main_uses_official_config_builder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -287,16 +319,12 @@ class OptimisationMainTests(unittest.TestCase):
                     patched_config,
                 ),
                 mock.patch(
-                    "praedixa.demand_forecast.training.config.main_config._cuda_available",
-                    return_value=False,
-                ),
-                mock.patch(
-                    "praedixa.demand_forecast.training.config.main_config._mps_available",
-                    return_value=False,
+                    "praedixa.demand_forecast.training.config.main_config.resolve_xgboost_runtime_profile",
+                    side_effect=RuntimeError("requires a working XGBoost CUDA runtime"),
                 ),
                 self.assertRaisesRegex(
                     RuntimeError,
-                    "XGBoost optimisation backend is currently wired as a CPU backend.",
+                    "requires a working XGBoost CUDA runtime",
                 ),
             ):
                 optimisation_main()
