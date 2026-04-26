@@ -131,7 +131,7 @@ def _feature_selection_frame(
     *,
     model_backend: str,
 ) -> pd.DataFrame:
-    if model_backend != "xgboost":
+    if model_backend not in {"xgboost", "chronos2"}:
         return train_frame
     mapped_columns = [
         column

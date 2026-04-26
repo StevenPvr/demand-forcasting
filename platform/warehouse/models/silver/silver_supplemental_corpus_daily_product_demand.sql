@@ -1,4 +1,4 @@
-{{ config(tags=["silver", "supplemental_corpus"], materialized="table") }}
+{{ config(enabled=false, tags=["silver", "supplemental_corpus"], materialized="table") }}
 
 select
     cast(coalesce(dataset_source, source_policy_id) as varchar) as dataset_source,
@@ -17,14 +17,14 @@ select
     coalesce(target_semantics, 'observed_sales') as target_semantics,
     coalesce(try_cast(censor_flag as boolean), false) as censor_flag,
     coalesce(target_source, 'observed_sales') as target_source,
-    coalesce(
-        try_cast(label_quality_score as double),
-        case when coalesce(try_cast(censor_flag as boolean), false) then 0.5 else 1.0 end
-    ) as label_quality_score,
-    coalesce(
-        try_cast(usable_for_training_flag as boolean),
-        not coalesce(try_cast(censor_flag as boolean), false)
-    ) as usable_for_training_flag,
+    case
+        when coalesce(dataset_source, source_policy_id) = 'freshretail_lt' then 1.0
+        else coalesce(try_cast(label_quality_score as double), 1.0)
+    end as label_quality_score,
+    case
+        when coalesce(dataset_source, source_policy_id) = 'freshretail_lt' then true
+        else coalesce(try_cast(usable_for_training_flag as boolean), true)
+    end as usable_for_training_flag,
     try_cast(observed_revenue_net as double) as observed_revenue_net,
     try_cast(observed_discount_amount as double) as observed_discount_amount,
     try_cast(promo_flag as boolean) as promo_flag,

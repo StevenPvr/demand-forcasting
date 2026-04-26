@@ -45,6 +45,7 @@ __all__ = [
     "load_parquet_train_tuning_frames",
 ]
 
+
 def build_tuning_walk_forward_folds(
     tuning_frame: pd.DataFrame,
     date_col: str = DEFAULT_DATE_COL,
@@ -88,6 +89,7 @@ def build_grouped_tuning_walk_forward_folds_by_dataset(
         n_folds=n_folds,
         logger=logger,
     )
+
 
 def evaluate_statistical_baselines_macro(
     frame: pd.DataFrame,

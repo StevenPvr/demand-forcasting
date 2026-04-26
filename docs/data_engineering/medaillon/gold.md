@@ -32,8 +32,8 @@ Tests obligatoires:
 - `decision_timestamp < target_dt`;
 - split chronologique;
 - unicité `dataset_source x dt x location_id x product_id`;
-- pas de ligne marquée utilisable si elle est censurée, low-quality, fermée ou
-  issue d'un zéro dense non prouvé.
+- pas de ligne marquée utilisable si elle est low-quality, fermée ou issue d'un
+  zéro dense non prouvé.
 
 ## Éligibilité Entraînement
 
@@ -42,10 +42,13 @@ ensuite `train` et `val`.
 
 Une ligne n'est pas utilisable si:
 
-- `censor_flag = true`;
 - `label_quality_score < 0.75`;
 - `target_source in ('closed_or_missing_observation', 'dense_calendar_zero_fill')`;
 - la source n'est pas autorisée par la registry.
+
+`censor_flag` / `observed_stockout_flag` sont des signaux descriptifs. Dans le
+contrat actuel, la cible est la vente observée: une vente sous contrainte reste
+donc un label valide si l'observation POS elle-même est complète.
 
 ## Split
 

@@ -112,6 +112,7 @@ def _load_gold_frames(
     date_col: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> LoadedOptimisationFrames:
     loaded = load_gold_train_tuning_frames(
         duckdb_path=duckdb_path,
@@ -121,6 +122,7 @@ def _load_gold_frames(
         dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
+        included_dataset_sources=included_dataset_sources,
     )
     return LoadedOptimisationFrames(*loaded, None, None)
 
@@ -134,6 +136,7 @@ def _load_parquet_frames(
     target_col: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> LoadedOptimisationFrames:
     loaded = load_parquet_train_tuning_frames(
         train_input_path=train_input_path,
@@ -144,6 +147,7 @@ def _load_parquet_frames(
         target_col=target_col,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
+        included_dataset_sources=included_dataset_sources,
     )
     return LoadedOptimisationFrames(
         *loaded, Path(train_input_path), Path(tuning_input_path)
@@ -161,6 +165,7 @@ def load_optimisation_frames(
     target_col: str,
     train_sample_fraction: float,
     tuning_sample_fraction: float,
+    included_dataset_sources: tuple[str, ...] | None = None,
 ) -> LoadedOptimisationFrames:
     if train_input_path is None or tuning_input_path is None:
         logger.info(
@@ -173,6 +178,7 @@ def load_optimisation_frames(
             date_col=date_col,
             train_sample_fraction=train_sample_fraction,
             tuning_sample_fraction=tuning_sample_fraction,
+            included_dataset_sources=included_dataset_sources,
         )
     logger.info(
         "Loading optimisation frames from parquet inputs: train=%s tuning=%s",
@@ -187,6 +193,7 @@ def load_optimisation_frames(
         target_col=target_col,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
+        included_dataset_sources=included_dataset_sources,
     )
 
 

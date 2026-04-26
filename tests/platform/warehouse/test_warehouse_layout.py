@@ -53,12 +53,6 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "warehouse"
             / "models"
             / "silver"
-            / "silver_synthetic_foodservice_daily_product_demand.sql",
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "silver"
             / "silver_source_registry.sql",
             PROJECT_ROOT
             / "platform"
@@ -137,12 +131,6 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "warehouse"
             / "models"
             / "staging"
-            / "stg_synthetic_foodservice_daily.sql",
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "staging"
             / "stg_open_location_catchment.sql",
             PROJECT_ROOT
             / "platform"
@@ -167,28 +155,11 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "warehouse"
             / "models"
             / "gold"
-            / "gold_feature_synthetic_foodservice_d1.sql",
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "gold"
-            / "gold_feature_supplemental_corpus_d1.sql",
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "gold"
             / "gold_model_training_panel_d1.sql",
             PROJECT_ROOT / "platform" / "warehouse" / "models" / "gold" / "schema.yml",
             PROJECT_ROOT / "apps" / "warehouse" / "main.py",
             PROJECT_ROOT / "apps" / "warehouse" / "load_bronze" / "main.py",
             PROJECT_ROOT / "apps" / "platform" / "fetch_open_exogenous" / "main.py",
-            PROJECT_ROOT
-            / "apps"
-            / "platform"
-            / "generate_synthetic_cold_start"
-            / "main.py",
             PROJECT_ROOT / "apps" / "warehouse" / "run_silver" / "main.py",
             PROJECT_ROOT / "apps" / "warehouse" / "run_gold" / "main.py",
         ]
@@ -208,9 +179,10 @@ class WarehouseLayoutTests(unittest.TestCase):
         sql = model_path.read_text(encoding="utf-8")
 
         self.assertIn("silver_freshretail_daily_product_demand", sql)
-        self.assertIn("silver_supplemental_corpus_daily_product_demand", sql)
-        self.assertIn("silver_synthetic_foodservice_daily_product_demand", sql)
         self.assertIn("silver_bakery_daily_product_demand", sql)
+        self.assertNotIn("silver_supplemental_corpus_daily_product_demand", sql)
+        self.assertNotIn("silver_synthetic_foodservice_daily_product_demand", sql)
+        self.assertIn("where unioned.dataset_source in ('freshretail_lt', 'bakery')", sql)
         self.assertIn("silver_allowed_training_dataset_sources", sql)
         self.assertIn("source_priority", sql)
         self.assertIn("partition by dataset_source, dt, location_id, product_id", sql)
@@ -231,9 +203,17 @@ class WarehouseLayoutTests(unittest.TestCase):
         self.assertIn("split_bucket", sql)
         self.assertIn("target_demand_qty_d_plus_1", sql)
         self.assertIn("promo_rate_7", sql)
+        self.assertIn("commerce_modality", sql)
+        self.assertIn("operation_type", sql)
+        self.assertIn("product_taxonomy_depth", sql)
         self.assertIn("weather_humidity_lag_1", sql)
+        self.assertIn("weather_humidity_lag_14", sql)
         self.assertIn("weather_temperature_max_lag_1", sql)
+        self.assertIn("weather_temperature_max_lag_14", sql)
         self.assertIn("lending_interest_rate_latest", sql)
+        self.assertIn('"lag_6"', sql)
+        self.assertIn('"observed_revenue_net_lag_14"', sql)
+        self.assertIn('"promo_flag_lag_14"', sql)
         self.assertNotIn("avg_selling_price_lag_1", sql)
         self.assertNotIn("current_holiday_name", sql)
         self.assertNotIn("target_holiday_name", sql)
@@ -279,9 +259,41 @@ class WarehouseLayoutTests(unittest.TestCase):
         self.assertIn("gold_daily_product_forecast_panel_d1", sql)
         self.assertIn("forecast_horizon_days", sql)
         self.assertIn("target_true_zero_demand_flag", sql)
+        self.assertIn('"source_role"', sql)
+        self.assertIn('"commerce_modality"', sql)
+        self.assertIn('"operation_type"', sql)
+        self.assertIn('"product_taxonomy_depth"', sql)
+        self.assertIn('"lag_2"', sql)
+        self.assertIn('"lag_6"', sql)
+        self.assertIn('"lag_14"', sql)
+        self.assertIn('"weather_temperature_lag_14"', sql)
+        self.assertIn('"observed_stockout_flag_lag_14"', sql)
         self.assertNotIn("* exclude", sql.lower())
         self.assertIn(
             'DEFAULT_GOLD_TABLE = "gold.gold_model_training_panel_d1"', constants
+        )
+
+    def test_gold_feature_client_id_is_dataset_scoped(self) -> None:
+        macro_path = (
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "macros"
+            / "praedixa_gold_feature_slice.sql"
+        )
+        sql = macro_path.read_text(encoding="utf-8")
+
+        self.assertIn("cast(base_panel.dataset_source as varchar)", sql)
+        self.assertIn("cast(base_panel.location_id as varchar)", sql)
+        self.assertIn("cast(base_panel.product_id as varchar)", sql)
+        self.assertNotIn("base_panel.series_id as client_id", sql)
+        self.assertIn(
+            "lag(current_day_demand_qty, 6) over series_window as lag_6",
+            sql,
+        )
+        self.assertIn(
+            "lag(observed_revenue_net, 14) over series_window as observed_revenue_net_lag_14",
+            sql,
         )
 
     def test_gold_source_split_contract_is_explicit(self) -> None:
@@ -293,14 +305,6 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "gold"
             / "gold_feature_freshretail_d1.sql"
         )
-        bakery_path = (
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "gold"
-            / "gold_feature_bakery_d1.sql"
-        )
         split_test_path = (
             PROJECT_ROOT
             / "platform"
@@ -308,45 +312,17 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "tests"
             / "gold_pilot_ready_split_by_source.sql"
         )
-        synthetic_path = (
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "gold"
-            / "gold_feature_synthetic_foodservice_d1.sql"
-        )
-        supplemental_path = (
-            PROJECT_ROOT
-            / "platform"
-            / "warehouse"
-            / "models"
-            / "gold"
-            / "gold_feature_supplemental_corpus_d1.sql"
-        )
         freshretail_sql = freshretail_path.read_text(encoding="utf-8")
-        bakery_sql = bakery_path.read_text(encoding="utf-8")
         split_test_sql = split_test_path.read_text(encoding="utf-8")
-        synthetic_sql = synthetic_path.read_text(encoding="utf-8")
-        supplemental_sql = supplemental_path.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "dataset_source in ('freshretail', 'freshretail_lt')", freshretail_sql
-        )
+        self.assertIn("dataset_source = 'freshretail_lt'", freshretail_sql)
         self.assertIn('"chrono_60_40"', freshretail_sql)
-        self.assertIn("dataset_source = 'bakery'", bakery_sql)
-        self.assertIn('"bakery_test_only"', bakery_sql)
-        self.assertIn("synthetic_foodservice_qsr", synthetic_sql)
-        self.assertIn('"train_only"', synthetic_sql)
-        self.assertIn("m5_forecasting_accuracy", supplemental_sql)
-        self.assertIn("uci_online_retail_ii", supplemental_sql)
-        self.assertIn("restaurant_sales_report", supplemental_sql)
-        self.assertIn('"chrono_60_40"', supplemental_sql)
-        self.assertIn("freshretail_train_val_contract", split_test_sql)
+        self.assertIn("freshretail_lt_train_val_contract", split_test_sql)
         self.assertIn("bakery_test_holdout_contract", split_test_sql)
-        self.assertIn("supplemental_corpus_train_val_contract", split_test_sql)
-        self.assertIn("synthetic_foodservice_train_only_contract", split_test_sql)
-        self.assertIn("or val_rows <> 0", split_test_sql)
+        self.assertIn("unexpected_dataset_source", split_test_sql)
+        self.assertIn("where dataset_source not in ('freshretail_lt', 'bakery')", split_test_sql)
+        self.assertNotIn("supplemental_corpus_train_val_contract", split_test_sql)
+        self.assertNotIn("synthetic_foodservice_train_only_contract", split_test_sql)
         self.assertIn("or test_rows <> 0", split_test_sql)
         self.assertIn("PRAEDIXA_GOLD_BAKERY_TEST_MONTHS", split_test_sql)
 

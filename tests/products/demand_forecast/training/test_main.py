@@ -145,8 +145,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.10)
-        self.assertEqual(config.tuning_sample_fraction, 0.10)
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
 
     def test_xgboost_model_params_use_two_threads_per_parallel_fold(self) -> None:
         config = OFFICIAL_OPTIMISATION_MAIN_CONFIG.__class__(
@@ -205,8 +205,8 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.n_folds, 5)
         self.assertEqual(config.max_trials, 200)
         self.assertEqual(config.stage_budget, "standard")
-        self.assertEqual(config.train_sample_fraction, 0.10)
-        self.assertEqual(config.tuning_sample_fraction, 0.10)
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
 
     def test_main_uses_official_config_builder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

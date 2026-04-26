@@ -61,12 +61,6 @@ FIXED_SOURCE_METADATA = {
         delivery_flag=True,
         pickup_flag=True,
     ),
-    "first_party_daily": _fixed_source_metadata(
-        country_code=None,
-        assumption_source="first_party_location_metadata_pending_client_onboarding",
-        delivery_flag=False,
-        pickup_flag=False,
-    ),
 }
 
 
@@ -228,7 +222,11 @@ def build_location_metadata_frame(
     if not rows:
         return pd.DataFrame(columns=LOCATION_METADATA_COLUMNS)
 
-    return pd.DataFrame(rows).sort_values(["dataset_source", "location_id"]).reset_index(drop=True)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["dataset_source", "location_id"])
+        .reset_index(drop=True)
+    )
 
 
 def compute_country_years(
@@ -249,5 +247,7 @@ def compute_country_years(
             continue
         min_year = int(pd.Timestamp(row["min_dt"]).year)
         max_year = int((pd.Timestamp(row["max_dt"]) + pd.Timedelta(days=1)).year)
-        country_years.setdefault(str(country_code), set()).update(range(min_year, max_year + 1))
+        country_years.setdefault(str(country_code), set()).update(
+            range(min_year, max_year + 1)
+        )
     return {country: sorted(years) for country, years in country_years.items()}

@@ -25,25 +25,47 @@ FEATURE_ROLE_ORDER: tuple[TFTColumnRole, ...] = (
     "time_varying_unknown_real",
 )
 
+TFT_LAG_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 28)
+
+TFT_TARGET_LAG_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 21, 28)
+
+TFT_BOOLEAN_LAG_PREFIXES: tuple[str, ...] = (
+    "promo_flag",
+    "activity_flag",
+    "observed_stockout_flag",
+    "censor_flag",
+    "day_complete_flag",
+)
+
+TFT_REAL_LAG_PREFIXES: tuple[str, ...] = (
+    "label_quality_score",
+    "observed_discount_amount",
+    "observed_revenue_net",
+    "weather_temperature",
+    "weather_temperature_min",
+    "weather_temperature_max",
+    "weather_precipitation",
+    "weather_humidity",
+    "weather_wind_level",
+)
+
+TFT_BOOLEAN_LAG_COLUMNS: tuple[str, ...] = tuple(
+    f"{prefix}_lag_{horizon}"
+    for prefix in TFT_BOOLEAN_LAG_PREFIXES
+    for horizon in TFT_LAG_HORIZONS
+)
+
+TFT_REAL_LAG_COLUMNS: tuple[str, ...] = (
+    *(f"lag_{horizon}" for horizon in TFT_LAG_HORIZONS),
+    *(f"target_lag_{horizon}" for horizon in TFT_TARGET_LAG_HORIZONS),
+    *(
+        f"{prefix}_lag_{horizon}"
+        for prefix in TFT_REAL_LAG_PREFIXES
+        for horizon in TFT_LAG_HORIZONS
+    ),
+)
+
 EXCLUDED_FROM_TFT_LAG_COLUMNS: tuple[str, ...] = (
-    "promo_flag_lag_1",
-    "promo_flag_lag_7",
-    "promo_flag_lag_28",
-    "activity_flag_lag_1",
-    "activity_flag_lag_7",
-    "activity_flag_lag_28",
-    "observed_stockout_flag_lag_1",
-    "observed_stockout_flag_lag_7",
-    "observed_stockout_flag_lag_28",
-    "censor_flag_lag_1",
-    "censor_flag_lag_7",
-    "censor_flag_lag_28",
-    "label_quality_score_lag_1",
-    "label_quality_score_lag_7",
-    "label_quality_score_lag_28",
-    "day_complete_flag_lag_1",
-    "day_complete_flag_lag_7",
-    "day_complete_flag_lag_28",
     "missing_sales_flag_lag_1",
     "missing_sales_flag_lag_7",
     "missing_sales_flag_lag_28",
@@ -60,43 +82,17 @@ EXCLUDED_FROM_TFT_LAG_COLUMNS: tuple[str, ...] = (
     "assortment_restriction_flag_lag_7",
     "assortment_restriction_flag_lag_28",
     "weather_temperature_lag_0",
-    "weather_temperature_lag_1",
-    "weather_temperature_lag_7",
     "weather_temperature_min_lag_0",
-    "weather_temperature_min_lag_1",
-    "weather_temperature_min_lag_7",
     "weather_temperature_max_lag_0",
-    "weather_temperature_max_lag_1",
-    "weather_temperature_max_lag_7",
     "weather_precipitation_lag_0",
-    "weather_precipitation_lag_1",
-    "weather_precipitation_lag_7",
     "weather_humidity_lag_0",
-    "weather_humidity_lag_1",
-    "weather_humidity_lag_7",
     "weather_wind_level_lag_0",
-    "weather_wind_level_lag_1",
-    "weather_wind_level_lag_7",
     "weather_humidity",
     "weather_wind_level",
     "lending_interest_rate_latest_lag_28",
-    "lag_1",
-    "lag_7",
-    "lag_14",
-    "lag_28",
-    "target_lag_7",
-    "target_lag_14",
-    "target_lag_21",
-    "target_lag_28",
     "avg_selling_price_lag_1",
     "avg_selling_price_lag_7",
     "avg_selling_price_lag_28",
-    "observed_discount_amount_lag_1",
-    "observed_discount_amount_lag_7",
-    "observed_discount_amount_lag_28",
-    "observed_revenue_net_lag_1",
-    "observed_revenue_net_lag_7",
-    "observed_revenue_net_lag_28",
     "closure_minutes_lag_1",
     "closure_minutes_lag_7",
     "closure_minutes_lag_28",
@@ -182,7 +178,6 @@ NON_FEATURE_COLUMN_ROLES: dict[str, TFTColumnRole] = {
     "observed_revenue_net": "exclude",
     "decision_timestamp": "exclude",
     "feature_availability_profile": "exclude",
-    "source_role": "exclude",
     "rn_sample": "exclude",
     "source_legal_basis": "exclude",
     "source_license_type": "exclude",
@@ -199,24 +194,33 @@ TFT_GROUP_ID_COLUMNS: tuple[str, ...] = ("client_id",)
 
 TFT_STATIC_CATEGORICAL_COLUMNS: tuple[str, ...] = (
     "dataset_source",
+    "source_role",
     "vertical_level_1",
     "vertical_level_2",
+    "commerce_modality",
+    "operation_type",
+    "service_pattern",
     "country_code",
     "region_code",
+    "region_known_flag",
     "city_name",
     "drive_through_flag",
     "delivery_flag",
     "pickup_flag",
     "product_family",
     "product_subfamily",
+    "product_subfamily_known_flag",
     "location_id",
     "product_id",
     "category_level_1",
+    "category_level_1_known_flag",
     "category_level_2",
+    "category_level_2_known_flag",
     "category_level_3",
+    "category_level_3_known_flag",
 )
 
-TFT_STATIC_REAL_COLUMNS: tuple[str, ...] = ()
+TFT_STATIC_REAL_COLUMNS: tuple[str, ...] = ("product_taxonomy_depth",)
 
 TFT_TIME_VARYING_KNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = (
     "cold_start_bucket",
@@ -291,5 +295,5 @@ TFT_TIME_VARYING_KNOWN_REAL_COLUMNS: tuple[str, ...] = (
     "target_same_dow_mean_4w",
 )
 
-TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = ()
-TFT_TIME_VARYING_UNKNOWN_REAL_COLUMNS: tuple[str, ...] = ()
+TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = TFT_BOOLEAN_LAG_COLUMNS
+TFT_TIME_VARYING_UNKNOWN_REAL_COLUMNS: tuple[str, ...] = TFT_REAL_LAG_COLUMNS

@@ -11,7 +11,11 @@ import pandas as pd
 import numpy as np
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -19,6 +23,10 @@ from praedixa.demand_forecast.evaluation import pipeline as evaluation_pipeline 
 import praedixa.demand_forecast.evaluation.orchestrator_runtime as evaluation_orchestrator_runtime  # noqa: E402
 import praedixa.demand_forecast.evaluation.modeling as evaluation_modeling  # noqa: E402
 import praedixa.demand_forecast.evaluation.xgboost_runtime as xgboost_runtime  # noqa: E402
+from praedixa.demand_forecast.backends.chronos2.model import (  # noqa: E402
+    Chronos2ZeroShotModel,
+    predict_chronos2_quantiles,
+)
 from praedixa.demand_forecast.evaluation.modeling import select_feature_columns  # noqa: E402
 from praedixa.demand_forecast.evaluation.bakery_metrics import (  # noqa: E402
     build_predictions_frame,
@@ -84,7 +92,9 @@ def _build_eval_output_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFram
     return train_selection, train_tuning, val_frame
 
 
-def _write_eval_fixture_inputs(root: Path) -> tuple[Path, Path, Path, Path, Path, pd.DataFrame]:
+def _write_eval_fixture_inputs(
+    root: Path,
+) -> tuple[Path, Path, Path, Path, Path, pd.DataFrame]:
     selection_path = root / "train_selection_70_selected.parquet"
     tuning_path = root / "train_tuning_30_selected.parquet"
     val_path = root / "data_val_cleaned.parquet"
@@ -98,7 +108,9 @@ def _write_eval_fixture_inputs(root: Path) -> tuple[Path, Path, Path, Path, Path
     return selection_path, tuning_path, val_path, params_path, output_dir, val_frame
 
 
-def _build_stub_predictions(val_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _build_stub_predictions(
+    val_frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     return (
         build_predictions_frame(
             pd.DataFrame(
@@ -184,8 +196,12 @@ def _assert_written_artifacts(output_dir: Path) -> None:
 
 
 def _assert_prediction_exports(output_dir: Path) -> None:
-    canonical_predictions = pd.read_csv(output_dir / "foundation_tft_test_predictions.csv")
-    probabilistic_predictions = pd.read_csv(output_dir / "foundation_tft_probabilistic_predictions.csv")
+    canonical_predictions = pd.read_csv(
+        output_dir / "foundation_tft_test_predictions.csv"
+    )
+    probabilistic_predictions = pd.read_csv(
+        output_dir / "foundation_tft_probabilistic_predictions.csv"
+    )
     assert "prediction_p50" not in canonical_predictions.columns
     assert "prediction_p50" in probabilistic_predictions.columns
     for column in ["lower_80", "upper_80", "lower_95", "upper_95"]:
@@ -193,9 +209,15 @@ def _assert_prediction_exports(output_dir: Path) -> None:
 
 
 def _assert_metric_exports(output_dir: Path) -> None:
-    canonical_metrics_payload = json.loads((output_dir / "foundation_tft_test_metrics.json").read_text("utf-8"))
-    canonical_overall = cast(dict[str, object], canonical_metrics_payload["overall_metrics"])
-    canonical_product = cast(dict[str, dict[str, object]], canonical_metrics_payload["per_product_metrics"])
+    canonical_metrics_payload = json.loads(
+        (output_dir / "foundation_tft_test_metrics.json").read_text("utf-8")
+    )
+    canonical_overall = cast(
+        dict[str, object], canonical_metrics_payload["overall_metrics"]
+    )
+    canonical_product = cast(
+        dict[str, dict[str, object]], canonical_metrics_payload["per_product_metrics"]
+    )
     assert "pinball_loss_p50" not in canonical_overall
     assert "wape" in canonical_overall
     assert "bias" in canonical_overall
@@ -203,15 +225,21 @@ def _assert_metric_exports(output_dir: Path) -> None:
     assert canonical_overall["coverage_80"] is None
     assert canonical_overall["coverage_95"] is None
     assert "pinball_loss_p50" not in canonical_product["sku_1"]
-    probabilistic_payload = json.loads((output_dir / "foundation_tft_probabilistic_metrics.json").read_text("utf-8"))
-    probabilistic_overall = cast(dict[str, object], probabilistic_payload["overall_metrics"])
+    probabilistic_payload = json.loads(
+        (output_dir / "foundation_tft_probabilistic_metrics.json").read_text("utf-8")
+    )
+    probabilistic_overall = cast(
+        dict[str, object], probabilistic_payload["overall_metrics"]
+    )
     assert "pinball_loss_p50" in probabilistic_overall
     assert probabilistic_overall["coverage_80"] == 1.0
     assert probabilistic_overall["coverage_95"] == 1.0
 
 
 def _assert_diagnostics_exports(output_dir: Path) -> None:
-    diagnostics_payload = json.loads((output_dir / "foundation_tft_test_diagnostics.json").read_text("utf-8"))
+    diagnostics_payload = json.loads(
+        (output_dir / "foundation_tft_test_diagnostics.json").read_text("utf-8")
+    )
     probabilistic_summary = diagnostics_payload["probabilistic_summary"]
     assert probabilistic_summary["quantile_columns"] == [
         "prediction_p2_5",
@@ -222,26 +250,60 @@ def _assert_diagnostics_exports(output_dir: Path) -> None:
     ]
     assert probabilistic_summary["intervals"]["80"]["lower"] == "lower_80"
     assert "quantile_calibration_error" in diagnostics_payload
-    model_card_payload = json.loads((output_dir / "foundation_tft_model_card.json").read_text("utf-8"))
-    assert model_card_payload["forecast_output_contract"]["median_forecast_column"] == "prediction_p50"
-    assert model_card_payload["probabilistic_forecast"]["intervals"]["95"]["coverage"] == 1.0
-    assert model_card_payload["interpretability_path"].endswith("foundation_tft_interpretability.json")
-    assert model_card_payload["feature_roles_path"].endswith("foundation_tft_feature_roles.json")
-    promotable_manifest = json.loads((output_dir / "foundation_tft_promotable_bundle_manifest.json").read_text("utf-8"))
+    model_card_payload = json.loads(
+        (output_dir / "foundation_tft_model_card.json").read_text("utf-8")
+    )
+    assert (
+        model_card_payload["forecast_output_contract"]["median_forecast_column"]
+        == "prediction_p50"
+    )
+    assert (
+        model_card_payload["probabilistic_forecast"]["intervals"]["95"]["coverage"]
+        == 1.0
+    )
+    assert model_card_payload["interpretability_path"].endswith(
+        "foundation_tft_interpretability.json"
+    )
+    assert model_card_payload["feature_roles_path"].endswith(
+        "foundation_tft_feature_roles.json"
+    )
+    promotable_manifest = json.loads(
+        (output_dir / "foundation_tft_promotable_bundle_manifest.json").read_text(
+            "utf-8"
+        )
+    )
     assert promotable_manifest["bundle_version"] == 2
-    assert promotable_manifest["artifact_paths"]["feature_manifest_json"].endswith("foundation_tft_feature_manifest.json")
+    assert promotable_manifest["artifact_paths"]["feature_manifest_json"].endswith(
+        "foundation_tft_feature_manifest.json"
+    )
 
 
-def _build_refit_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, TargetContract]:
+def _build_refit_frames() -> tuple[
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, TargetContract
+]:
     train_frame = pd.DataFrame(
-        {"date": pd.to_datetime(["2024-01-01", "2024-01-02"]), "product": ["A", "A"], "target": [1.0, 2.0], "target_abs": [1.0, 2.0], "feat": [0.1, 0.2]}
+        {
+            "date": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+            "product": ["A", "A"],
+            "target": [1.0, 2.0],
+            "target_abs": [1.0, 2.0],
+            "feat": [0.1, 0.2],
+        }
     )
     valid_frame = pd.DataFrame(
-        {"date": pd.to_datetime(["2024-01-03"]), "product": ["A"], "target": [3.0], "target_abs": [3.0], "feat": [0.3]}
+        {
+            "date": pd.to_datetime(["2024-01-03"]),
+            "product": ["A"],
+            "target": [3.0],
+            "target_abs": [3.0],
+            "feat": [0.3],
+        }
     )
     test_frame = pd.DataFrame(
         {
-            "date": pd.to_datetime(["2024-02-01", "2024-02-01", "2024-02-02", "2024-02-02"]),
+            "date": pd.to_datetime(
+                ["2024-02-01", "2024-02-01", "2024-02-02", "2024-02-02"]
+            ),
             "product": ["B", "A", "A", "B"],
             "target": [10.0, 20.0, 30.0, 40.0],
             "target_abs": [10.0, 20.0, 30.0, 40.0],
@@ -266,10 +328,12 @@ class EvaluationPipelineTests(unittest.TestCase):
             }
         )
 
-        feature_cols, constant_feature_cols, identifier_feature_cols = select_feature_columns(
-            train_frame,
-            learning_target_col="target",
-            absolute_target_col="target_demand_qty_d_plus_1",
+        feature_cols, constant_feature_cols, identifier_feature_cols = (
+            select_feature_columns(
+                train_frame,
+                learning_target_col="target",
+                absolute_target_col="target_demand_qty_d_plus_1",
+            )
         )
 
         self.assertIn("country_code", feature_cols)
@@ -278,7 +342,9 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(constant_feature_cols, [])
         self.assertEqual(identifier_feature_cols, [])
 
-    def test_xgboost_evaluation_keeps_store_product_and_client_identifiers(self) -> None:
+    def test_xgboost_evaluation_keeps_store_product_and_client_identifiers(
+        self,
+    ) -> None:
         train_frame = pd.DataFrame(
             {
                 "dt": pd.date_range("2024-01-01", periods=3, freq="D"),
@@ -305,7 +371,9 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertNotIn("gold_run_id", feature_cols)
         self.assertEqual(identifier_feature_cols, [])
 
-    def test_build_predictions_frame_populates_quantile_columns_and_intervals(self) -> None:
+    def test_build_predictions_frame_populates_quantile_columns_and_intervals(
+        self,
+    ) -> None:
         reference_test_df = pd.DataFrame(
             {
                 "date": pd.to_datetime(["2024-01-13", "2024-01-14"]),
@@ -356,7 +424,9 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(predictions_df["upper_95"].tolist(), [1.90, 1.98])
         self.assertEqual(predictions_df["prediction_p50"].tolist(), [1.72, 1.79])
 
-    def test_compute_probabilistic_metrics_payload_exposes_quantile_metrics(self) -> None:
+    def test_compute_probabilistic_metrics_payload_exposes_quantile_metrics(
+        self,
+    ) -> None:
         predictions_df = build_predictions_frame(
             pd.DataFrame(
                 {
@@ -380,7 +450,9 @@ class EvaluationPipelineTests(unittest.TestCase):
 
         metrics_payload = compute_probabilistic_metrics_payload(predictions_df)
         overall_metrics = cast(dict[str, object], metrics_payload["overall_metrics"])
-        per_product_metrics = cast(dict[str, dict[str, object]], metrics_payload["per_product_metrics"])
+        per_product_metrics = cast(
+            dict[str, dict[str, object]], metrics_payload["per_product_metrics"]
+        )
 
         self.assertIn("pinball_loss_p10", overall_metrics)
         self.assertIn("pinball_loss_p50", overall_metrics)
@@ -404,7 +476,9 @@ class EvaluationPipelineTests(unittest.TestCase):
     def test_build_daily_walk_forward_folds_creates_one_fold_per_day(self) -> None:
         frame = pd.DataFrame(
             {
-                "dt": pd.to_datetime(["2024-04-01", "2024-04-01", "2024-04-02", "2024-04-03"]),
+                "dt": pd.to_datetime(
+                    ["2024-04-01", "2024-04-01", "2024-04-02", "2024-04-03"]
+                ),
                 "target": [1.0, 2.0, 3.0, 4.0],
             }
         )
@@ -417,10 +491,19 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(folds[1]["history_rows"], 2)
         self.assertEqual(folds[2]["valid_rows"], 1)
 
-    def test_build_evaluation_outputs_writes_metrics_predictions_and_plots(self) -> None:
+    def test_build_evaluation_outputs_writes_metrics_predictions_and_plots(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            selection_path, tuning_path, val_path, params_path, output_dir, val_frame = _write_eval_fixture_inputs(root)
+            (
+                selection_path,
+                tuning_path,
+                val_path,
+                params_path,
+                output_dir,
+                val_frame,
+            ) = _write_eval_fixture_inputs(root)
             stub_predictions, stub_daily_report = _build_stub_predictions(val_frame)
 
             with (
@@ -462,7 +545,14 @@ class EvaluationPipelineTests(unittest.TestCase):
     def test_build_xgboost_evaluation_outputs_writes_xgboost_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            selection_path, tuning_path, val_path, params_path, output_dir, val_frame = _write_eval_fixture_inputs(root)
+            (
+                selection_path,
+                tuning_path,
+                val_path,
+                params_path,
+                output_dir,
+                val_frame,
+            ) = _write_eval_fixture_inputs(root)
             params_path.write_text(
                 json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
                 encoding="utf-8",
@@ -509,51 +599,197 @@ class EvaluationPipelineTests(unittest.TestCase):
             self.assertTrue((output_dir / "xgboost_test_metrics.json").exists())
             self.assertTrue((output_dir / "xgboost_test_predictions.csv").exists())
             self.assertTrue((output_dir / "xgboost_final_model.json").exists())
-            metadata = json.loads((output_dir / "xgboost_evaluation_metadata.json").read_text("utf-8"))
+            metadata = json.loads(
+                (output_dir / "xgboost_evaluation_metadata.json").read_text("utf-8")
+            )
             self.assertEqual(metadata["model_backend"], "xgboost")
             self.assertEqual(metadata["model_family"], "xgboost")
             self.assertTrue(metadata["daily_refit"])
 
-    def test_daily_refit_predictions_keep_actuals_aligned_with_product_and_target_date(self) -> None:
+    def test_build_chronos2_evaluation_outputs_writes_chronos2_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (
+                selection_path,
+                tuning_path,
+                val_path,
+                params_path,
+                output_dir,
+                val_frame,
+            ) = _write_eval_fixture_inputs(root)
+            params_path.write_text(
+                json.dumps(
+                    {
+                        "model_backend": "chronos2",
+                        "model_path": "amazon/chronos-2",
+                        "device_map": "cpu",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stub_predictions, stub_daily_report = _build_stub_predictions(val_frame)
+
+            with (
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.raise_if_chronos2_backend_required",
+                    return_value=None,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.evaluate_chronos2_daily_refit_predictions",
+                    return_value=(stub_predictions, stub_daily_report, 0),
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.fit_final_chronos2_model",
+                    return_value=_dummy_final_model(),
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.save_chronos2_model",
+                    side_effect=_write_dummy_artifact,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.plot_actual_vs_predicted",
+                    side_effect=_write_dummy_plot,
+                ),
+                patch(
+                    "praedixa.demand_forecast.evaluation.orchestrator.plot_residuals",
+                    side_effect=_write_dummy_plot,
+                ),
+            ):
+                build_evaluation_outputs(
+                    EvaluationBuildRequest(
+                        train_selection_input_path=selection_path,
+                        train_tuning_input_path=tuning_path,
+                        val_input_path=val_path,
+                        best_params_path=params_path,
+                        output_dir=output_dir,
+                        model_backend="chronos2",
+                    )
+                )
+
+            self.assertTrue((output_dir / "chronos2_test_metrics.json").exists())
+            self.assertTrue(
+                (output_dir / "chronos2_probabilistic_predictions.csv").exists()
+            )
+            self.assertTrue((output_dir / "chronos2_final_model.json").exists())
+            metadata = json.loads(
+                (output_dir / "chronos2_evaluation_metadata.json").read_text("utf-8")
+            )
+            self.assertEqual(metadata["model_backend"], "chronos2")
+            self.assertEqual(metadata["model_family"], "chronos2")
+            self.assertTrue(metadata["daily_refit"])
+
+    def test_chronos2_quantile_predictions_align_by_series_and_timestamp(self) -> None:
+        class FakeChronosPipeline:
+            def predict_df(self, *args: object, **kwargs: object) -> pd.DataFrame:
+                future_df = cast(pd.DataFrame, kwargs["future_df"])
+                return pd.DataFrame(
+                    {
+                        "series_id": future_df["series_id"].tolist(),
+                        "timestamp": future_df["timestamp"].tolist(),
+                        "0.1": [9.0, 19.0],
+                        "0.5": [10.0, 20.0],
+                        "0.9": [11.0, 21.0],
+                    }
+                )
+
+        context_frame = pd.DataFrame(
+            {
+                "series_id": ["store__A", "store__B"],
+                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+                "target": [8.0, 18.0],
+                "calendar_feature": [1, 1],
+            }
+        )
+        future_frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02", "2024-01-02"]),
+                "product": ["A", "B"],
+                "client_id": ["store__A", "store__B"],
+                "target_abs": [10.0, 20.0],
+                "calendar_feature": [2, 2],
+            }
+        )
+        model = Chronos2ZeroShotModel(
+            pipeline=FakeChronosPipeline(),
+            context_frame=context_frame,
+            feature_cols=["calendar_feature"],
+            series_order=["store__A", "store__B"],
+            covariate_kinds={"calendar_feature": "numeric"},
+        )
+
+        quantiles = predict_chronos2_quantiles(model, future_frame)
+
+        pd.testing.assert_frame_equal(
+            quantiles,
+            pd.DataFrame(
+                {
+                    "prediction_p10": [9.0, 19.0],
+                    "prediction_p50": [10.0, 20.0],
+                    "prediction_p90": [11.0, 21.0],
+                }
+            ),
+        )
+
+    def test_daily_refit_predictions_keep_actuals_aligned_with_product_and_target_date(
+        self,
+    ) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         train_row_counts: list[int] = []
         train_fit_columns: list[list[str]] = []
 
         def _record_fit_call(**kwargs: object) -> tuple[str, int]:
             train_row_counts.append(len(cast(pd.DataFrame, kwargs["train_frame"])))
-            train_fit_columns.append(list(cast(pd.DataFrame, kwargs["train_frame"]).columns))
+            train_fit_columns.append(
+                list(cast(pd.DataFrame, kwargs["train_frame"]).columns)
+            )
             return "model", 7
 
-        def _predict_absolute_stub(_model: object, frame: pd.DataFrame, **_: object) -> np.ndarray:
+        def _predict_absolute_stub(
+            _model: object, frame: pd.DataFrame, **_: object
+        ) -> np.ndarray:
             return cast(np.ndarray, frame["target_abs"].to_numpy())
 
         with (
-            patch("praedixa.demand_forecast.evaluation.pipeline._fit_evaluation_model", side_effect=_record_fit_call),
+            patch(
+                "praedixa.demand_forecast.evaluation.pipeline._fit_evaluation_model",
+                side_effect=_record_fit_call,
+            ),
             patch(
                 "praedixa.demand_forecast.evaluation.pipeline._predict_absolute",
                 side_effect=_predict_absolute_stub,
             ),
         ):
-            predictions_df, daily_report_df, best_iteration = evaluate_daily_refit_predictions(
-                train_frame=train_frame,
-                valid_frame=valid_frame,
-                test_frame=test_frame,
-                feature_cols=["feat"],
-                target_contract=target_contract,
-                model_params={},
+            predictions_df, daily_report_df, best_iteration = (
+                evaluate_daily_refit_predictions(
+                    train_frame=train_frame,
+                    valid_frame=valid_frame,
+                    test_frame=test_frame,
+                    feature_cols=["feat"],
+                    target_contract=target_contract,
+                    model_params={},
+                )
             )
 
         self.assertEqual(best_iteration, 7)
         self.assertEqual(len(daily_report_df), 2)
         self.assertEqual(train_row_counts, [2, 4])
-        self.assertEqual(train_fit_columns, [list(train_frame.columns), list(train_frame.columns)])
+        self.assertEqual(
+            train_fit_columns, [list(train_frame.columns), list(train_frame.columns)]
+        )
         self.assertEqual(daily_report_df["bakery_history_rows"].tolist(), [0, 2])
         pd.testing.assert_frame_equal(
-            predictions_df.loc[:, ["product", "target_date", "actual"]].reset_index(drop=True),
+            predictions_df.loc[:, ["product", "target_date", "actual"]].reset_index(
+                drop=True
+            ),
             pd.DataFrame(
                 {
                     "product": ["A", "A", "B", "B"],
-                    "target_date": ["2024-02-01", "2024-02-02", "2024-02-01", "2024-02-02"],
+                    "target_date": [
+                        "2024-02-01",
+                        "2024-02-02",
+                        "2024-02-01",
+                        "2024-02-02",
+                    ],
                     "actual": [20.0, 30.0, 10.0, 40.0],
                 }
             ),
@@ -563,7 +799,9 @@ class EvaluationPipelineTests(unittest.TestCase):
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         recorded: dict[str, object] = {}
 
-        def _record_refit_call(**kwargs: object) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+        def _record_refit_call(
+            **kwargs: object,
+        ) -> tuple[pd.DataFrame, pd.DataFrame, int]:
             recorded["model_params"] = kwargs["model_params"]
             return pd.DataFrame(), pd.DataFrame(), 7
 
@@ -572,14 +810,16 @@ class EvaluationPipelineTests(unittest.TestCase):
             "evaluate_daily_refit_predictions",
             side_effect=_record_refit_call,
         ):
-            _, _, best_iteration = xgboost_runtime.evaluate_xgboost_daily_refit_predictions(
-                train_frame=train_frame,
-                valid_frame=valid_frame,
-                test_frame=test_frame,
-                feature_cols=["feat"],
-                target_contract=target_contract,
-                model_params={"model_backend": "xgboost", "n_jobs": 1},
-                logger=__import__("logging").getLogger(__name__),
+            _, _, best_iteration = (
+                xgboost_runtime.evaluate_xgboost_daily_refit_predictions(
+                    train_frame=train_frame,
+                    valid_frame=valid_frame,
+                    test_frame=test_frame,
+                    feature_cols=["feat"],
+                    target_contract=target_contract,
+                    model_params={"model_backend": "xgboost", "n_jobs": 1},
+                    logger=__import__("logging").getLogger(__name__),
+                )
             )
 
         refit_params = cast(dict[str, object], recorded["model_params"])

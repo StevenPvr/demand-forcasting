@@ -25,7 +25,10 @@ dependencies = [
     "torch>=2.11.0",
     "lightning>=2.6.1",
     "pytorch-forecasting>=1.7.0",
+    "chronos-forecasting>=2.0",
     "mypy>=1.19.1",
+    "chronos>=0.3",
+    "peft>=0.18.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +37,11 @@ tft = [
     "pytorch-forecasting>=1.6.0",
     "torch>=2.9.0",
     "torchmetrics>=1.8.0",
+]
+chronos2 = [
+    "chronos-forecasting>=2.0",
+    "peft>=0.18.0",
+    "torch>=2.9.0",
 ]
 
 [dependency-groups]

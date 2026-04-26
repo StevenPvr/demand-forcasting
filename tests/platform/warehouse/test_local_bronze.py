@@ -301,6 +301,7 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("bronze_freshretail_daily", table_names)
         self.assertIn("bronze_bakery_order_lines", table_names)
         self.assertIn("bronze_open_weather_daily", table_names)
+        self.assertNotIn("bronze_synthetic_foodservice_daily", table_names)
 
     def test_default_active_bronze_specs_declares_commercial_and_exogenous_sources(
         self,
@@ -313,15 +314,11 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         self.assertIn("freshretail_train", source_names)
         self.assertIn("freshretail_val", source_names)
         self.assertIn("bakery", source_names)
-        self.assertIn("synthetic_foodservice_daily", source_names)
+        self.assertNotIn("synthetic_foodservice_daily", source_names)
         self.assertIn("open_location_catchment", source_names)
         self.assertIn("bronze_open_location_catchment", table_names)
-        self.assertIn("bronze_synthetic_foodservice_daily", table_names)
+        self.assertNotIn("bronze_synthetic_foodservice_daily", table_names)
         self.assertEqual(policy_by_source["bakery"], "bakery")
-        self.assertEqual(
-            policy_by_source["synthetic_foodservice_daily"],
-            "synthetic_foodservice_qsr",
-        )
         self.assertEqual(policy_by_source["open_weather_daily"], "open_meteo_api")
 
     def test_prepare_bronze_batch_renames_bakery_columns(self) -> None:

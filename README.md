@@ -168,7 +168,10 @@ Sources dataset autorisées dans l’état actuel :
 - `freshretail`
 - `freshretail_lt`
 - `bakery`
-- `first_party_daily`
+- `m5_forecasting_accuracy`
+- `synthetic_foodservice_qsr`
+- `synthetic_foodservice_bakery`
+- `synthetic_foodservice_restaurant`
 
 Providers à statut particulier :
 

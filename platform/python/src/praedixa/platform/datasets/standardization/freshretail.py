@@ -37,12 +37,8 @@ def _freshretail_canonical_expressions(
         pl.lit("observed_sales").alias("target_semantics"),
         pl.coalesce([stockout_flag_expr, pl.lit(False)]).cast(pl.Boolean).alias("censor_flag"),
         pl.lit("observed_sales").alias("target_source"),
-        pl.when(pl.coalesce([stockout_flag_expr, pl.lit(False)]))
-        .then(pl.lit(0.5))
-        .otherwise(pl.lit(1.0))
-        .cast(pl.Float32)
-        .alias("label_quality_score"),
-        (~pl.coalesce([stockout_flag_expr, pl.lit(False)])).alias("usable_for_training_flag"),
+        pl.lit(1.0).cast(pl.Float32).alias("label_quality_score"),
+        pl.lit(True).alias("usable_for_training_flag"),
         pl.lit(None).cast(pl.Float32).alias("observed_revenue_net"),
         pl.col("discount").cast(pl.Float32).alias("observed_discount_amount"),
         freshretail_promo_flag_expr().alias("promo_flag"),

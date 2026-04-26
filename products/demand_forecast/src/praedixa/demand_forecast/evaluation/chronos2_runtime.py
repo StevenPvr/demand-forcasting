@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from praedixa.demand_forecast.backends.chronos2.model import (
+    Chronos2ZeroShotModel,
+    fit_chronos2_zero_shot_model,
+    predict_chronos2_median,
+    predict_chronos2_quantiles,
+    save_chronos2_model_marker,
+)
+from praedixa.demand_forecast.contracts.targets import TargetContract
+from praedixa.demand_forecast.evaluation.refit import evaluate_daily_refit_predictions
+
+
+def evaluate_chronos2_daily_refit_predictions(
+    *,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    model_params: dict[str, object],
+    logger: logging.Logger,
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    resolved_params = _chronos2_model_params(model_params)
+    logger.info(
+        "Chronos-2 zero-shot evaluation starting: model_path=%s device_map=%s "
+        "covariates=%s cross_learning=%s",
+        resolved_params["model_path"],
+        resolved_params["device_map"],
+        len(feature_cols),
+        resolved_params["cross_learning"],
+    )
+    return evaluate_daily_refit_predictions(
+        train_frame=train_frame,
+        valid_frame=valid_frame,
+        test_frame=test_frame,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        model_params=resolved_params,
+        logger=logger,
+        fit_model_fn=fit_chronos2_evaluation_model,
+        predict_absolute_fn=predict_absolute_chronos2,
+        predict_quantiles_absolute_fn=predict_absolute_chronos2_quantiles,
+    )
+
+
+def fit_chronos2_evaluation_model(
+    *,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    model_params: dict[str, object],
+) -> tuple[Chronos2ZeroShotModel, int]:
+    return fit_chronos2_zero_shot_model(
+        train_frame=train_frame,
+        valid_frame=valid_frame,
+        feature_cols=feature_cols,
+        target_col=target_contract.absolute_target_col,
+        model_params=model_params,
+    )
+
+
+def predict_absolute_chronos2(
+    model: Chronos2ZeroShotModel,
+    frame: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+) -> np.ndarray:
+    _ = feature_cols, target_contract
+    return predict_chronos2_median(model, frame)
+
+
+def predict_absolute_chronos2_quantiles(
+    model: Chronos2ZeroShotModel,
+    frame: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+) -> pd.DataFrame:
+    _ = feature_cols, target_contract
+    return predict_chronos2_quantiles(model, frame)
+
+
+def fit_final_chronos2_model(
+    *,
+    fit_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    model_params: dict[str, object],
+    num_boost_round: int,
+) -> Chronos2ZeroShotModel:
+    _ = num_boost_round
+    model, _ = fit_chronos2_zero_shot_model(
+        train_frame=fit_frame,
+        valid_frame=fit_frame.head(0),
+        feature_cols=feature_cols,
+        target_col=target_contract.absolute_target_col,
+        model_params=_chronos2_model_params(model_params),
+    )
+    return model
+
+
+def save_chronos2_model(model: Chronos2ZeroShotModel, output_path: Path) -> Path:
+    return save_chronos2_model_marker(model, output_path)
+
+
+def _chronos2_model_params(model_params: dict[str, object]) -> dict[str, object]:
+    resolved = dict(model_params)
+    resolved["model_backend"] = "chronos2"
+    resolved.setdefault("model_path", "amazon/chronos-2")
+    resolved.setdefault("device_map", "cpu")
+    resolved.setdefault("cross_learning", True)
+    resolved.setdefault("quantile_levels", [0.1, 0.5, 0.9])
+    return resolved

@@ -8,7 +8,9 @@ from typing import Any, Callable, cast
 
 import pandas as pd
 
-from praedixa.demand_forecast.backends.tft.feature_contract import build_feature_contract
+from praedixa.demand_forecast.backends.tft.feature_contract import (
+    build_feature_contract,
+)
 from praedixa.demand_forecast.contracts.targets import build_target_contract_metadata
 from praedixa.demand_forecast.evaluation.bakery_metrics import compute_metrics_payload
 from praedixa.demand_forecast.evaluation.bakery_metrics import (
@@ -60,7 +62,11 @@ class EvaluationRunArtifacts:
 
 
 def _context_model_family(context: EvaluationPreparedContext) -> str:
-    return "xgboost" if context.model_backend == "xgboost" else "foundation_tft"
+    if context.model_backend == "xgboost":
+        return "xgboost"
+    if context.model_backend == "chronos2":
+        return "chronos2"
+    return "foundation_tft"
 
 
 def evaluation_output_paths(
@@ -71,15 +77,18 @@ def evaluation_output_paths(
     prefix = model_family.lower()
     final_model_name = (
         f"{prefix}_final_model.json"
-        if prefix == "xgboost"
+        if prefix in {"xgboost", "chronos2"}
         else f"{prefix}_final_model.pt"
     )
     return {
         "metrics_json": target_dir / f"{prefix}_test_metrics.json",
-        "probabilistic_metrics_json": target_dir / f"{prefix}_probabilistic_metrics.json",
-        "statistical_baselines_json": target_dir / f"{prefix}_statistical_baselines.json",
+        "probabilistic_metrics_json": target_dir
+        / f"{prefix}_probabilistic_metrics.json",
+        "statistical_baselines_json": target_dir
+        / f"{prefix}_statistical_baselines.json",
         "predictions_csv": target_dir / f"{prefix}_test_predictions.csv",
-        "probabilistic_predictions_csv": target_dir / f"{prefix}_probabilistic_predictions.csv",
+        "probabilistic_predictions_csv": target_dir
+        / f"{prefix}_probabilistic_predictions.csv",
         "diagnostics_json": target_dir / f"{prefix}_test_diagnostics.json",
         "model_card_json": target_dir / f"{prefix}_model_card.json",
         "final_model": target_dir / final_model_name,
@@ -88,9 +97,11 @@ def evaluation_output_paths(
         "split_manifest_json": target_dir / f"{prefix}_split_manifest.json",
         "target_contract_json": target_dir / f"{prefix}_target_contract.json",
         "interpretability_json": target_dir / f"{prefix}_interpretability.json",
-        "promotable_bundle_manifest_json": target_dir / f"{prefix}_promotable_bundle_manifest.json",
+        "promotable_bundle_manifest_json": target_dir
+        / f"{prefix}_promotable_bundle_manifest.json",
         "evaluation_metadata": target_dir / f"{prefix}_evaluation_metadata.json",
-        "economic_gain_json": target_dir / f"{prefix}_economic_gain_vs_best_baseline.json",
+        "economic_gain_json": target_dir
+        / f"{prefix}_economic_gain_vs_best_baseline.json",
         "daily_refit_metrics_csv": target_dir / f"{prefix}_daily_refit_metrics.csv",
         "actual_vs_predicted_plot": target_dir / f"{prefix}_actual_vs_predicted.png",
         "residuals_plot": target_dir / f"{prefix}_residuals.png",
@@ -182,7 +193,9 @@ def _evaluation_diagnostics_payload(
         best_iteration=best_iteration,
         overlap_metadata=context.overlap_metadata,
         daily_refit=True,
-        overall_metrics=cast(dict[str, Any] | None, probabilistic_metrics_payload.get("overall_metrics")),
+        overall_metrics=cast(
+            dict[str, Any] | None, probabilistic_metrics_payload.get("overall_metrics")
+        ),
     )
 
 
@@ -196,12 +209,16 @@ def _baseline_prediction_payloads(
         context.scored_reference_test,
     )
     probabilistic_predictions_df = predictions_df.copy()
-    canonical_predictions_df = build_canonical_predictions_frame(probabilistic_predictions_df)
-    canonical_predictions_df, baseline_savings_payload = enrich_predictions_with_best_baseline(
-        canonical_predictions_df,
-        baselines_payload,
-        field_baseline_name=FIELD_BASELINE_NAME,
-        unit_cost_eur=DEFAULT_UNIT_COST_EUR,
+    canonical_predictions_df = build_canonical_predictions_frame(
+        probabilistic_predictions_df
+    )
+    canonical_predictions_df, baseline_savings_payload = (
+        enrich_predictions_with_best_baseline(
+            canonical_predictions_df,
+            baselines_payload,
+            field_baseline_name=FIELD_BASELINE_NAME,
+            unit_cost_eur=DEFAULT_UNIT_COST_EUR,
+        )
     )
     return (
         baselines_payload,
@@ -227,18 +244,23 @@ def build_evaluation_payloads(
     dict[str, Any],
     dict[str, Any],
 ]:
-    baselines_payload, canonical_predictions_df, probabilistic_predictions_df, baseline_savings_payload = (
-        _baseline_prediction_payloads(
-            context=context,
-            predictions_df=predictions_df,
-        )
+    (
+        baselines_payload,
+        canonical_predictions_df,
+        probabilistic_predictions_df,
+        baseline_savings_payload,
+    ) = _baseline_prediction_payloads(
+        context=context,
+        predictions_df=predictions_df,
     )
     metrics_payload = _evaluation_metrics_payload(
         context=context,
         canonical_predictions_df=canonical_predictions_df,
         baseline_savings_payload=baseline_savings_payload,
     )
-    probabilistic_metrics_payload = compute_probabilistic_metrics_payload(probabilistic_predictions_df)
+    probabilistic_metrics_payload = compute_probabilistic_metrics_payload(
+        probabilistic_predictions_df
+    )
     diagnostics_payload = _evaluation_diagnostics_payload(
         context=context,
         probabilistic_predictions_df=probabilistic_predictions_df,
@@ -293,8 +315,12 @@ def build_evaluation_metadata_payload(
         "final_model_runtime_profile": getattr(final_model, "runtime_profile", None),
         "final_model_system_info": getattr(final_model, "system_info", {}),
         "final_model_git_sha": getattr(final_model, "git_sha", None),
-        "final_model_normalization_strategy": getattr(final_model, "normalization_strategy", {}),
-        "final_model_artifact_bundle_version": getattr(final_model, "artifact_bundle_version", None),
+        "final_model_normalization_strategy": getattr(
+            final_model, "normalization_strategy", {}
+        ),
+        "final_model_artifact_bundle_version": getattr(
+            final_model, "artifact_bundle_version", None
+        ),
         "requested_decision_profile": str(
             context.best_params.get("decision_profile", "post_close_d_plus_1")
         ),
@@ -337,14 +363,22 @@ def build_evaluation_model_card_payload(
         "metrics": metrics_payload,
         "diagnostics": diagnostics_payload,
         "forecast_output_contract": {
-            "point_forecast_column": diagnostics_payload["probabilistic_summary"]["point_forecast_column"],
-            "median_forecast_column": diagnostics_payload["probabilistic_summary"]["median_forecast_column"],
-            "quantile_columns": diagnostics_payload["probabilistic_summary"]["quantile_columns"],
+            "point_forecast_column": diagnostics_payload["probabilistic_summary"][
+                "point_forecast_column"
+            ],
+            "median_forecast_column": diagnostics_payload["probabilistic_summary"][
+                "median_forecast_column"
+            ],
+            "quantile_columns": diagnostics_payload["probabilistic_summary"][
+                "quantile_columns"
+            ],
             "intervals": diagnostics_payload["probabilistic_summary"]["intervals"],
         },
         "probabilistic_forecast": diagnostics_payload["probabilistic_summary"],
         "probabilistic_metrics_path": str(output_paths["probabilistic_metrics_json"]),
-        "probabilistic_predictions_path": str(output_paths["probabilistic_predictions_csv"]),
+        "probabilistic_predictions_path": str(
+            output_paths["probabilistic_predictions_csv"]
+        ),
         "probabilistic_metrics": probabilistic_metrics_payload,
         "business_impact": baseline_savings_payload,
         "economic_gain": economic_gain_payload,
@@ -360,7 +394,9 @@ def build_evaluation_model_card_payload(
         "statistical_baselines_path": str(output_paths["statistical_baselines_json"]),
         "evaluation_metadata_path": str(output_paths["evaluation_metadata"]),
         "daily_refit_metrics_path": str(output_paths["daily_refit_metrics_csv"]),
-        "promotable_bundle_manifest_path": str(output_paths["promotable_bundle_manifest_json"]),
+        "promotable_bundle_manifest_path": str(
+            output_paths["promotable_bundle_manifest_json"]
+        ),
     }
 
 
@@ -385,7 +421,9 @@ def log_evaluation_completion(
         overall_metrics["smape"],
         overall_metrics.get("coverage_80"),
         overall_metrics.get("coverage_95"),
-        baseline_savings_payload["best_statistical_baseline_name"] if baseline_savings_payload is not None else None,
+        baseline_savings_payload["best_statistical_baseline_name"]
+        if baseline_savings_payload is not None
+        else None,
         economic_gain_payload["total_estimated_savings_eur_vs_best_baselines"],
     )
     for product_name, product_gain in economic_gain_payload["per_product_gain"].items():
@@ -455,19 +493,36 @@ def persist_evaluation_outputs(
     json_dump(output_paths["split_manifest_json"], artifacts.split_manifest_payload)
     json_dump(output_paths["target_contract_json"], artifacts.target_contract_payload)
     json_dump(output_paths["metrics_json"], artifacts.metrics_payload)
-    json_dump(output_paths["probabilistic_metrics_json"], artifacts.probabilistic_metrics_payload)
-    json_dump(output_paths["statistical_baselines_json"], artifacts.baselines_payload or {})
+    json_dump(
+        output_paths["probabilistic_metrics_json"],
+        artifacts.probabilistic_metrics_payload,
+    )
+    json_dump(
+        output_paths["statistical_baselines_json"], artifacts.baselines_payload or {}
+    )
     artifacts.predictions_df.to_csv(output_paths["predictions_csv"], index=False)
-    artifacts.probabilistic_predictions_df.to_csv(output_paths["probabilistic_predictions_csv"], index=False)
+    artifacts.probabilistic_predictions_df.to_csv(
+        output_paths["probabilistic_predictions_csv"], index=False
+    )
     json_dump(output_paths["diagnostics_json"], artifacts.diagnostics_payload)
     json_dump(output_paths["economic_gain_json"], artifacts.economic_gain_payload)
-    artifacts.daily_report_df.to_csv(output_paths["daily_refit_metrics_csv"], index=False)
-    json_dump(output_paths["evaluation_metadata"], artifacts.evaluation_metadata_payload)
-    plot_actual_vs_predicted_fn(artifacts.predictions_df, output_paths["actual_vs_predicted_plot"])
+    artifacts.daily_report_df.to_csv(
+        output_paths["daily_refit_metrics_csv"], index=False
+    )
+    json_dump(
+        output_paths["evaluation_metadata"], artifacts.evaluation_metadata_payload
+    )
+    plot_actual_vs_predicted_fn(
+        artifacts.predictions_df, output_paths["actual_vs_predicted_plot"]
+    )
     plot_residuals_fn(artifacts.predictions_df, output_paths["residuals_plot"])
     plot_residuals_qq_fn(artifacts.predictions_df, output_paths["residuals_qq_plot"])
-    plot_residuals_acf_pacf_fn(artifacts.predictions_df, output_paths["residuals_acf_pacf_plot"])
-    json_dump(output_paths["interpretability_json"], artifacts.interpretability_payload or {})
+    plot_residuals_acf_pacf_fn(
+        artifacts.predictions_df, output_paths["residuals_acf_pacf_plot"]
+    )
+    json_dump(
+        output_paths["interpretability_json"], artifacts.interpretability_payload or {}
+    )
     json_dump(output_paths["model_card_json"], artifacts.model_card_payload)
     promotable_manifest = {
         **artifacts.promotable_bundle_manifest_payload,

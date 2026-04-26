@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 from collections.abc import Mapping
 from pathlib import Path
 import sys
@@ -11,11 +13,17 @@ import pandas as pd
 import polars as pl
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from praedixa.platform.datasets.standardization.pipeline import build_global_daily_standardization  # noqa: E402
+from praedixa.platform.datasets.standardization.pipeline import (
+    build_global_daily_standardization,
+)  # noqa: E402
 
 
 def _mapping_value(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
@@ -90,26 +98,33 @@ def _canonical_fixture(dataset_source: str) -> pl.DataFrame:
 
 
 class GlobalDatasetPipelineTests(unittest.TestCase):
-    def test_build_global_daily_standardization_returns_in_memory_summary_only(self) -> None:
+    def test_build_global_daily_standardization_returns_in_memory_summary_only(
+        self,
+    ) -> None:
         with (
             mock.patch(
                 "praedixa.platform.datasets.standardization.pipeline.build_freshretail_standardized_frame",
-                return_value=_canonical_fixture("freshretail"),
-            ),
-            mock.patch(
-                "praedixa.platform.datasets.standardization.pipeline.build_supplemental_corpus_frame",
-                return_value=_canonical_fixture("first_party_daily"),
+                return_value=_canonical_fixture("freshretail_lt"),
             ),
         ):
-            artifacts = build_global_daily_standardization(bakery_input_path=None)
+            artifacts = build_global_daily_standardization()
 
-        self.assertEqual(_source_rows(artifacts.source_summaries, "freshretail"), 1)
-        self.assertEqual(_source_rows(artifacts.source_summaries, "supplemental_corpus"), 1)
-        self.assertEqual(_source_rows(artifacts.source_summaries, "combined"), 2)
-        self.assertEqual(_quality_error_count(artifacts.data_quality, "freshretail"), 0)
-        self.assertEqual(_int_value(_mapping_value(artifacts.data_quality, "combined"), "error_count"), 0)
+        self.assertEqual(_source_rows(artifacts.source_summaries, "freshretail_lt"), 1)
+        self.assertNotIn("supplemental_corpus", artifacts.source_summaries)
+        self.assertEqual(
+            _source_rows(artifacts.source_summaries, "combined"), 1
+        )
+        self.assertEqual(_quality_error_count(artifacts.data_quality, "freshretail_lt"), 0)
+        self.assertEqual(
+            _int_value(
+                _mapping_value(artifacts.data_quality, "combined"), "error_count"
+            ),
+            0,
+        )
 
-    def test_build_global_daily_standardization_fails_on_duplicate_canonical_grain(self) -> None:
+    def test_build_global_daily_standardization_fails_on_duplicate_canonical_grain(
+        self,
+    ) -> None:
         duplicated_fresh = pl.concat(
             [_canonical_fixture("freshretail"), _canonical_fixture("freshretail")],
             how="vertical_relaxed",
@@ -119,13 +134,9 @@ class GlobalDatasetPipelineTests(unittest.TestCase):
                 "praedixa.platform.datasets.standardization.pipeline.build_freshretail_standardized_frame",
                 return_value=duplicated_fresh,
             ),
-            mock.patch(
-                "praedixa.platform.datasets.standardization.pipeline.build_supplemental_corpus_frame",
-                return_value=_canonical_fixture("first_party_daily"),
-            ),
         ):
             with self.assertRaisesRegex(ValueError, "duplicate_grain"):
-                build_global_daily_standardization(bakery_input_path=None)
+                build_global_daily_standardization()
 
 
 if __name__ == "__main__":

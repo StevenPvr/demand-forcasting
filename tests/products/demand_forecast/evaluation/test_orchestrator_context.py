@@ -132,8 +132,8 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
     ) -> None:
         request = EvaluationBuildRequest()
 
-        self.assertEqual(request.train_sample_fraction, 0.10)
-        self.assertEqual(request.tuning_sample_fraction, 0.10)
+        self.assertEqual(request.train_sample_fraction, 1.0)
+        self.assertEqual(request.tuning_sample_fraction, 1.0)
 
     def test_load_evaluation_frames_routes_bakery_reference_mode_with_current_defaults(
         self,
@@ -162,8 +162,8 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
         mocked_load_gold.assert_called_once_with(
             duckdb_path=request.duckdb_path,
             gold_table=request.gold_table,
-            train_sample_fraction=0.10,
-            tuning_sample_fraction=0.10,
+            train_sample_fraction=1.0,
+            tuning_sample_fraction=1.0,
             model_backend="tft",
         )
 

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-import zipfile
 
 import pandas as pd
 import polars as pl
@@ -26,9 +24,6 @@ from praedixa.platform.datasets.standardization.supplemental_corpus import (  # 
 )
 from praedixa.platform.datasets.standardization.supplemental_corpus_standardizers import (  # noqa: E402
     standardize_m5_sales_lazy_frame,
-    standardize_perishable_goods_management_lazy_frame,
-    standardize_restaurant_sales_report_lazy_frame,
-    standardize_uci_online_retail_lazy_frame,
 )
 
 
@@ -74,40 +69,7 @@ class SupplementalCorpusTests(unittest.TestCase):
         )
         self.assertNotIn("location_open_flag", records.columns)
 
-    def test_build_supplemental_corpus_dataset_accepts_first_party_canonical_inputs(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir_name:
-            tmp_dir = Path(tmp_dir_name)
-            first_party = pl.DataFrame(
-                {
-                    "dt": [pd.Timestamp("2024-01-01").date()],
-                    "location_id": ["site_1"],
-                    "product_id": ["sku_1"],
-                    "observed_demand_qty": [12.0],
-                }
-            )
-            first_party.write_parquet(tmp_dir / "first_party_daily.parquet")
-
-            output_path = tmp_dir / "supplemental_corpus_daily.parquet"
-            result_path = build_supplemental_corpus_standardized_dataset(
-                output_path=output_path,
-                raw_dir=tmp_dir,
-                source_run_id="test_run",
-                silver_run_id="test_silver",
-            )
-
-            self.assertEqual(result_path, output_path)
-            records = (
-                pl.read_parquet(output_path).sort(["dataset_source", "dt"]).to_dicts()
-            )
-
-            self.assertEqual(
-                [record["dataset_source"] for record in records], ["first_party_daily"]
-            )
-            self.assertEqual(records[0]["series_id"], "site_1__sku_1")
-
-    def test_new_commercial_sources_map_to_canonical_daily_contract(self) -> None:
+    def test_m5_maps_to_canonical_daily_contract(self) -> None:
         m5_sales = pl.DataFrame(
             {
                 "id": ["FOODS_1_001_CA_1_evaluation"],
@@ -130,43 +92,6 @@ class SupplementalCorpusTests(unittest.TestCase):
                 "event_type_2": [None, None],
             }
         )
-        uci = pl.DataFrame(
-            {
-                "InvoiceNo": ["536365"],
-                "StockCode": ["85123A"],
-                "Description": ["WHITE HOLDER"],
-                "Quantity": [6],
-                "InvoiceDate": [pd.Timestamp("2010-12-01 08:26:00")],
-                "UnitPrice": [2.55],
-                "Country": ["United Kingdom"],
-            }
-        )
-        restaurant = pl.DataFrame(
-            {
-                "date": ["8/23/2022"],
-                "item_name": ["Vadapav"],
-                "item_type": ["Fastfood"],
-                "quantity": [15],
-                "transaction_amount": [300],
-            }
-        )
-        perishable = pl.DataFrame(
-            {
-                "transaction_date": ["2024-09-25"],
-                "store_id": ["STORE_046"],
-                "product_id": ["BAK_DON_743"],
-                "region": ["West"],
-                "category": ["Bakery"],
-                "product_name": ["Donuts"],
-                "daily_demand": [54],
-                "revenue": [358.8],
-                "base_price": [2.6],
-                "selling_price": [2.0],
-                "units_sold": [138],
-                "is_promoted": [0],
-                "markdown_applied": [1],
-            }
-        )
 
         frames = [
             standardize_m5_sales_lazy_frame(
@@ -174,83 +99,21 @@ class SupplementalCorpusTests(unittest.TestCase):
                 m5_calendar.lazy(),
                 source_partition="test",
             ),
-            standardize_uci_online_retail_lazy_frame(
-                uci.lazy(),
-                dataset_source="uci_online_retail",
-                source_partition="test",
-            ),
-            standardize_restaurant_sales_report_lazy_frame(
-                restaurant.lazy(),
-                source_partition="test",
-            ),
-            standardize_perishable_goods_management_lazy_frame(
-                perishable.lazy(),
-                source_partition="test",
-            ),
         ]
         records = pl.concat(frames, how="vertical_relaxed").collect()
 
         self.assertEqual(
             set(records["dataset_source"].to_list()),
-            {
-                "m5_forecasting_accuracy",
-                "uci_online_retail",
-                "restaurant_sales_report",
-                "perishable_goods_management",
-            },
+            {"m5_forecasting_accuracy"},
         )
         self.assertFalse(records["series_id"].is_null().any())
         self.assertFalse(records["observed_demand_qty"].is_null().any())
-        self.assertIn("latent_demand_estimated", records["target_semantics"].to_list())
+        self.assertEqual(set(records["target_semantics"].to_list()), {"observed_sales"})
 
-    def test_build_supplemental_corpus_dataset_loads_new_raw_artifacts(self) -> None:
+    def test_build_supplemental_corpus_dataset_loads_m5_raw_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir_name:
             tmp_dir = Path(tmp_dir_name)
             self._write_small_m5_fixture(tmp_dir / "m5_forecasting_accuracy_zenodo")
-            self._write_uci_zip(
-                tmp_dir / "uci_online_retail.zip",
-                "Online Retail.xlsx",
-                {"Online Retail": self._uci_fixture_frame()},
-            )
-            self._write_uci_zip(
-                tmp_dir / "uci_online_retail_ii.zip",
-                "online_retail_II.xlsx",
-                {"Year 2010-2011": self._uci_fixture_frame()},
-            )
-            self._write_csv_zip(
-                tmp_dir / "restaurant_sales_report_kaggle.zip",
-                "Balaji Fast Food Sales.csv",
-                pd.DataFrame(
-                    [
-                        {
-                            "date": "8/23/2022",
-                            "item_name": "Vadapav",
-                            "item_type": "Fastfood",
-                            "quantity": 2,
-                            "transaction_amount": 40,
-                        }
-                    ]
-                ),
-            )
-            pd.DataFrame(
-                [
-                    {
-                        "transaction_date": "2024-09-25",
-                        "store_id": "STORE_046",
-                        "product_id": "BAK_DON_743",
-                        "region": "West",
-                        "category": "Bakery",
-                        "product_name": "Donuts",
-                        "daily_demand": 54,
-                        "revenue": 358.8,
-                        "base_price": 2.6,
-                        "selling_price": 2.0,
-                        "units_sold": 138,
-                        "is_promoted": 0,
-                        "markdown_applied": 1,
-                    }
-                ]
-            ).to_csv(tmp_dir / "perishable_goods_management.csv", index=False)
 
             output_path = tmp_dir / "supplemental_corpus_daily.parquet"
             result_path = build_supplemental_corpus_standardized_dataset(
@@ -264,13 +127,7 @@ class SupplementalCorpusTests(unittest.TestCase):
         self.assertEqual(result_path, output_path)
         self.assertEqual(
             set(records["dataset_source"].to_list()),
-            {
-                "m5_forecasting_accuracy",
-                "uci_online_retail",
-                "uci_online_retail_ii",
-                "restaurant_sales_report",
-                "perishable_goods_management",
-            },
+            {"m5_forecasting_accuracy"},
         )
 
     def _write_small_m5_fixture(self, root: Path) -> None:
@@ -296,47 +153,6 @@ class SupplementalCorpusTests(unittest.TestCase):
             ]
         ).to_csv(root / "calendar.csv", index=False)
 
-    def _uci_fixture_frame(self) -> pd.DataFrame:
-        return pd.DataFrame(
-            [
-                {
-                    "InvoiceNo": "536365",
-                    "StockCode": "85123A",
-                    "Description": "WHITE HOLDER",
-                    "Quantity": 6,
-                    "InvoiceDate": pd.Timestamp("2010-12-01 08:26:00"),
-                    "UnitPrice": 2.55,
-                    "Country": "United Kingdom",
-                },
-                {
-                    "InvoiceNo": "C489449",
-                    "StockCode": 71053,
-                    "Description": "RETURN LINE",
-                    "Quantity": -1,
-                    "InvoiceDate": pd.Timestamp("2010-12-02 10:00:00"),
-                    "UnitPrice": 3.39,
-                    "Country": "United Kingdom",
-                },
-            ]
-        )
-
-    def _write_uci_zip(
-        self,
-        path: Path,
-        member_name: str,
-        sheets: dict[str, pd.DataFrame],
-    ) -> None:
-        workbook = BytesIO()
-        with pd.ExcelWriter(workbook) as writer:
-            for sheet_name, frame in sheets.items():
-                frame.to_excel(writer, sheet_name=sheet_name, index=False)
-        with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr(member_name, workbook.getvalue())
-
-    def _write_csv_zip(self, path: Path, member_name: str, frame: pd.DataFrame) -> None:
-        with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr(member_name, frame.to_csv(index=False))
-
 
 class SupplementalCorpusSmokeTests(unittest.TestCase):
     def test_compatibility_matrix_matches_the_curated_training_corpus(self) -> None:
@@ -349,33 +165,13 @@ class SupplementalCorpusSmokeTests(unittest.TestCase):
             compatibility_by_source["freshretail_lt"].compatible_with_pipeline
         )
         self.assertTrue(
-            compatibility_by_source["first_party_daily"].commercial_use_allowed
-        )
-        self.assertTrue(
             compatibility_by_source["m5_forecasting_accuracy"].compatible_with_pipeline
-        )
-        self.assertFalse(
-            compatibility_by_source[
-                "maven_cafe_rewards_offers"
-            ].compatible_with_pipeline
-        )
-        self.assertFalse(
-            compatibility_by_source[
-                "restaurant_sales_forecasting_zenodo"
-            ].compatible_with_pipeline
         )
         self.assertEqual(
             set(compatibility_by_source),
             {
-                "first_party_daily",
                 "freshretail_lt",
                 "m5_forecasting_accuracy",
-                "uci_online_retail_ii",
-                "uci_online_retail",
-                "restaurant_sales_report",
-                "perishable_goods_management",
-                "maven_cafe_rewards_offers",
-                "restaurant_sales_forecasting_zenodo",
             },
         )
 

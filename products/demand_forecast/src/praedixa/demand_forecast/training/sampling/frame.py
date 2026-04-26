@@ -3,7 +3,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from praedixa.demand_forecast.training.sampling.common import resolve_sampling_order_cols
+from praedixa.demand_forecast.training.sampling.common import (
+    resolve_sampling_order_cols,
+)
 from praedixa.demand_forecast.training.sampling.models import FrameSamplingSpec
 
 
@@ -73,8 +75,12 @@ def _sampled_datasets(
 ) -> tuple[list[pd.DataFrame], dict[str, dict[str, int | float]]]:
     sampled_parts: list[pd.DataFrame] = []
     dataset_metadata: dict[str, dict[str, int | float]] = {}
-    for dataset_source, dataset_frame in ordered.groupby(spec.dataset_source_col, sort=False):
-        sampled_dataset_frame = _sampled_dataset_frame(dataset_frame=dataset_frame, spec=spec)
+    for dataset_source, dataset_frame in ordered.groupby(
+        spec.dataset_source_col, sort=False
+    ):
+        sampled_dataset_frame = _sampled_dataset_frame(
+            dataset_frame=dataset_frame, spec=spec
+        )
         sampled_parts.append(sampled_dataset_frame)
         dataset_metadata[str(dataset_source)] = _sampled_dataset_metadata(
             dataset_frame=dataset_frame,
@@ -98,7 +104,9 @@ def _sampled_dataset_frame(
     return _top_up_sampled_dataset_frame(
         dataset_frame=dataset_frame,
         sampled_dataset_frame=sampled_dataset_frame,
-        target_sample_size=_target_dataset_sample_size(dataset_frame=dataset_frame, spec=spec),
+        target_sample_size=_target_dataset_sample_size(
+            dataset_frame=dataset_frame, spec=spec
+        ),
     )
 
 
@@ -108,7 +116,9 @@ def _sampled_strata_parts(
     spec: FrameSamplingSpec,
 ) -> list[pd.DataFrame]:
     per_dataset_parts: list[pd.DataFrame] = []
-    for _, stratum_frame in dataset_frame.groupby([spec.date_col, spec.sample_store_col], sort=False):
+    for _, stratum_frame in dataset_frame.groupby(
+        [spec.date_col, spec.sample_store_col], sort=False
+    ):
         sample_size = int(np.floor(stratum_frame.shape[0] * spec.sample_fraction))
         if sample_size <= 0:
             continue
@@ -140,7 +150,9 @@ def _top_up_sampled_dataset_frame(
 ) -> pd.DataFrame:
     if sampled_dataset_frame.shape[0] >= target_sample_size:
         return sampled_dataset_frame
-    remaining_dataset_frame = dataset_frame.loc[~dataset_frame.index.isin(sampled_dataset_frame.index)]
+    remaining_dataset_frame = dataset_frame.loc[
+        ~dataset_frame.index.isin(sampled_dataset_frame.index)
+    ]
     top_up_count = target_sample_size - sampled_dataset_frame.shape[0]
     if top_up_count <= 0 or remaining_dataset_frame.empty:
         return sampled_dataset_frame
@@ -164,7 +176,11 @@ def _sampled_dataset_metadata(
         "min_samples_per_dataset": int(spec.min_samples_per_dataset),
         "store_count": int(dataset_frame[spec.sample_store_col].nunique()),
         "unique_dates": int(dataset_frame[spec.date_col].nunique()),
-        "strata_count": int(dataset_frame.groupby([spec.date_col, spec.sample_store_col], sort=False).ngroups),
+        "strata_count": int(
+            dataset_frame.groupby(
+                [spec.date_col, spec.sample_store_col], sort=False
+            ).ngroups
+        ),
     }
 
 

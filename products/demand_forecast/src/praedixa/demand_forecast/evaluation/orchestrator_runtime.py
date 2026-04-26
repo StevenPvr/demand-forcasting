@@ -23,7 +23,9 @@ from praedixa.demand_forecast.evaluation.orchestrator_context import (
     load_evaluation_frames,
     prepare_evaluation_context,
 )
-from praedixa.demand_forecast.training.validation.eligibility import filter_training_eligible_rows
+from praedixa.demand_forecast.training.validation.eligibility import (
+    filter_training_eligible_rows,
+)
 
 
 EvaluationPayloads = tuple[
@@ -147,12 +149,23 @@ def _evaluation_run_artifacts(
     best_iteration: int,
     final_model: Any,
 ) -> EvaluationRunArtifacts:
-    baselines_payload, predictions_df, probabilistic_predictions_df, baseline_savings_payload, metrics_payload, probabilistic_metrics_payload, diagnostics_payload, economic_gain_payload = payloads
+    (
+        baselines_payload,
+        predictions_df,
+        probabilistic_predictions_df,
+        baseline_savings_payload,
+        metrics_payload,
+        probabilistic_metrics_payload,
+        diagnostics_payload,
+        economic_gain_payload,
+    ) = payloads
     output_paths = evaluation_output_paths(
         target_dir,
-        model_family="xgboost" if context.model_backend == "xgboost" else "foundation_tft",
+        model_family=_model_family_for_paths(str(context.model_backend)),
     )
-    feature_manifest_payload, feature_roles_payload = build_evaluation_feature_manifest_payload(context=context)
+    feature_manifest_payload, feature_roles_payload = (
+        build_evaluation_feature_manifest_payload(context=context)
+    )
     split_manifest_payload = build_evaluation_split_manifest_payload(context=context)
     target_contract_payload = build_target_contract_metadata(context.target_contract)
     model_card_payload, evaluation_metadata_payload = _artifact_side_payloads(
@@ -193,6 +206,12 @@ def _evaluation_run_artifacts(
     )
 
 
+def _model_family_for_paths(model_backend: str) -> str:
+    if model_backend in {"xgboost", "chronos2"}:
+        return model_backend
+    return "foundation_tft"
+
+
 def _artifact_side_payloads(
     *,
     request: Any,
@@ -215,7 +234,9 @@ def _artifact_side_payloads(
             baseline_savings_payload=baseline_savings_payload,
             economic_gain_payload=economic_gain_payload,
             output_paths=output_paths,
-            interpretability_payload=getattr(final_model, "interpretability_payload", None),
+            interpretability_payload=getattr(
+                final_model, "interpretability_payload", None
+            ),
         ),
         build_evaluation_metadata_payload(
             context=context,

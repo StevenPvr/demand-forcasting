@@ -50,13 +50,23 @@ Food-service waste reduction evidence supports the commercial wedge. Rodrigues e
 
 FAO notes that better data availability on where food loss/waste occurs and its causes supports targeted interventions: https://www.fao.org/policy-support/policy-themes/food-loss-and-food-waste/fao-policy-series--food-loss---food-waste
 
-### Censored demand is central for perishables
+### Stockout metadata is useful but not the current target
 
-FreshRetailNet-50K is the closest methodological benchmark for Praedixa's censure problem. The paper introduces a stockout-annotated fresh-retail dataset and explicitly frames stockouts as censored sales that bias demand estimation. It uses a two-stage approach: recover latent demand during stockouts, then train forecasting models on recovered demand. The dataset contains 50,000 store-product time series, 898 stores, 18 cities, perishable SKUs, hourly stock status, promo discounts, precipitation, and temporal features: https://arxiv.org/abs/2505.16319
+FreshRetailNet-50K is the closest methodological benchmark for stockout-aware
+fresh retail data. The paper introduces a stockout-annotated fresh-retail dataset
+and uses a two-stage approach for latent-demand recovery. That is useful
+literature for a later experiment, but the current Praedixa pretraining contract
+keeps the target as observed sales. The dataset contains 50,000 store-product
+time series, 898 stores, 18 cities, perishable SKUs, hourly stock status, promo
+discounts, precipitation, and temporal features: https://arxiv.org/abs/2505.16319
 
 The Hugging Face dataset card states that FreshRetailNet-50K contains about 20% organically occurring stockout data and lists fields including `sale_amount`, hourly sales, stock status, discount, holiday/activity flags, precipitation, temperature, humidity and wind: https://huggingface.co/datasets/Dingdong-Inc/FreshRetailNet-50K
 
-Implication for Praedixa: the simulated CSV must include stockout/censure flags and, ideally, retain the hidden true latent demand in a restricted debug column or manifest for simulator validation. The model-facing dataset should not learn from this hidden ground truth unless explicitly running a controlled experiment.
+Implication for Praedixa: the simulated CSV must include stockout/constraint
+flags and, ideally, retain the hidden true latent demand in a restricted debug
+column or manifest for simulator validation. The model-facing dataset should not
+learn from this hidden ground truth unless explicitly running a controlled
+experiment.
 
 ### Retail benchmarks support hierarchy, covariates, intermittency, and uncertainty
 
@@ -194,8 +204,8 @@ Training semantics:
 ```text
 target_semantics = "observed_sales" by default
 target_source = "observed_sales"
-label_quality_score = 1.0 clean, 0.75 uncertain, 0.5 censored, 0.0 missing/closed
-usable_for_training_flag = not censor_flag and label_quality_score >= 0.75
+label_quality_score = 1.0 complete POS observation, 0.0 missing/closed/incomplete
+usable_for_training_flag = label_quality_score >= 0.75 and target_source not missing/closed
 ```
 
 For internal simulator diagnostics only, keep hidden columns in a debug output:
@@ -378,7 +388,7 @@ Must include:
 - vertical mix
 - generator version
 - parameter file hash
-- censure rate by vertical
+- stockout/constraint rate by vertical
 - missingness rate
 - stockout rate
 - mean/median demand by vertical/product family
@@ -460,7 +470,8 @@ Required invariants:
 - `series_id = location_id__product_id`
 - `censor_flag` not null
 - `target_semantics in {"observed_sales", "latent_demand_estimated"}`
-- `usable_for_training_flag=false` for censored rows
+- stockout/constraint flags are descriptive for the observed-sales contract, not a
+  default training exclusion
 - no future target columns in model-facing export
 
 ### Gate 2: Time-series realism
@@ -476,13 +487,13 @@ Compute by vertical and product family:
 - promo uplift
 - weather elasticity by family
 - cross-product correlation inside substitution groups
-- censure / stockout rate
+- stockout/constraint rate
 - missingness / anomaly rate
 
 Compare against:
 
 - local `bakery_sales` aggregate behavior
-- FreshRetailNet-inspired censure and covariate structure
+- FreshRetailNet-inspired stockout and covariate structure
 - M5-inspired hierarchy/intermittency logic
 - manually defined business plausibility ranges
 
@@ -635,7 +646,7 @@ Each preset should define:
 - product count
 - date range
 - vertical mix
-- censure target rate
+- stockout/constraint target rate
 - missingness target rate
 - event intensity
 - promo frequency
@@ -671,7 +682,7 @@ For the first version, target:
 - hundreds of cities
 - compact vertical-specific product assortments
 - 3 vertical archetypes: bakery, QSR/fast-food, traditional restaurant
-- 5% to 20% censored rows depending scenario
+- 5% to 20% stockout/constraint-flagged rows depending scenario
 - 5% to 15% promo days
 - realistic holidays, bridge days, weather and events
 - at least 10% cold-start or low-history series

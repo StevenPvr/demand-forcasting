@@ -76,7 +76,9 @@ def resolve_sampling_order_columns(
     date_col: str,
     sample_store_col: str,
 ) -> list[str]:
-    ordering_columns = [column for column in (date_col, sample_store_col) if column in selected_columns]
+    ordering_columns = [
+        column for column in (date_col, sample_store_col) if column in selected_columns
+    ]
     return _append_sampling_order_candidates(ordering_columns, selected_columns)
 
 

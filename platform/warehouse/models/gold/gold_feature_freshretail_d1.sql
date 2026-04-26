@@ -2,7 +2,7 @@
 
 {{ praedixa_gold_feature_slice(
     ref("gold_base_panel_d1"),
-    "dataset_source in ('freshretail', 'freshretail_lt')",
-    "dataset_source in ('freshretail', 'freshretail_lt')",
+    "dataset_source = 'freshretail_lt'",
+    "dataset_source = 'freshretail_lt'",
     "chrono_60_40"
 ) }}

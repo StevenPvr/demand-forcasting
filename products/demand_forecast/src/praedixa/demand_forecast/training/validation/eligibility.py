@@ -32,8 +32,6 @@ def training_eligibility_mask(
     mask = pd.Series(True, index=frame.index, dtype=bool)
     if "usable_for_training_flag" in frame.columns:
         mask &= frame["usable_for_training_flag"].fillna(False).astype(bool)
-    if "censor_flag" in frame.columns:
-        mask &= ~frame["censor_flag"].fillna(False).astype(bool)
     if "label_quality_score" in frame.columns:
         label_quality = pd.to_numeric(frame["label_quality_score"], errors="coerce")
         mask &= label_quality.ge(float(min_label_quality_score)).fillna(False)

@@ -7,7 +7,9 @@ import pandas as pd
 FLOAT_COMPARISON_EPSILON = 1e-8
 
 
-def compute_wape(y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray) -> float:
+def compute_wape(
+    y_true: pd.Series | np.ndarray, y_pred: pd.Series | np.ndarray
+) -> float:
     y_true_arr = np.asarray(y_true, dtype=float)
     y_pred_arr = np.asarray(y_pred, dtype=float)
     denominator = float(np.abs(y_true_arr).sum())

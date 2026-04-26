@@ -7,21 +7,7 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values:
-                  [
-                    "freshretail",
-                    "freshretail_lt",
-                    "bakery",
-                    "first_party_daily",
-                    "m5_forecasting_accuracy",
-                    "uci_online_retail_ii",
-                    "uci_online_retail",
-                    "restaurant_sales_report",
-                    "perishable_goods_management",
-                    "synthetic_foodservice_qsr",
-                    "synthetic_foodservice_bakery",
-                    "synthetic_foodservice_restaurant",
-                  ]
+                values: ["freshretail_lt", "bakery"]
       - name: dt
       - name: split_bucket
         tests:
@@ -77,21 +63,7 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values:
-                  [
-                    "freshretail",
-                    "freshretail_lt",
-                    "bakery",
-                    "first_party_daily",
-                    "m5_forecasting_accuracy",
-                    "uci_online_retail_ii",
-                    "uci_online_retail",
-                    "restaurant_sales_report",
-                    "perishable_goods_management",
-                    "synthetic_foodservice_qsr",
-                    "synthetic_foodservice_bakery",
-                    "synthetic_foodservice_restaurant",
-                  ]
+                values: ["freshretail_lt", "bakery"]
       - name: dt
       - name: target_dt
       - name: split_bucket
@@ -130,21 +102,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values:
-                  [
-                    "freshretail",
-                    "freshretail_lt",
-                    "bakery",
-                    "first_party_daily",
-                    "m5_forecasting_accuracy",
-                    "uci_online_retail_ii",
-                    "uci_online_retail",
-                    "restaurant_sales_report",
-                    "perishable_goods_management",
-                    "synthetic_foodservice_qsr",
-                    "synthetic_foodservice_bakery",
-                    "synthetic_foodservice_restaurant",
-                  ]
+                values: ["freshretail_lt", "bakery"]
       - name: dt
         tests:
           - not_null
@@ -193,6 +151,16 @@ models:
       - name: feature_availability_profile
         tests:
           - not_null
+      - name: source_role
+      - name: commerce_modality
+      - name: operation_type
+      - name: service_pattern
+      - name: region_known_flag
+      - name: product_subfamily_known_flag
+      - name: category_level_1_known_flag
+      - name: category_level_2_known_flag
+      - name: category_level_3_known_flag
+      - name: product_taxonomy_depth
       - name: target_delta_log_wow_d_plus_1
 
     tests:
@@ -212,6 +180,16 @@ models:
               - target_true_zero_demand_flag
               - decision_timestamp
               - feature_availability_profile
+              - source_role
+              - commerce_modality
+              - operation_type
+              - service_pattern
+              - region_known_flag
+              - product_subfamily_known_flag
+              - category_level_1_known_flag
+              - category_level_2_known_flag
+              - category_level_3_known_flag
+              - product_taxonomy_depth
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:

@@ -34,7 +34,10 @@ class GoldSplitSamplingSpec:
     dataset_source_col: str
     sample_store_col: str
     sample_fraction: float
-    excluded_dataset_sources: tuple[str, ...] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES
+    excluded_dataset_sources: tuple[str, ...] = (
+        DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES
+    )
+    included_dataset_sources: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

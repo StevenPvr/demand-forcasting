@@ -8,21 +8,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values:
-                  [
-                    "freshretail",
-                    "freshretail_lt",
-                    "bakery",
-                    "first_party_daily",
-                    "m5_forecasting_accuracy",
-                    "uci_online_retail_ii",
-                    "uci_online_retail",
-                    "restaurant_sales_report",
-                    "perishable_goods_management",
-                    "synthetic_foodservice_qsr",
-                    "synthetic_foodservice_bakery",
-                    "synthetic_foodservice_restaurant",
-                  ]
+                values: ["freshretail_lt", "bakery"]
       - name: dt
         tests:
           - not_null

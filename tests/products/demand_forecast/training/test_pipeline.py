@@ -33,6 +33,13 @@ from praedixa.demand_forecast.training.orchestration.steps import (  # noqa: E40
     prepare_optimisation_context,
 )
 from praedixa.demand_forecast.training.config.constants import DEFAULT_GOLD_TABLE  # noqa: E402
+from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
+    build_chronos2_finetune_optimisation_main_config,
+)
+from praedixa.demand_forecast.training.chronos2.tuning import (  # noqa: E402
+    build_chronos2_scoring_context,
+    build_padded_future_chronos_df,
+)
 from praedixa.demand_forecast.training.validation.feature_audit import (  # noqa: E402
     drop_constant_feature_columns,
 )
@@ -150,9 +157,7 @@ def _gold_frame() -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     dataset_specs = (
         ("freshretail_lt", "store_1", "sku_1"),
-        ("first_party_daily", "store_2", "sku_2"),
-        ("freshretail", "store_3", "sku_3"),
-        ("bakery", "store_4", "sku_4"),
+        ("bakery", "store_2", "sku_2"),
     )
     for dataset_offset, (dataset_source, location_id, product_id) in enumerate(
         dataset_specs
@@ -198,12 +203,72 @@ class OptimisationPipelineTests(unittest.TestCase):
     def test_training_defaults_to_model_facing_gold_panel(self) -> None:
         self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_model_training_panel_d1")
 
-    def test_optimisation_request_defaults_to_ten_percent_sampling(self) -> None:
+    def test_optimisation_request_defaults_to_full_sampling(self) -> None:
         request = OptimisationBuildRequest()
 
-        self.assertEqual(request.train_sample_fraction, 0.10)
-        self.assertEqual(request.tuning_sample_fraction, 0.10)
+        self.assertEqual(request.train_sample_fraction, 1.0)
+        self.assertEqual(request.tuning_sample_fraction, 1.0)
         self.assertEqual(request.model_backend, "xgboost")
+
+    def test_chronos2_finetune_config_scopes_to_full_freshretail(
+        self,
+    ) -> None:
+        config = build_chronos2_finetune_optimisation_main_config()
+
+        self.assertEqual(config.model_backend, "chronos2_finetune")
+        self.assertEqual(config.train_sample_fraction, 1.0)
+        self.assertEqual(config.tuning_sample_fraction, 1.0)
+        self.assertEqual(config.included_dataset_sources, ("freshretail_lt",))
+
+    def test_chronos2_future_frame_pads_short_series_to_prediction_length(
+        self,
+    ) -> None:
+        frame = pd.DataFrame(
+            {
+                "dt": pd.to_datetime(
+                    [
+                        "2024-01-01",
+                        "2024-01-02",
+                        "2024-01-01",
+                        "2024-01-02",
+                        "2024-01-03",
+                    ]
+                ),
+                "client_id": ["a", "a", "b", "b", "b"],
+                "activity_flag": [1, 1, 0, 1, 0],
+            }
+        )
+
+        padded = build_padded_future_chronos_df(
+            frame,
+            ["activity_flag"],
+            prediction_length=3,
+        )
+
+        self.assertEqual(padded.groupby("series_id").size().to_dict(), {"a": 3, "b": 3})
+        self.assertEqual(
+            padded.loc[padded["series_id"] == "a", "timestamp"].max(),
+            pd.Timestamp("2024-01-03"),
+        )
+
+    def test_chronos2_scoring_context_keeps_only_future_series(self) -> None:
+        context = pd.DataFrame(
+            {
+                "dt": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+                "client_id": ["scored", "history_only"],
+                "target_demand_qty_d_plus_1": [1.0, 2.0],
+            }
+        )
+        future = pd.DataFrame(
+            {
+                "dt": pd.to_datetime(["2024-01-02"]),
+                "client_id": ["scored"],
+            }
+        )
+
+        scoped = build_chronos2_scoring_context(context, future)
+
+        self.assertEqual(scoped["client_id"].tolist(), ["scored"])
 
     def test_xgboost_context_keeps_store_product_and_client_identifiers_as_features(
         self,

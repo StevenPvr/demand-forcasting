@@ -11,16 +11,6 @@ unioned as (
     from {{ ref("silver_freshretail_daily_product_demand") }}
     union all by name
     select
-        20 as source_priority,
-        *
-    from {{ ref("silver_supplemental_corpus_daily_product_demand") }}
-    union all by name
-    select
-        30 as source_priority,
-        *
-    from {{ ref("silver_synthetic_foodservice_daily_product_demand") }}
-    union all by name
-    select
         10 as source_priority,
         *
     from {{ ref("silver_bakery_daily_product_demand") }}
@@ -47,13 +37,10 @@ select
     end as target_semantics,
     coalesce(try_cast(unioned.censor_flag as boolean), false) as censor_flag,
     coalesce(cast(unioned.target_source as varchar), 'observed_sales') as target_source,
-    coalesce(
-        try_cast(unioned.label_quality_score as double),
-        case when coalesce(try_cast(unioned.censor_flag as boolean), false) then 0.5 else 1.0 end
-    ) as label_quality_score,
+    coalesce(try_cast(unioned.label_quality_score as double), 1.0) as label_quality_score,
     coalesce(
         try_cast(unioned.usable_for_training_flag as boolean),
-        not coalesce(try_cast(unioned.censor_flag as boolean), false)
+        true
     ) as usable_for_training_flag,
     try_cast(unioned.observed_revenue_net as double) as observed_revenue_net,
     try_cast(unioned.observed_discount_amount as double) as observed_discount_amount,
@@ -82,6 +69,7 @@ select
 from unioned
 inner join allowed_training_sources
   on unioned.dataset_source = allowed_training_sources.dataset_source
+where unioned.dataset_source in ('freshretail_lt', 'bakery')
 ),
 ranked as (
     select

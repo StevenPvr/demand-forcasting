@@ -21,9 +21,18 @@ LOGGER = logging.getLogger(__name__)
 
 BASELINE_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
     "naive_lag_1": ("sale_amount_lag_1", "lag_1"),
-    "seasonal_naive_lag_7": ("target_lag_7", "sale_amount_lag_7", "lag_7", "seasonal_naive_d7"),
+    "seasonal_naive_lag_7": (
+        "target_lag_7",
+        "sale_amount_lag_7",
+        "lag_7",
+        "seasonal_naive_d7",
+    ),
     "trailing_mean_7": ("sale_amount_rolling_mean_7", "rolling_mean_7"),
-    "trailing_mean_28": ("sale_amount_rolling_mean_28", "rolling_mean_28", "moving_average_28"),
+    "trailing_mean_28": (
+        "sale_amount_rolling_mean_28",
+        "rolling_mean_28",
+        "moving_average_28",
+    ),
     "same_weekday_mean_4": ("target_same_dow_mean_4w", "same_dow_mean_4w"),
 }
 
@@ -46,7 +55,9 @@ def _append_observed_history_row(
     return pd.concat(
         [
             observed_history,
-            pd.DataFrame([{date_col: forecast_date, absolute_target_col: observed_value}]),
+            pd.DataFrame(
+                [{date_col: forecast_date, absolute_target_col: observed_value}]
+            ),
         ],
         ignore_index=True,
     )
@@ -60,10 +71,14 @@ def _same_weekday_mean_prediction(
     date_col: str,
     fallback_value: float,
 ) -> float:
-    weekday_history = observed_history.loc[
-        observed_history[date_col].dt.dayofweek == forecast_date.dayofweek,
-        absolute_target_col,
-    ].astype(float).tolist()
+    weekday_history = (
+        observed_history.loc[
+            observed_history[date_col].dt.dayofweek == forecast_date.dayofweek,
+            absolute_target_col,
+        ]
+        .astype(float)
+        .tolist()
+    )
     if not weekday_history:
         return fallback_value
     return float(np.mean(weekday_history[-min(4, len(weekday_history)) :]))
@@ -117,7 +132,9 @@ def _history_based_baseline_predictions(
     for row in future_rows.itertuples(index=False):
         history_values = observed_history[absolute_target_col].astype(float).tolist()
         if not history_values:
-            raise ValueError("Cannot score a statistical baseline without any training history.")
+            raise ValueError(
+                "Cannot score a statistical baseline without any training history."
+            )
         forecast_date = pd.Timestamp(getattr(row, date_col))
         predicted_value = _history_based_prediction_value(
             baseline_name=baseline_name,
@@ -135,7 +152,9 @@ def _history_based_baseline_predictions(
             date_col=date_col,
             absolute_target_col=absolute_target_col,
         )
-    return pd.Series(predictions, index=future_frame.sort_values(date_col).index, dtype=float)
+    return pd.Series(
+        predictions, index=future_frame.sort_values(date_col).index, dtype=float
+    )
 
 
 def compute_equal_dataset_row_weights(
@@ -146,13 +165,18 @@ def compute_equal_dataset_row_weights(
     return compute_equal_dataset_row_weights_from_values(frame[dataset_source_col])
 
 
-def compute_equal_dataset_row_weights_from_values(dataset_sources: pd.Series | np.ndarray) -> np.ndarray:
+def compute_equal_dataset_row_weights_from_values(
+    dataset_sources: pd.Series | np.ndarray,
+) -> np.ndarray:
     source_series = pd.Series(dataset_sources, copy=False)
     source_keys = source_series.astype("string").fillna("<NA>").astype(str)
     dataset_counts = source_keys.value_counts(dropna=False)
     dataset_count = max(1, len(dataset_counts))
     relative_weights = np.asarray(
-        [1.0 / (dataset_count * float(dataset_counts.loc[dataset])) for dataset in source_keys.tolist()],
+        [
+            1.0 / (dataset_count * float(dataset_counts.loc[dataset]))
+            for dataset in source_keys.tolist()
+        ],
         dtype=float,
     )
     return relative_weights * float(len(source_keys))
@@ -198,7 +222,9 @@ def compute_dataset_macro_wape(
             )
         )
     if not dataset_wapes:
-        raise ValueError("Unable to compute dataset-macro WAPE with an empty validation frame.")
+        raise ValueError(
+            "Unable to compute dataset-macro WAPE with an empty validation frame."
+        )
     return float(np.mean(dataset_wapes))
 
 
@@ -210,7 +236,10 @@ def _baseline_column_candidates(
     if baseline_name != "seasonal_naive_lag_7":
         return BASELINE_COLUMN_CANDIDATES[baseline_name]
     anchor_candidates: list[str] = []
-    if target_contract is not None and target_contract.reconstruction_anchor_col is not None:
+    if (
+        target_contract is not None
+        and target_contract.reconstruction_anchor_col is not None
+    ):
         anchor_candidates.append(target_contract.reconstruction_anchor_col)
     return (*anchor_candidates, *BASELINE_COLUMN_CANDIDATES[baseline_name])
 
@@ -265,7 +294,7 @@ def resolve_baseline_prediction(
                 baseline_name,
                 target_contract=target_contract,
             ),
-    )
+        )
     raise ValueError(f"Unsupported baseline `{baseline_name}`.")
 
 
@@ -312,7 +341,9 @@ def _score_baseline_fold(
 ) -> dict[str, object] | None:
     valid_frame = _fold_frame(frame=frame, fold=fold, index_key="valid_idx")
     if baseline_column_name is not None:
-        target_values = pd.to_numeric(valid_frame[absolute_target_col], errors="coerce").to_numpy(
+        target_values = pd.to_numeric(
+            valid_frame[absolute_target_col], errors="coerce"
+        ).to_numpy(
             dtype=float,
             copy=False,
         )
@@ -326,14 +357,18 @@ def _score_baseline_fold(
         return {
             "dataset_source": str(fold["dataset_source"]),
             "fold": int(cast(Any, fold["fold"])),
-            "wape": float(compute_wape(target_values[valid_mask], prediction_values[valid_mask])),
+            "wape": float(
+                compute_wape(target_values[valid_mask], prediction_values[valid_mask])
+            ),
             "rows_scored": int(np.count_nonzero(valid_mask)),
         }
-    predictions = resolve_baseline_prediction(valid_frame, baseline_name, target_contract=target_contract)
+    predictions = resolve_baseline_prediction(
+        valid_frame, baseline_name, target_contract=target_contract
+    )
     if predictions is None or pd.isna(predictions).all():
-        train_frame = _fold_frame(frame=frame, fold=fold, index_key="train_idx").sort_values(
-            _DEFAULT_BASELINE_DATE_COL
-        )
+        train_frame = _fold_frame(
+            frame=frame, fold=fold, index_key="train_idx"
+        ).sort_values(_DEFAULT_BASELINE_DATE_COL)
         valid_frame = valid_frame.sort_values(_DEFAULT_BASELINE_DATE_COL)
         predictions = _history_based_baseline_predictions(
             train_frame,
@@ -345,7 +380,9 @@ def _score_baseline_fold(
     scored_frame["prediction"] = pd.to_numeric(predictions, errors="coerce")
     target_values = scored_frame[absolute_target_col]
     prediction_values = scored_frame["prediction"]
-    scored_frame = scored_frame[target_values.notna() & prediction_values.notna()].copy()
+    scored_frame = scored_frame[
+        target_values.notna() & prediction_values.notna()
+    ].copy()
     if scored_frame.empty:
         return None
     return {
@@ -363,7 +400,9 @@ def _score_baseline_fold(
 
 def _dataset_macro_scores(fold_results: list[dict[str, object]]) -> dict[str, float]:
     dataset_mean_wape: dict[str, float] = {}
-    for dataset_source in sorted({str(result["dataset_source"]) for result in fold_results}):
+    for dataset_source in sorted(
+        {str(result["dataset_source"]) for result in fold_results}
+    ):
         dataset_scores = [
             float(cast(Any, result["wape"]))
             for result in fold_results
@@ -396,14 +435,16 @@ def evaluate_statistical_baselines_macro(
         )
         for baseline_name in baseline_names
     }
-    max_workers = min(max(1, os.cpu_count() or 1), max(1, len(baseline_names) * len(folds)))
+    max_workers = _baseline_worker_count(len(baseline_names) * len(folds))
     logger.info(
         "Executing statistical baselines in parallel: baselines=%s fold_evaluations=%s workers=%s",
         len(baseline_names),
         len(baseline_names) * len(folds),
         max_workers,
     )
-    baseline_started_at = {baseline_name: time.perf_counter() for baseline_name in baseline_names}
+    baseline_started_at = {
+        baseline_name: time.perf_counter() for baseline_name in baseline_names
+    }
     report_rows: list[dict[str, object]] = []
     threaded_baselines: list[str] = []
     for baseline_name in baseline_names:
@@ -441,7 +482,9 @@ def evaluate_statistical_baselines_macro(
         threaded_baselines.append(baseline_name)
     if not threaded_baselines:
         return _finalize_baseline_rows(report_rows, logger=logger)
-    baseline_results: dict[str, list[dict[str, object]]] = {baseline_name: [] for baseline_name in baseline_names}
+    baseline_results: dict[str, list[dict[str, object]]] = {
+        baseline_name: [] for baseline_name in baseline_names
+    }
     failed_baselines: set[str] = set()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_baseline = {
@@ -485,13 +528,25 @@ def evaluate_statistical_baselines_macro(
     return _finalize_baseline_rows(report_rows, logger=logger)
 
 
+def _baseline_worker_count(fold_evaluations: int) -> int:
+    raw_workers = os.getenv("PRAEDIXA_STATISTICAL_BASELINE_WORKERS")
+    if raw_workers is not None:
+        try:
+            return max(1, int(raw_workers.strip()))
+        except ValueError:
+            return 1
+    return min(max(1, os.cpu_count() or 1), max(1, fold_evaluations))
+
+
 def _finalize_baseline_rows(
     report_rows: list[dict[str, object]],
     *,
     logger: logging.Logger,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     if not report_rows:
-        raise ValueError("No statistical baseline could be evaluated with the available columns.")
+        raise ValueError(
+            "No statistical baseline could be evaluated with the available columns."
+        )
     best_row = min(report_rows, key=lambda row: float(cast(Any, row["mean_wape"])))
     logger.info(
         "Best statistical baseline under macro-dataset WAPE: name=%s mean_wape=%.6f",

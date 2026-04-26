@@ -501,7 +501,7 @@ def default_core_bronze_specs(
     data_dir: str | Path,
     schema_name: str,
 ) -> list[BronzeTableSpec]:
-    """Return the local core bronze replacement sources used by the V1 silver pipeline."""
+    """Return active FreshRetail-LT train sources and bakery evaluation source."""
 
     root = Path(data_dir)
     return [
@@ -528,19 +528,6 @@ def default_core_bronze_specs(
             source_name="bakery",
             expected_columns=_bakery_expected_columns(),
             source_policy_id="bakery",
-        ),
-        BronzeTableSpec(
-            table_name="bronze_synthetic_foodservice_daily",
-            source_path=root
-            / "commercial_datasets"
-            / "raw"
-            / "synthetic_foodservice_daily.csv",
-            ddl=synthetic_foodservice_daily_ddl(schema_name),
-            source_name="synthetic_foodservice_daily",
-            required=False,
-            allow_empty=True,
-            expected_columns=_synthetic_foodservice_expected_columns(),
-            source_policy_id="synthetic_foodservice_qsr",
         ),
     ]
 

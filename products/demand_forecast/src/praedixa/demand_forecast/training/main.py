@@ -31,6 +31,7 @@ _bootstrap_import_paths()
 from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
     OFFICIAL_OPTIMISATION_MAIN_CONFIG,
     OptimisationMainConfig,
+    build_chronos2_finetune_optimisation_main_config,
     build_default_optimisation_main_config,
     build_tft_optimisation_main_config,
     build_xgboost_optimisation_main_config,
@@ -43,6 +44,7 @@ from praedixa.demand_forecast.training.entrypoints.main_runner import (  # noqa:
 __all__ = [
     "OFFICIAL_OPTIMISATION_MAIN_CONFIG",
     "OptimisationMainConfig",
+    "build_chronos2_finetune_optimisation_main_config",
     "build_default_optimisation_main_config",
     "build_tft_optimisation_main_config",
     "build_xgboost_optimisation_main_config",

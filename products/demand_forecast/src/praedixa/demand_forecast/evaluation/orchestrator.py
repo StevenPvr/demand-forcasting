@@ -19,10 +19,17 @@ from praedixa.demand_forecast.evaluation.modeling import fit_final_model
 from praedixa.demand_forecast.evaluation.modeling import (
     fit_final_xgboost_model,
 )
+from praedixa.demand_forecast.evaluation.chronos2_runtime import (
+    evaluate_chronos2_daily_refit_predictions,
+    fit_final_chronos2_model,
+    save_chronos2_model,
+)
 from praedixa.demand_forecast.evaluation.orchestrator_context import (
     ensure_evaluation_target_dir,
 )
-from praedixa.demand_forecast.evaluation.orchestrator_runtime import run_evaluation_pipeline
+from praedixa.demand_forecast.evaluation.orchestrator_runtime import (
+    run_evaluation_pipeline,
+)
 from praedixa.demand_forecast.evaluation.refit import (
     evaluate_daily_refit_predictions,
 )
@@ -44,6 +51,9 @@ from praedixa.demand_forecast.backends.tft.model_utils import save_tft_model
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
 from praedixa.demand_forecast.backends.xgboost.backend import (
     raise_if_xgboost_backend_required,
+)
+from praedixa.demand_forecast.backends.chronos2.backend import (
+    raise_if_chronos2_backend_required,
 )
 
 
@@ -81,6 +91,20 @@ def build_evaluation_outputs(
             fit_final_model_fn=fit_final_xgboost_model,
             save_model_fn=save_xgboost_model,
             require_backend_available_fn=raise_if_xgboost_backend_required,
+            plot_actual_vs_predicted_fn=plot_actual_vs_predicted,
+            plot_residuals_fn=plot_residuals,
+            plot_residuals_qq_fn=plot_residuals_qq,
+            plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf,
+        )
+    if backend == "chronos2":
+        return run_evaluation_pipeline(
+            request=resolved_request,
+            target_dir=target_dir,
+            logger=resolved_logger,
+            evaluate_daily_refit_fn=evaluate_chronos2_daily_refit_predictions,
+            fit_final_model_fn=fit_final_chronos2_model,
+            save_model_fn=save_chronos2_model,
+            require_backend_available_fn=raise_if_chronos2_backend_required,
             plot_actual_vs_predicted_fn=plot_actual_vs_predicted,
             plot_residuals_fn=plot_residuals,
             plot_residuals_qq_fn=plot_residuals_qq,

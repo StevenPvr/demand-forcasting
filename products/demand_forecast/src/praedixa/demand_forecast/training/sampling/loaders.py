@@ -36,6 +36,7 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TUNING_SAMPLE_FRACTION,
 )
 from praedixa.demand_forecast.training.sampling.dataset_filters import (
+    dataset_source_in_filter,
     dataset_source_not_in_filter,
 )
 from praedixa.demand_forecast.training.sampling import (
@@ -63,6 +64,7 @@ def _gold_sampling_context(
     train_sample_fraction: float,
     tuning_sample_fraction: float,
     excluded_dataset_sources: tuple[str, ...],
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> tuple[str, list[str], GoldSplitSamplingSpec, GoldSplitSamplingSpec]:
     schema_preview = connection.execute(f"select * from {gold_table} limit 0").fetchdf()
     sample_store_col = resolve_sampling_store_col(schema_preview)
@@ -83,6 +85,7 @@ def _gold_sampling_context(
             sample_store_col=sample_store_col,
             sample_fraction=train_sample_fraction,
             excluded_dataset_sources=excluded_dataset_sources,
+            included_dataset_sources=included_dataset_sources,
         ),
         GoldSplitSamplingSpec(
             gold_table=gold_table,
@@ -92,6 +95,7 @@ def _gold_sampling_context(
             sample_store_col=sample_store_col,
             sample_fraction=tuning_sample_fraction,
             excluded_dataset_sources=excluded_dataset_sources,
+            included_dataset_sources=included_dataset_sources,
         ),
     )
 
@@ -127,6 +131,7 @@ def _load_gold_sampled_frames(
             sample_fraction=train_spec.sample_fraction,
             selected_columns=projection_columns,
             excluded_dataset_sources=train_spec.excluded_dataset_sources,
+            included_dataset_sources=train_spec.included_dataset_sources,
         )
     ).fetchdf()
     logger.info("Submitting sampled gold validation split query.")
@@ -140,6 +145,7 @@ def _load_gold_sampled_frames(
             sample_fraction=tuning_spec.sample_fraction,
             selected_columns=projection_columns,
             excluded_dataset_sources=tuning_spec.excluded_dataset_sources,
+            included_dataset_sources=tuning_spec.included_dataset_sources,
         )
     ).fetchdf()
     return train_frame, tuning_frame
@@ -155,6 +161,7 @@ def _load_gold_from_connection(
     train_sample_fraction: float,
     tuning_sample_fraction: float,
     excluded_dataset_sources: tuple[str, ...],
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     sample_store_col, projection_columns, train_spec, tuning_spec = (
         _gold_sampling_context(
@@ -165,6 +172,7 @@ def _load_gold_from_connection(
             train_sample_fraction=train_sample_fraction,
             tuning_sample_fraction=tuning_sample_fraction,
             excluded_dataset_sources=excluded_dataset_sources,
+            included_dataset_sources=included_dataset_sources,
         )
     )
     train_sampling_metadata, tuning_sampling_metadata = _load_gold_sampling_metadata(
@@ -204,6 +212,16 @@ def _resolved_parquet_paths(
     return train_path, tuning_path
 
 
+def _sampling_threads() -> int:
+    raw_threads = os.getenv("PRAEDIXA_OPTIMISATION_SAMPLING_THREADS")
+    if raw_threads is None:
+        return max(1, os.cpu_count() or 1)
+    try:
+        return max(1, int(raw_threads.strip()))
+    except ValueError:
+        return 1
+
+
 def _parquet_sampling_context(
     *,
     train_connection: duckdb.DuckDBPyConnection,
@@ -216,6 +234,7 @@ def _parquet_sampling_context(
     train_sample_fraction: float,
     tuning_sample_fraction: float,
     excluded_dataset_sources: tuple[str, ...],
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> tuple[str, list[str], list[str], RelationSamplingSpec, RelationSamplingSpec]:
     train_base_relation_sql = parquet_relation_sql(train_path)
     tuning_base_relation_sql = parquet_relation_sql(tuning_path)
@@ -246,6 +265,10 @@ def _parquet_sampling_context(
         dataset_source_col,
         excluded_dataset_sources,
     )
+    inclusion_filter = dataset_source_in_filter(
+        dataset_source_col,
+        included_dataset_sources,
+    )
     return (
         sample_store_col,
         train_columns,
@@ -253,7 +276,7 @@ def _parquet_sampling_context(
         RelationSamplingSpec(
             relation_sql=(
                 f"{train_relation_sql} where {train_target_filter_col} is not null "
-                f"and {exclusion_filter}"
+                f"and {exclusion_filter} and {inclusion_filter}"
             ),
             date_col=date_col,
             dataset_source_col=dataset_source_col,
@@ -263,7 +286,7 @@ def _parquet_sampling_context(
         RelationSamplingSpec(
             relation_sql=(
                 f"{tuning_relation_sql} where {tuning_target_filter_col} is not null "
-                f"and {exclusion_filter}"
+                f"and {exclusion_filter} and {inclusion_filter}"
             ),
             date_col=date_col,
             dataset_source_col=dataset_source_col,
@@ -347,6 +370,7 @@ def _load_parquet_from_connections(
     train_sample_fraction: float,
     tuning_sample_fraction: float,
     excluded_dataset_sources: tuple[str, ...],
+    included_dataset_sources: tuple[str, ...] | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     (
         sample_store_col,
@@ -365,6 +389,7 @@ def _load_parquet_from_connections(
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
         excluded_dataset_sources=excluded_dataset_sources,
+        included_dataset_sources=included_dataset_sources,
     )
     train_full_load = train_sampling_spec.sample_fraction >= 1.0
     tuning_full_load = tuning_sampling_spec.sample_fraction >= 1.0
@@ -448,6 +473,7 @@ def load_gold_train_tuning_frames(
     excluded_dataset_sources: tuple[
         str, ...
     ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    included_dataset_sources: tuple[str, ...] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     logger.info(
         "Loading sampled gold train/validation splits: duckdb_path=%s gold_table=%s train_split=train tuning_split=val train_sample_fraction=%.4f tuning_sample_fraction=%.4f",
@@ -473,6 +499,7 @@ def load_gold_train_tuning_frames(
             train_sample_fraction=train_sample_fraction,
             tuning_sample_fraction=tuning_sample_fraction,
             excluded_dataset_sources=excluded_dataset_sources,
+            included_dataset_sources=included_dataset_sources,
         )
     finally:
         connection.close()
@@ -502,6 +529,7 @@ def load_parquet_train_tuning_frames(
     excluded_dataset_sources: tuple[
         str, ...
     ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    included_dataset_sources: tuple[str, ...] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, dict[str, object], dict[str, object]]:
     train_path, tuning_path = _resolved_parquet_paths(
         train_input_path=train_input_path,
@@ -509,7 +537,7 @@ def load_parquet_train_tuning_frames(
     )
     train_connection = duckdb.connect()
     tuning_connection = duckdb.connect()
-    sampling_threads = max(1, os.cpu_count() or 1)
+    sampling_threads = _sampling_threads()
     try:
         for connection in (train_connection, tuning_connection):
             configure_sampling_connection(connection, threads=sampling_threads)
@@ -535,6 +563,7 @@ def load_parquet_train_tuning_frames(
             train_sample_fraction=train_sample_fraction,
             tuning_sample_fraction=tuning_sample_fraction,
             excluded_dataset_sources=excluded_dataset_sources,
+            included_dataset_sources=included_dataset_sources,
         )
     finally:
         train_connection.close()

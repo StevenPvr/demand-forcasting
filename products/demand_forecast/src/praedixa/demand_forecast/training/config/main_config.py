@@ -232,6 +232,7 @@ class OptimisationMainConfig:
     train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION
     tensorboard_logdir: Path | None = DEFAULT_TENSORBOARD_LOGDIR
+    included_dataset_sources: tuple[str, ...] | None = None
 
 
 def build_default_optimisation_main_config() -> OptimisationMainConfig:
@@ -244,6 +245,26 @@ def build_xgboost_optimisation_main_config() -> OptimisationMainConfig:
 
 def build_tft_optimisation_main_config() -> OptimisationMainConfig:
     return _build_backend_optimisation_main_config("tft")
+
+
+def build_chronos2_finetune_optimisation_main_config() -> OptimisationMainConfig:
+    from praedixa.demand_forecast.training.config.constants import (
+        DEFAULT_CHRONOS2_FINETUNE_DATASET_SOURCES,
+        DEFAULT_CHRONOS2_FINETUNE_N_FOLDS,
+        DEFAULT_CHRONOS2_FINETUNE_SAMPLE_FRACTION,
+        DEFAULT_CHRONOS2_FINETUNE_TRIALS,
+    )
+
+    return OptimisationMainConfig(
+        model_backend="chronos2_finetune",
+        runtime_profile=_default_runtime_profile(model_backend="chronos2_finetune"),
+        n_folds=DEFAULT_CHRONOS2_FINETUNE_N_FOLDS,
+        max_trials=DEFAULT_CHRONOS2_FINETUNE_TRIALS,
+        stage_budget="quick",
+        train_sample_fraction=DEFAULT_CHRONOS2_FINETUNE_SAMPLE_FRACTION,
+        tuning_sample_fraction=DEFAULT_CHRONOS2_FINETUNE_SAMPLE_FRACTION,
+        included_dataset_sources=DEFAULT_CHRONOS2_FINETUNE_DATASET_SOURCES,
+    )
 
 
 def build_optimisation_model_params(

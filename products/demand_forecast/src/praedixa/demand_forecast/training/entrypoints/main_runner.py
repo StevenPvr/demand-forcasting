@@ -90,6 +90,7 @@ def run_optimisation_main(config: OptimisationMainConfig) -> None:
             tuning_trials=config.max_trials,
             train_sample_fraction=config.train_sample_fraction,
             tuning_sample_fraction=config.tuning_sample_fraction,
+            included_dataset_sources=config.included_dataset_sources,
             model_params=build_optimisation_model_params(config),
             bundle_dir=resolved_bundle_dir,
             model_backend=config.model_backend,

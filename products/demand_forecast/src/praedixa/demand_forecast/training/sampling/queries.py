@@ -8,6 +8,7 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
 )
 from praedixa.demand_forecast.training.sampling.dataset_filters import (
+    dataset_source_in_filter,
     dataset_source_not_in_filter,
 )
 from praedixa.demand_forecast.training.validation.eligibility import (
@@ -22,7 +23,6 @@ from praedixa.demand_forecast.training.sampling.models import (
 
 _TRAINING_ELIGIBILITY_SQL_COLUMNS: set[str] = {
     "usable_for_training_flag",
-    "censor_flag",
     "label_quality_score",
     "target_source",
 }
@@ -54,7 +54,6 @@ def _gold_training_eligibility_filter(selected_columns: list[str] | None) -> str
     return f"""
 (
     coalesce(usable_for_training_flag, false)
-    and not coalesce(censor_flag, false)
     and coalesce(label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
     and coalesce(target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}
 )""".strip()
@@ -72,6 +71,7 @@ def build_gold_split_sampling_query(
     excluded_dataset_sources: tuple[
         str, ...
     ] = DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+    included_dataset_sources: tuple[str, ...] | None = None,
 ) -> str:
     select_list = "*" if selected_columns is None else ", ".join(selected_columns)
     training_eligibility_filter = (
@@ -83,6 +83,10 @@ def build_gold_split_sampling_query(
         dataset_source_col,
         excluded_dataset_sources,
     )
+    dataset_include_filter = dataset_source_in_filter(
+        dataset_source_col,
+        included_dataset_sources,
+    )
     series_key = series_key_sql(
         selected_columns,
         sample_store_col=sample_store_col,
@@ -93,6 +97,7 @@ with scoped as (
     from {gold_table}
     where split_bucket = '{split_bucket}'
       and {dataset_scope_filter}
+      and {dataset_include_filter}
       and {training_eligibility_filter}
 ),
 series_population as (

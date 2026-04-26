@@ -7,7 +7,11 @@ import unittest
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from praedixa.platform.signals.open_data.fetch_app import (  # noqa: E402
@@ -103,7 +107,9 @@ class FetchOpenExogenousTests(unittest.TestCase):
             retry_backoff_seconds=0.0,
         )
 
-    def test_build_location_metadata_frame_applies_current_dataset_assumptions(self) -> None:
+    def test_build_location_metadata_frame_applies_current_dataset_assumptions(
+        self,
+    ) -> None:
         metadata = build_location_metadata_frame(
             self._sample_silver_locations(),
             bakery_city_name="Paris",
@@ -112,7 +118,10 @@ class FetchOpenExogenousTests(unittest.TestCase):
             bakery_longitude=DEFAULT_BAKERY_LONGITUDE,
         )
 
-        self.assertEqual(sorted(metadata["dataset_source"].tolist()), ["bakery", "freshretail", "freshretail_lt"])
+        self.assertEqual(
+            sorted(metadata["dataset_source"].tolist()),
+            ["bakery", "freshretail", "freshretail_lt"],
+        )
 
         bakery_row = metadata.loc[metadata["dataset_source"].eq("bakery")].iloc[0]
         self.assertEqual(bakery_row["country_code"], "FR")
@@ -121,12 +130,19 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertNotIn("site_format", metadata.columns)
         self.assertNotIn("service_model", metadata.columns)
 
-        freshretail_row = metadata.loc[metadata["dataset_source"].eq("freshretail")].iloc[0]
+        freshretail_row = metadata.loc[
+            metadata["dataset_source"].eq("freshretail")
+        ].iloc[0]
         self.assertEqual(freshretail_row["country_code"], "CN")
         self.assertTrue(pd.isna(freshretail_row["latitude"]))
-        self.assertEqual(freshretail_row["assumption_source"], "freshretail_city_id_without_public_geocoding")
+        self.assertEqual(
+            freshretail_row["assumption_source"],
+            "freshretail_city_id_without_public_geocoding",
+        )
 
-        freshretail_lt_row = metadata.loc[metadata["dataset_source"].eq("freshretail_lt")].iloc[0]
+        freshretail_lt_row = metadata.loc[
+            metadata["dataset_source"].eq("freshretail_lt")
+        ].iloc[0]
         self.assertEqual(freshretail_lt_row["country_code"], "CN")
         self.assertTrue(bool(freshretail_lt_row["delivery_flag"]))
         self.assertTrue(bool(freshretail_lt_row["pickup_flag"]))
@@ -169,7 +185,9 @@ class FetchOpenExogenousTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(compute_country_years(silver_locations, metadata), {"FR": [2023, 2024]})
+        self.assertEqual(
+            compute_country_years(silver_locations, metadata), {"FR": [2023, 2024]}
+        )
 
     def test_compute_country_date_bounds_adds_lookback_window_per_country(self) -> None:
         silver_locations = self._sample_silver_locations()
@@ -181,7 +199,9 @@ class FetchOpenExogenousTests(unittest.TestCase):
             bakery_longitude=DEFAULT_BAKERY_LONGITUDE,
         )
 
-        bounds = compute_country_date_bounds(silver_locations, metadata, lookback_days=30)
+        bounds = compute_country_date_bounds(
+            silver_locations, metadata, lookback_days=30
+        )
 
         self.assertEqual(bounds["FR"], ("2023-11-30", "2024-01-03"))
         self.assertEqual(bounds["CN"], ("2024-01-11", "2024-04-03"))
@@ -260,8 +280,12 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertIn("weather_temperature_mean", frame.columns)
         self.assertIn("weather_temperature_min", frame.columns)
         self.assertIn("weather_temperature_max", frame.columns)
-        self.assertEqual(frame["weather_temperature_min"].tolist(), [5.0, 6.0, 7.0, 8.0])
-        self.assertEqual(frame["weather_temperature_max"].tolist(), [15.0, 16.0, 17.0, 18.0])
+        self.assertEqual(
+            frame["weather_temperature_min"].tolist(), [5.0, 6.0, 7.0, 8.0]
+        )
+        self.assertEqual(
+            frame["weather_temperature_max"].tolist(), [15.0, 16.0, 17.0, 18.0]
+        )
 
 
 if __name__ == "__main__":

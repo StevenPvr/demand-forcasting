@@ -212,7 +212,6 @@ def _gold_training_eligibility_filter(
     available_columns = set(schema_preview.columns)
     required_columns = {
         "usable_for_training_flag",
-        "censor_flag",
         "label_quality_score",
     }
     if not required_columns.issubset(available_columns):
@@ -224,7 +223,6 @@ def _gold_training_eligibility_filter(
     return f"""
 (
     coalesce({prefix}usable_for_training_flag, false)
-    and not coalesce({prefix}censor_flag, false)
     and coalesce({prefix}label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
     {target_source_filter}
 )""".strip()

@@ -36,7 +36,7 @@ class SamplingQueriesTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "dataset_source": "synthetic_foodservice_qsr",
+                    "dataset_source": "freshretail_lt",
                     "split_bucket": "train",
                     "dt": date,
                     "location_id": "loc_a",
@@ -131,7 +131,7 @@ class SamplingQueriesTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "dataset_source": "m5_forecasting_accuracy",
+                    "dataset_source": "freshretail_lt",
                     "dt": date,
                     "location_id": "store_a",
                     "product_id": product_id,
@@ -195,12 +195,27 @@ class SamplingQueriesTests(unittest.TestCase):
         )
 
         self.assertIn("coalesce(usable_for_training_flag, false)", query)
-        self.assertIn("not coalesce(censor_flag, false)", query)
+        self.assertNotIn("not coalesce(censor_flag, false)", query)
         self.assertIn("coalesce(label_quality_score, 0.0) >= 0.750000", query)
         self.assertIn(
             "coalesce(target_source, '') not in ('closed_or_missing_observation', 'dense_calendar_zero_fill')",
             query,
         )
+        self.assertIn("dataset_source not in ('bakery')", query)
+
+    def test_gold_sampling_can_scope_to_included_dataset_sources(self) -> None:
+        query = build_gold_split_sampling_query(
+            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            split_bucket="train",
+            date_col="dt",
+            dataset_source_col="dataset_source",
+            sample_store_col="location_id",
+            sample_fraction=0.1,
+            selected_columns=["dataset_source", "dt", "location_id", "client_id"],
+            included_dataset_sources=("freshretail_lt",),
+        )
+
+        self.assertIn("dataset_source in ('freshretail_lt')", query)
         self.assertIn("dataset_source not in ('bakery')", query)
 
     def test_gold_val_sampling_requires_training_eligible_rows(self) -> None:

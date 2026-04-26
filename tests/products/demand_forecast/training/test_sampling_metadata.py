@@ -47,7 +47,7 @@ class SamplingMetadataTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "dataset_source": "synthetic_foodservice_qsr",
+                    "dataset_source": "freshretail_lt",
                     "split_bucket": "train",
                     "dt": date,
                     "location_id": "loc_a",
@@ -82,10 +82,8 @@ class SamplingMetadataTests(unittest.TestCase):
             metadata["sample_strategy"], "complete_series_by_dataset_store"
         )
         self.assertEqual(metadata["sampled_rows"], 6)
-        self.assertEqual(datasets["synthetic_foodservice_qsr"]["series_count"], 4)
-        self.assertEqual(
-            datasets["synthetic_foodservice_qsr"]["sampled_series_count"], 2
-        )
+        self.assertEqual(datasets["freshretail_lt"]["series_count"], 4)
+        self.assertEqual(datasets["freshretail_lt"]["sampled_series_count"], 2)
 
     def test_gold_projection_keeps_explicit_categorical_model_features(self) -> None:
         schema_preview = pd.DataFrame(
@@ -153,8 +151,8 @@ class SamplingMetadataTests(unittest.TestCase):
             metadata["sample_strategy"], "complete_series_by_dataset_store"
         )
         self.assertEqual(metadata["sampled_rows"], 6)
-        self.assertEqual(datasets["m5_forecasting_accuracy"]["series_count"], 4)
-        self.assertEqual(datasets["m5_forecasting_accuracy"]["sampled_series_count"], 2)
+        self.assertEqual(datasets["freshretail_lt"]["series_count"], 4)
+        self.assertEqual(datasets["freshretail_lt"]["sampled_series_count"], 2)
         self.assertEqual(set(selected_dates_per_group.tolist()), {3})
 
     def test_parquet_loader_uses_complete_series_sampling_for_precomputed_tft_bundle(
@@ -291,7 +289,7 @@ class SamplingMetadataTests(unittest.TestCase):
         return pd.DataFrame(
             [
                 {
-                    "dataset_source": "m5_forecasting_accuracy",
+                    "dataset_source": "freshretail_lt",
                     "dt": date,
                     "location_id": "store_a",
                     "product_id": product_id,

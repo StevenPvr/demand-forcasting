@@ -17,8 +17,8 @@ select
     'observed_sales' as target_semantics,
     coalesce(try_cast(is_censored as boolean), false) as censor_flag,
     'observed_sales' as target_source,
-    case when coalesce(try_cast(is_censored as boolean), false) then 0.5 else 1.0 end as label_quality_score,
-    not coalesce(try_cast(is_censored as boolean), false) as usable_for_training_flag,
+    1.0 as label_quality_score,
+    true as usable_for_training_flag,
     cast(null as double) as observed_revenue_net,
     try_cast(discount as double) as observed_discount_amount,
     case

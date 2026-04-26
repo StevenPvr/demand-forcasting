@@ -71,7 +71,30 @@ def _source_system_for_column(column: str) -> str:
         return "operations"
     if "price" in column or "discount" in column or "promo" in column:
         return "pricing"
-    if column in {"dataset_source", "client_id"}:
+    if column in {
+        "dataset_source",
+        "client_id",
+        "source_role",
+        "vertical_level_1",
+        "vertical_level_2",
+        "commerce_modality",
+        "operation_type",
+        "service_pattern",
+        "country_code",
+        "region_code",
+        "region_known_flag",
+        "city_name",
+        "product_family",
+        "product_subfamily",
+        "product_subfamily_known_flag",
+        "category_level_1",
+        "category_level_1_known_flag",
+        "category_level_2",
+        "category_level_2_known_flag",
+        "category_level_3",
+        "category_level_3_known_flag",
+        "product_taxonomy_depth",
+    }:
         return "metadata"
     if column.endswith("_status"):
         return "data_quality"

@@ -53,6 +53,7 @@ class OptimisationBuildRequest:
     train_sample_fraction: float = DEFAULT_TRAIN_SAMPLE_FRACTION
     tuning_sample_fraction: float = DEFAULT_TUNING_SAMPLE_FRACTION
     model_backend: str = DEFAULT_MODEL_BACKEND
+    included_dataset_sources: tuple[str, ...] | None = None
 
 
 def _prepare_output_dir(
@@ -137,6 +138,7 @@ def _loaded_context_and_run_config(
         target_col=request.target_col,
         train_sample_fraction=request.train_sample_fraction,
         tuning_sample_fraction=request.tuning_sample_fraction,
+        included_dataset_sources=request.included_dataset_sources,
     )
     context = prepare_optimisation_context(
         loaded=loaded,

@@ -24,7 +24,7 @@ from praedixa.demand_forecast.backends.tft.feature_contract import (  # noqa: E4
 
 class TFTFeatureMappingTests(unittest.TestCase):
     def test_explicit_mapping_covers_gold_panel_and_runtime_helpers(self) -> None:
-        self.assertEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 243)
+        self.assertGreaterEqual(len(TFT_EXPLICIT_ROLE_BY_COLUMN), 252)
 
     def test_group_id_is_explicit_and_stable(self) -> None:
         self.assertEqual(TFT_GROUP_ID_COLUMNS, ("client_id",))
@@ -34,6 +34,21 @@ class TFTFeatureMappingTests(unittest.TestCase):
     def test_roles_cover_representative_columns(self) -> None:
         self.assertEqual(
             TFT_EXPLICIT_ROLE_BY_COLUMN["location_id"], "static_categorical"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["source_role"], "static_categorical"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["commerce_modality"], "static_categorical"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["operation_type"], "static_categorical"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["region_known_flag"], "static_categorical"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["product_taxonomy_depth"], "static_real"
         )
         self.assertEqual(
             TFT_EXPLICIT_ROLE_BY_COLUMN["history_available_days"],
@@ -59,9 +74,19 @@ class TFTFeatureMappingTests(unittest.TestCase):
         self.assertEqual(
             TFT_EXPLICIT_ROLE_BY_COLUMN["target_demand_qty_d_plus_1"], "target"
         )
-        self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["lag_1"], "exclude")
         self.assertEqual(
-            TFT_EXPLICIT_ROLE_BY_COLUMN["observed_revenue_net_lag_1"], "exclude"
+            TFT_EXPLICIT_ROLE_BY_COLUMN["lag_1"], "time_varying_unknown_real"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["target_lag_1"], "time_varying_unknown_real"
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["promo_flag_lag_14"],
+            "time_varying_unknown_categorical",
+        )
+        self.assertEqual(
+            TFT_EXPLICIT_ROLE_BY_COLUMN["observed_revenue_net_lag_1"],
+            "time_varying_unknown_real",
         )
         self.assertEqual(TFT_EXPLICIT_ROLE_BY_COLUMN["split_bucket"], "exclude")
 
@@ -75,7 +100,9 @@ class TFTFeatureMappingTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(layout["static_categoricals"], ["location_id", "product_family"])
+        self.assertEqual(
+            layout["static_categoricals"], ["location_id", "product_family"]
+        )
         self.assertEqual(layout["static_reals"], [])
         self.assertEqual(
             layout["time_varying_known_categoricals"], ["target_holiday_flag"]

@@ -22,7 +22,7 @@ from praedixa.demand_forecast.training.validation.eligibility import (  # noqa: 
 
 
 class TrainingEligibilityTests(unittest.TestCase):
-    def test_filter_training_eligible_rows_rejects_censored_low_quality_rows(self) -> None:
+    def test_filter_training_eligible_rows_keeps_observed_sales_under_stockout_flag(self) -> None:
         frame = pd.DataFrame(
             {
                 "row_id": [1, 2, 3, 4, 5],
@@ -41,7 +41,7 @@ class TrainingEligibilityTests(unittest.TestCase):
 
         filtered = filter_training_eligible_rows(frame, label="unit_test")
 
-        self.assertEqual(filtered["row_id"].tolist(), [1])
+        self.assertEqual(filtered["row_id"].tolist(), [1, 2])
 
 
 if __name__ == "__main__":

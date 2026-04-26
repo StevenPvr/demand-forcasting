@@ -16,6 +16,7 @@ from praedixa.demand_forecast.training.sampling.models import (
     RelationSamplingSpec,
 )
 from praedixa.demand_forecast.training.sampling.dataset_filters import (
+    dataset_source_in_filter,
     dataset_source_not_in_filter,
 )
 
@@ -410,6 +411,7 @@ def load_gold_split_sampling_metadata(
             from {spec.gold_table}
             where split_bucket = '{spec.split_bucket}'
               and {dataset_source_not_in_filter(spec.dataset_source_col, spec.excluded_dataset_sources)}
+              and {dataset_source_in_filter(spec.dataset_source_col, spec.included_dataset_sources)}
         ),
         series_population as (
             select

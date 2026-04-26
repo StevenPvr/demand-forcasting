@@ -332,14 +332,15 @@ def _assign_observed_fields(
     lost = matrices["lost"][product_index, date_index]
     discount_rate = np.where(matrices["promo"][product_index, date_index], 0.12, 0.0)
     closed = matrices["closed"][date_index]
+    complete = matrices["day_complete"][date_index] & ~closed
     frame["observed_demand_qty"] = observed.round(3)
     frame["target_semantics"] = "observed_sales"
     frame["censor_flag"] = lost > 0
     frame["target_source"] = np.where(
-        closed, "closed_or_missing_observation", "observed_sales"
+        complete, "observed_sales", "closed_or_missing_observation"
     )
-    frame["label_quality_score"] = np.where(closed, 0.0, np.where(lost > 0, 0.5, 1.0))
-    frame["usable_for_training_flag"] = (~closed) & (lost <= 0)
+    frame["label_quality_score"] = np.where(complete, 1.0, 0.0)
+    frame["usable_for_training_flag"] = complete
     frame["observed_revenue_net"] = (observed * price * (1.0 - discount_rate)).round(2)
     frame["observed_discount_amount"] = (observed * price * discount_rate).round(2)
     frame["promo_flag"] = matrices["promo"][product_index, date_index]
@@ -349,7 +350,7 @@ def _assign_observed_fields(
     frame["observed_stockout_intensity"] = (
         lost / np.maximum(matrices["latent"][product_index, date_index], 1.0)
     ).round(4)
-    frame["day_complete_flag"] = matrices["day_complete"][date_index] & ~closed
+    frame["day_complete_flag"] = complete
 
 
 def _assign_calendar_weather_fields(

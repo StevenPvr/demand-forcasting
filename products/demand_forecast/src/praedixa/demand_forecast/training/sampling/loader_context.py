@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from praedixa.demand_forecast.contracts.targets import TargetContract, resolve_target_contract
+from praedixa.demand_forecast.contracts.targets import (
+    TargetContract,
+    resolve_target_contract,
+)
 from praedixa.demand_forecast.training.sampling.common import resolve_sampling_store_col
 
 
@@ -109,12 +112,14 @@ def parquet_target_filter_context(
         tuning_schema_preview=tuning_schema_preview,
         dataset_source_col=dataset_source_col,
     )
-    _target_contract, train_target_filter_col, tuning_target_filter_col = target_filter_columns(
-        train_columns=list(train_target_schema_preview.columns),
-        tuning_columns=list(tuning_target_schema_preview.columns),
-        train_target_schema_preview=train_target_schema_preview,
-        tuning_target_schema_preview=tuning_target_schema_preview,
-        target_col=target_col,
+    _target_contract, train_target_filter_col, tuning_target_filter_col = (
+        target_filter_columns(
+            train_columns=list(train_target_schema_preview.columns),
+            tuning_columns=list(tuning_target_schema_preview.columns),
+            train_target_schema_preview=train_target_schema_preview,
+            tuning_target_schema_preview=tuning_target_schema_preview,
+            target_col=target_col,
+        )
     )
     return (
         resolve_sampling_store_col(train_target_schema_preview),
