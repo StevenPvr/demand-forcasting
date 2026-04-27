@@ -861,6 +861,48 @@ class EvaluationPipelineTests(unittest.TestCase):
         self.assertEqual(best_iteration, 4)
         self.assertEqual(fit_params["n_jobs"], 1)
 
+    def test_xgboost_evaluation_forces_cpu_for_h100_params_on_macos(self) -> None:
+        train_frame, valid_frame, _, target_contract = _build_refit_frames()
+        recorded: dict[str, object] = {}
+
+        def _record_fit_call(*_: object, **kwargs: object) -> SimpleNamespace:
+            recorded["model_params"] = kwargs["model_params"]
+            return SimpleNamespace(
+                model=SimpleNamespace(best_iteration=3),
+                params={"n_estimators": 10},
+            )
+
+        with (
+            patch.object(evaluation_modeling.platform, "system", return_value="Darwin"),
+            patch.object(
+                evaluation_modeling,
+                "fit_xgboost_model",
+                side_effect=_record_fit_call,
+            ),
+        ):
+            evaluation_modeling.fit_xgboost_evaluation_model(
+                train_frame=train_frame,
+                valid_frame=valid_frame,
+                feature_cols=["feat"],
+                target_contract=target_contract,
+                model_params={
+                    "model_backend": "xgboost",
+                    "runtime_profile": "nvidia_h100",
+                    "requested_runtime_profile": "nvidia_h100",
+                    "device": "cuda",
+                    "xgboost_matrix_type": "quantile",
+                    "xgboost_gpu_input_backend": "auto",
+                    "n_jobs": 1,
+                },
+            )
+
+        fit_params = cast(dict[str, object], recorded["model_params"])
+        self.assertEqual(fit_params["runtime_profile"], "local_cpu")
+        self.assertEqual(fit_params["device"], "cpu")
+        self.assertEqual(fit_params["xgboost_matrix_type"], "dmatrix")
+        self.assertEqual(fit_params["xgboost_gpu_input_backend"], "cpu")
+        self.assertFalse(fit_params["cuda_available"])
+
     def test_final_model_fit_aligns_test_frame_to_train_valid_schema(self) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         recorded: dict[str, object] = {}

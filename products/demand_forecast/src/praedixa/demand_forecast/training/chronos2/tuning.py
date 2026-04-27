@@ -232,17 +232,19 @@ def _chronos_tasks(
 def _chronos_df(
     frame: pd.DataFrame, feature_cols: list[str], *, target_col: str | None
 ) -> pd.DataFrame:
-    output = pd.DataFrame(
-        {
-            _CHRONOS_ID_COL: _series_values(frame),
-            _CHRONOS_TIMESTAMP_COL: pd.to_datetime(frame[_DATE_COL]),
-        }
-    )
+    columns: dict[str, object] = {
+        _CHRONOS_ID_COL: _series_values(frame),
+        _CHRONOS_TIMESTAMP_COL: pd.to_datetime(frame[_DATE_COL]),
+    }
     if target_col is not None:
-        output[_CHRONOS_TARGET_COL] = frame[target_col].to_numpy(dtype=float, copy=True)
+        columns[_CHRONOS_TARGET_COL] = frame[target_col].to_numpy(
+            dtype=float,
+            copy=True,
+        )
     for column in feature_cols:
         if column in frame.columns:
-            output[column] = frame[column].to_numpy(dtype=float, copy=True)
+            columns[column] = frame[column].to_numpy(dtype=float, copy=True)
+    output = pd.DataFrame(columns, copy=False)
     return output.sort_values([_CHRONOS_ID_COL, _CHRONOS_TIMESTAMP_COL]).reset_index(
         drop=True
     )

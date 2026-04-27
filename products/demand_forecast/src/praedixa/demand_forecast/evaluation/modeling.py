@@ -393,10 +393,41 @@ def _stable_xgboost_evaluation_params(
     resolved["n_jobs"] = 1
     if platform.system() != "Darwin":
         return resolved
+    if _xgboost_params_request_cuda(resolved):
+        _log_cuda_evaluation_override()
+        resolved["runtime_profile"] = "local_cpu"
+        resolved["requested_runtime_profile"] = "local_cpu"
+        resolved["device"] = "cpu"
+        resolved["accelerator"] = "cpu"
+        resolved["devices"] = 0
+        resolved["cuda_available"] = False
+        resolved["cuda_device_name"] = None
+        resolved["xgboost_matrix_type"] = "dmatrix"
+        resolved["xgboost_gpu_input_backend"] = "cpu"
     if bool(resolved.get("enable_categorical", False)):
         _log_native_categorical_evaluation_override()
         resolved["enable_categorical"] = False
     return resolved
+
+
+def _xgboost_params_request_cuda(model_params: dict[str, object]) -> bool:
+    runtime_profile = str(model_params.get("runtime_profile", "")).lower()
+    requested_runtime_profile = str(
+        model_params.get("requested_runtime_profile", "")
+    ).lower()
+    device = str(model_params.get("device", "")).lower()
+    return (
+        device == "cuda"
+        or runtime_profile in {"cuda", "scaleway_l40s", "nvidia_h100"}
+        or requested_runtime_profile in {"cuda", "scaleway_l40s", "nvidia_h100"}
+    )
+
+
+def _log_cuda_evaluation_override() -> None:
+    LOGGER.info(
+        "Forcing XGBoost evaluation runtime to local_cpu on macOS because tuned "
+        "parameters were produced on a CUDA runtime."
+    )
 
 
 def _log_native_categorical_evaluation_override() -> None:

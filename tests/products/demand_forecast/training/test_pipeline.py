@@ -4,6 +4,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import warnings
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -216,6 +217,8 @@ class OptimisationPipelineTests(unittest.TestCase):
         config = build_chronos2_finetune_optimisation_main_config()
 
         self.assertEqual(config.model_backend, "chronos2_finetune")
+        self.assertEqual(config.n_folds, 5)
+        self.assertEqual(config.max_trials, 30)
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)
         self.assertEqual(config.included_dataset_sources, ("freshretail_lt",))
@@ -249,6 +252,34 @@ class OptimisationPipelineTests(unittest.TestCase):
         self.assertEqual(
             padded.loc[padded["series_id"] == "a", "timestamp"].max(),
             pd.Timestamp("2024-01-03"),
+        )
+
+    def test_chronos2_future_frame_build_avoids_fragmentation_warning(self) -> None:
+        feature_count = 160
+        frame = pd.DataFrame(
+            {
+                "dt": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+                "client_id": ["a", "a"],
+                **{
+                    f"feature_{idx}": [float(idx), float(idx + 1)]
+                    for idx in range(feature_count)
+                },
+            }
+        )
+        feature_cols = [f"feature_{idx}" for idx in range(feature_count)]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pd.errors.PerformanceWarning)
+            padded = build_padded_future_chronos_df(
+                frame,
+                feature_cols,
+                prediction_length=2,
+            )
+
+        self.assertEqual(len(padded), 2)
+        self.assertEqual(
+            [column for column in feature_cols if column in padded.columns],
+            feature_cols,
         )
 
     def test_chronos2_scoring_context_keeps_only_future_series(self) -> None:

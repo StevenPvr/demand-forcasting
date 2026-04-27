@@ -86,8 +86,12 @@ def evaluate_daily_refit_predictions(
     daily_prediction_parts: list[pd.DataFrame] = []
     daily_reports: list[dict[str, object]] = []
     best_iterations: list[int] = []
+    eligible_train_frame = _filter_base_refit_train_frame(
+        train_frame,
+        logger=logger,
+    )
     context = RefitExecutionContext(
-        train_frame=train_frame,
+        train_frame=eligible_train_frame,
         valid_frame=valid_frame,
         test_frame=test_frame,
         feature_cols=feature_cols,
@@ -199,6 +203,19 @@ def _refit_model_and_iteration(
         feature_cols=context.feature_cols,
         target_contract=context.target_contract,
         model_params=context.model_params,
+    )
+
+
+def _filter_base_refit_train_frame(
+    train_frame: pd.DataFrame,
+    *,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    return filter_training_eligible_rows(
+        train_frame,
+        label="evaluation_base_refit_train",
+        logger=logger,
+        log_level=logging.DEBUG,
     )
 
 
@@ -354,28 +371,22 @@ def _fit_refit_fold_model(
         len(valid_frame),
     )
     aligned_history_frame = bakery_history_frame.reindex(columns=train_frame.columns)
-    refit_train_frame = pd.concat([train_frame, aligned_history_frame], ignore_index=True)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "Daily evaluation refit frame before eligibility: fold=%s/%s eval_date=%s %s",
-            fold_number,
-            total_fold_count,
-            eval_date,
-            _frame_diagnostic_summary(
-                refit_train_frame,
-                feature_cols=feature_cols,
-                target_col=target_contract.learning_target_col,
-            ),
-        )
-    refit_train_frame = filter_training_eligible_rows(
-        refit_train_frame,
-        label="evaluation_daily_refit_train",
+    eligible_history_frame = filter_training_eligible_rows(
+        aligned_history_frame,
+        label="evaluation_daily_refit_history",
         logger=logger,
         log_level=logging.DEBUG,
     )
+    if eligible_history_frame.empty:
+        refit_train_frame = train_frame
+    else:
+        refit_train_frame = pd.concat(
+            [train_frame, eligible_history_frame],
+            ignore_index=True,
+        )
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            "Daily evaluation refit frame after eligibility: fold=%s/%s eval_date=%s %s",
+            "Daily evaluation refit frame after incremental eligibility: fold=%s/%s eval_date=%s %s",
             fold_number,
             total_fold_count,
             eval_date,
