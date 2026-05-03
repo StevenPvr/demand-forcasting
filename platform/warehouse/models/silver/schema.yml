@@ -35,6 +35,9 @@ models:
       - name: observed_demand_qty
         tests:
           - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: ">= 0"
       - name: target_semantics
         tests:
           - not_null
@@ -50,6 +53,9 @@ models:
       - name: label_quality_score
         tests:
           - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 1"
       - name: usable_for_training_flag
         tests:
           - not_null
@@ -62,3 +68,134 @@ models:
               - dt
               - location_id
               - product_id
+
+  - name: silver_daily_product_demand_all
+    columns:
+      - name: dataset_source
+        tests:
+          - not_null
+      - name: dt
+        tests:
+          - not_null
+      - name: location_id
+        tests:
+          - not_null
+      - name: product_id
+        tests:
+          - not_null
+      - name: data_origin
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["real", "synthetic", "supplemental"]
+      - name: target_semantics
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["observed_sales", "latent_demand_estimated"]
+      - name: label_quality_score
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 1"
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - dt
+              - location_id
+              - product_id
+
+  - name: silver_daily_product_demand_training_candidates
+    columns:
+      - name: dataset_source
+        tests:
+          - not_null
+      - name: observed_demand_parse_error_flag
+        tests:
+          - not_null
+      - name: target_semantics_parse_error_flag
+        tests:
+          - not_null
+      - name: usable_for_training_flag
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - dt
+              - location_id
+              - product_id
+
+  - name: silver_source_registry
+    columns:
+      - name: source_id
+        tests:
+          - not_null
+          - unique
+      - name: review_status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["allowed", "quarantine", "rejected", "unreviewed"]
+
+  - name: silver_allowed_provider_sources
+    columns:
+      - name: source_id
+        tests:
+          - not_null
+          - unique
+
+  - name: silver_quarantined_provider_sources
+    columns:
+      - name: source_id
+        tests:
+          - not_null
+
+  - name: silver_location_date_spine
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - location_id
+              - dt
+
+  - name: silver_series_date_spine
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - location_id
+              - product_id
+              - dt
+
+  - name: silver_location_capacity_daily
+    columns:
+      - name: capacity_available_flag
+        tests:
+          - not_null
+      - name: assumption_flag
+        tests:
+          - not_null
+
+  - name: silver_open_weather_daily
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - dataset_source
+              - location_id
+              - dt
+
+  - name: silver_quality_incidents
+    columns:
+      - name: incident_id
+        tests:
+          - not_null
+          - unique

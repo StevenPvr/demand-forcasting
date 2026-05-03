@@ -7,7 +7,7 @@ with product_rollup as (
         max(category_level_1) as category_level_1,
         max(category_level_2) as category_level_2,
         max(category_level_3) as category_level_3
-    from {{ ref("silver_daily_product_demand") }}
+    from {{ ref("silver_daily_product_demand_all") }}
     group by
         dataset_source,
         product_id
@@ -23,5 +23,6 @@ select
     false as beverage_flag,
     false as dessert_flag,
     dataset_source = 'bakery' as breakfast_flag,
-    false as lunch_flag
+    false as lunch_flag,
+    'demand_derived_fallback' as product_profile_source
 from product_rollup

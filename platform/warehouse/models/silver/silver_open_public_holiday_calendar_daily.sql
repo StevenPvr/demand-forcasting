@@ -2,22 +2,10 @@
 
 with demand_dates as (
     select distinct
-        metadata.country_code,
-        demand.dt
-    from {{ ref("silver_daily_product_demand") }} as demand
-    inner join {{ ref("silver_open_location_metadata") }} as metadata
-      on demand.dataset_source = metadata.dataset_source
-     and demand.location_id = metadata.location_id
-
-    union
-
-    select distinct
-        metadata.country_code,
-        demand.dt + interval 1 day as dt
-    from {{ ref("silver_daily_product_demand") }} as demand
-    inner join {{ ref("silver_open_location_metadata") }} as metadata
-      on demand.dataset_source = metadata.dataset_source
-     and demand.location_id = metadata.location_id
+        country_code,
+        dt
+    from {{ ref("silver_location_date_spine") }}
+    where country_code is not null
 ),
 holiday_rows as (
     select
@@ -28,8 +16,7 @@ holiday_rows as (
         bool_or(global_flag) as holiday_global_flag
     from {{ ref("stg_open_public_holidays") }} as holidays
     inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on coalesce(holidays.source_policy_id, holidays.source_name) = allowed.source_id
-       or holidays.source_name = allowed.source_id
+      on {{ praedixa_canonical_source_id("holidays.source_policy_id", "holidays.source_name") }} = allowed.source_id
     group by
         country_code,
         dt

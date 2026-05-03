@@ -1,17 +1,14 @@
 {{ config(tags=["silver", "calendar"], materialized="table", unique_key=["dataset_source", "location_id", "dt"]) }}
 
-with demand_dates as (
-    select distinct
-        demand.dataset_source,
-        demand.location_id,
-        demand.dt,
-        metadata.country_code
-    from {{ ref("silver_daily_product_demand") }} as demand
-    left join {{ ref("silver_open_location_metadata") }} as metadata
-      on demand.dataset_source = metadata.dataset_source
-     and demand.location_id = metadata.location_id
+with location_dates as (
+    select
+        dataset_source,
+        location_id,
+        dt,
+        country_code
+    from {{ ref("silver_location_date_spine") }}
 ),
-holiday_calendar as (
+country_calendar as (
     select
         country_code,
         dt,
@@ -21,16 +18,41 @@ holiday_calendar as (
         post_holiday_flag,
         bridge_day_flag
     from {{ ref("silver_open_public_holiday_calendar_daily") }}
+),
+school_calendar as (
+    select
+        dataset_source,
+        location_id,
+        dt,
+        school_holiday_flag,
+        school_holiday_available_flag
+    from {{ ref("silver_open_school_holidays_daily") }}
 )
 select
-    demand_dates.dataset_source,
-    demand_dates.location_id,
-    demand_dates.dt,
-    cast(strftime(demand_dates.dt, '%d') as integer) <= 3 as month_start_flag,
-    cast(strftime(demand_dates.dt + interval 1 day, '%m') as integer) != cast(strftime(demand_dates.dt, '%m') as integer) as month_end_flag,
-    case when holiday_calendar.holiday_name is null then 0 else 1 end as event_count_local,
-    case when holiday_calendar.holiday_name is null then 0.0 else 1.0 end as event_intensity_score
-from demand_dates
-left join holiday_calendar
-  on demand_dates.country_code = holiday_calendar.country_code
- and demand_dates.dt = holiday_calendar.dt
+    dates.dataset_source,
+    dates.location_id,
+    dates.dt,
+    cast(strftime(dates.dt, '%u') as integer) - 1 as day_of_week,
+    cast(strftime(dates.dt, '%V') as integer) as week_of_year,
+    cast(strftime(dates.dt, '%m') as integer) as month,
+    cast(ceil(cast(strftime(dates.dt, '%m') as integer) / 3.0) as integer) as quarter,
+    cast(strftime(dates.dt, '%Y') as integer) as year,
+    cast(strftime(dates.dt, '%u') as integer) in (6, 7) as weekend_flag,
+    cast(strftime(dates.dt, '%d') as integer) <= 3 as month_start_flag,
+    cast(strftime(dates.dt + interval 1 day, '%m') as integer) != cast(strftime(dates.dt, '%m') as integer) as month_end_flag,
+    coalesce(country_calendar.holiday_flag, false) as public_holiday_flag,
+    coalesce(country_calendar.pre_holiday_flag, false) as pre_public_holiday_flag,
+    coalesce(country_calendar.post_holiday_flag, false) as post_public_holiday_flag,
+    coalesce(country_calendar.bridge_day_flag, false) as bridge_day_flag,
+    coalesce(school_calendar.school_holiday_flag, false) as school_holiday_flag,
+    coalesce(school_calendar.school_holiday_available_flag, false) as school_holiday_available_flag,
+    case when country_calendar.holiday_name is null then 0 else 1 end as event_count_local,
+    case when country_calendar.holiday_name is null then 0.0 else 1.0 end as event_intensity_score
+from location_dates as dates
+left join country_calendar
+  on dates.country_code = country_calendar.country_code
+ and dates.dt = country_calendar.dt
+left join school_calendar
+  on dates.dataset_source = school_calendar.dataset_source
+ and dates.location_id = school_calendar.location_id
+ and dates.dt = school_calendar.dt

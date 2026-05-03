@@ -41,7 +41,21 @@ select
     cast(null as double) as weather_temperature,
     cast(null as double) as weather_humidity,
     cast(null as double) as weather_wind_level,
-    min(silver_run_id) as silver_run_id
+    min(silver_run_id) as silver_run_id,
+    max(source_name) as source_name,
+    max(source_policy_id) as source_policy_id,
+    max(source_file_path) as source_file_path,
+    max(source_loaded_at) as source_loaded_at,
+    false as observed_demand_missing_flag,
+    false as observed_demand_parse_error_flag,
+    'observed_sales' as target_semantics_raw,
+    false as target_semantics_parse_error_flag,
+    false as label_quality_missing_flag,
+    false as label_quality_parse_error_flag,
+    false as usable_for_training_missing_flag,
+    false as censor_flag_missing_flag,
+    false as observed_stockout_available_missing_flag,
+    'real' as data_origin
 from {{ ref("silver_bakery_order_lines") }}
 group by
     dataset_source,

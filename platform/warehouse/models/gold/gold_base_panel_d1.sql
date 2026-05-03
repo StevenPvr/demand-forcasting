@@ -2,7 +2,9 @@
 
 with source_rows as (
     select *
-    from {{ ref("silver_daily_product_demand") }}
+    from {{ ref("silver_daily_product_demand_training_candidates") }}
+    where observed_demand_qty is not null
+      and target_semantics is not null
 ),
 location_metadata as (
     select *

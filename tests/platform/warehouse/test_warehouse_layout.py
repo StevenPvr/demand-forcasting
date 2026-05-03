@@ -39,6 +39,11 @@ class WarehouseLayoutTests(unittest.TestCase):
             PROJECT_ROOT
             / "platform"
             / "warehouse"
+            / "macros"
+            / "praedixa_canonical_source_id.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
             / "models"
             / "bronze_sources"
             / "sources.yml",
@@ -48,6 +53,42 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "models"
             / "silver"
             / "silver_daily_product_demand.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_daily_product_demand_all.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_daily_product_demand_training_candidates.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_daily_product_demand_dedup_audit.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_date_spine.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_location_date_spine.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_series_date_spine.sql",
             PROJECT_ROOT
             / "platform"
             / "warehouse"
@@ -155,6 +196,18 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "warehouse"
             / "models"
             / "gold"
+            / "gold_training_feature_matrix_d1.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "gold"
+            / "gold_inference_feature_matrix_d1.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "gold"
             / "gold_model_training_panel_d1.sql",
             PROJECT_ROOT / "platform" / "warehouse" / "models" / "gold" / "schema.yml",
             PROJECT_ROOT / "apps" / "warehouse" / "main.py",
@@ -178,19 +231,36 @@ class WarehouseLayoutTests(unittest.TestCase):
         )
         sql = model_path.read_text(encoding="utf-8")
 
-        self.assertIn("silver_synthetic_foodservice_daily_product_demand", sql)
-        self.assertIn("silver_bakery_daily_product_demand", sql)
-        self.assertNotIn("silver_supplemental_corpus_daily_product_demand", sql)
-        self.assertNotIn("silver_freshretail_daily_product_demand", sql)
-        self.assertIn(
-            "where unioned.dataset_source in ('bakery') "
-            "or unioned.dataset_source like 'synthetic_foodservice%'",
-            sql,
+        self.assertIn("silver_daily_product_demand_training_candidates", sql)
+        self.assertNotIn("select *", sql.lower())
+
+        all_path = (
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_daily_product_demand_all.sql"
         )
-        self.assertIn("silver_allowed_training_dataset_sources", sql)
-        self.assertIn("source_priority", sql)
-        self.assertIn("partition by dataset_source, dt, location_id, product_id", sql)
-        self.assertIn("where source_rank = 1", sql)
+        candidates_path = (
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_daily_product_demand_training_candidates.sql"
+        )
+        all_sql = all_path.read_text(encoding="utf-8")
+        candidates_sql = candidates_path.read_text(encoding="utf-8")
+
+        self.assertIn("silver_synthetic_foodservice_daily_product_demand", all_sql)
+        self.assertIn("silver_bakery_daily_product_demand", all_sql)
+        self.assertNotIn("silver_freshretail_daily_product_demand", all_sql)
+        self.assertNotIn("select\n        20 as source_priority,\n        *", all_sql)
+        self.assertIn("partition by dataset_source, dt, location_id, product_id", all_sql)
+        self.assertIn("where source_rank = 1", all_sql)
+        self.assertIn("silver_allowed_training_dataset_sources", candidates_sql)
+        self.assertIn("dataset_source like 'synthetic_foodservice%'", candidates_sql)
 
     def test_gold_feature_panel_unions_bakery_and_synthetic_slices(self) -> None:
         panel_path = (
@@ -403,6 +473,54 @@ class WarehouseLayoutTests(unittest.TestCase):
 
         self.assertIn("holiday_name", sql)
         self.assertNotIn("school_holiday_name", sql)
+
+    def test_silver_provider_joins_use_canonical_source_id_without_or(self) -> None:
+        model_paths = [
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_open_weather_daily.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_open_location_metadata.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_location_catchment.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_open_public_holiday_calendar_daily.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_open_school_holidays_daily.sql",
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "silver"
+            / "silver_open_macro_country_daily.sql",
+        ]
+
+        for model_path in model_paths:
+            sql = model_path.read_text(encoding="utf-8")
+            self.assertIn("praedixa_canonical_source_id", sql, model_path)
+            self.assertNotIn(" or stg.source_name = allowed.source_id", sql.lower())
+            self.assertNotIn(" or holidays.source_name = allowed.source_id", sql.lower())
+            self.assertNotIn(" or annual.source_name = allowed.source_id", sql.lower())
+            self.assertNotIn(" or timeseries.source_name = allowed.source_id", sql.lower())
 
 
 if __name__ == "__main__":

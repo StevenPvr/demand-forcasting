@@ -7,4 +7,4 @@ select
     notes
 from {{ ref("silver_source_registry") }}
 where source_kind = 'provider'
-  and review_status <> 'allowed'
+  and coalesce(review_status, 'unreviewed') <> 'allowed'

@@ -3,6 +3,7 @@
 select
     dataset_source,
     location_id,
+    timezone,
     drive_through_flag,
     delivery_flag,
     pickup_flag

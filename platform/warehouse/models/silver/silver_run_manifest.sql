@@ -1,12 +1,15 @@
-{{ config(tags=["silver", "quality"], materialized="view") }}
+{{ config(tags=["silver", "quality"], materialized="table") }}
 
 select
-    '{{ env_var("PRAEDIXA_SILVER_RUN_ID", "manual") }}' as silver_run_id,
+    coalesce(silver_run_id, 'unknown') as silver_run_id,
     dataset_source,
     min(dt) as start_date,
     max(dt) as end_date,
     count(*) as row_count,
     count(distinct series_id) as series_count,
-    now() as computed_at
-from {{ ref("silver_daily_product_demand") }}
-group by dataset_source
+    min(source_loaded_at) as first_source_loaded_at,
+    max(source_loaded_at) as last_source_loaded_at
+from {{ ref("silver_daily_product_demand_training_candidates") }}
+group by
+    coalesce(silver_run_id, 'unknown'),
+    dataset_source

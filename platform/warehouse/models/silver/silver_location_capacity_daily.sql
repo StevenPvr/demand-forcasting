@@ -4,10 +4,9 @@ select
     dataset_source,
     location_id,
     dt,
-    false as channel_disabled_flag,
-    false as order_cutoff_flag
-from {{ ref("silver_daily_product_demand") }}
-group by
-    dataset_source,
-    location_id,
-    dt
+    cast(null as boolean) as channel_disabled_flag,
+    cast(null as boolean) as order_cutoff_flag,
+    false as capacity_available_flag,
+    'default_assumption' as capacity_source,
+    true as assumption_flag
+from {{ ref("silver_location_date_spine") }}

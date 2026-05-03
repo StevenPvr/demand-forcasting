@@ -230,3 +230,23 @@ models:
               - dt
               - location_id
               - product_id
+
+  - name: gold_training_feature_matrix_d1
+    description: "Alias explicite de la matrice training D+1 consommable par les entraînements."
+    columns:
+      - name: dataset_source
+        tests:
+          - not_null
+      - name: target_demand_qty_d_plus_1
+        tests:
+          - not_null
+      - name: usable_for_training_flag
+        tests:
+          - not_null
+
+  - name: gold_inference_feature_matrix_d1
+    description: "Contrat séparé pour les features d'inférence D+1; ne porte pas la cible future."
+    columns:
+      - name: dataset_source
+      - name: target_semantics
+      - name: usable_for_training_flag

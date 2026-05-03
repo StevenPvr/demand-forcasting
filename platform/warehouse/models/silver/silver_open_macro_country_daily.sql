@@ -2,22 +2,10 @@
 
 with demand_dates as (
     select distinct
-        metadata.country_code,
-        demand.dt
-    from {{ ref("silver_daily_product_demand") }} as demand
-    inner join {{ ref("silver_open_location_metadata") }} as metadata
-      on demand.dataset_source = metadata.dataset_source
-     and demand.location_id = metadata.location_id
-
-    union
-
-    select distinct
-        metadata.country_code,
-        demand.dt + interval 1 day as dt
-    from {{ ref("silver_daily_product_demand") }} as demand
-    inner join {{ ref("silver_open_location_metadata") }} as metadata
-      on demand.dataset_source = metadata.dataset_source
-     and demand.location_id = metadata.location_id
+        country_code,
+        dt
+    from {{ ref("silver_location_date_spine") }}
+    where country_code is not null
 ),
 country_bounds as (
     select
@@ -40,12 +28,13 @@ macro_series as (
         country_code,
         metric_name,
         effective_from,
+        available_from,
+        available_from_assumption_flag,
         metric_value,
         2 as source_priority
     from {{ ref("stg_open_macro_annual") }} as annual
     inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on coalesce(annual.source_policy_id, annual.source_name) = allowed.source_id
-       or annual.source_name = allowed.source_id
+      on {{ praedixa_canonical_source_id("annual.source_policy_id", "annual.source_name") }} = allowed.source_id
 
     union all
 
@@ -53,12 +42,13 @@ macro_series as (
         country_code,
         metric_name,
         effective_from,
+        available_from,
+        available_from_assumption_flag,
         metric_value,
         1 as source_priority
     from {{ ref("stg_open_macro_timeseries") }} as timeseries
     inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on coalesce(timeseries.source_policy_id, timeseries.source_name) = allowed.source_id
-       or timeseries.source_name = allowed.source_id
+      on {{ praedixa_canonical_source_id("timeseries.source_policy_id", "timeseries.source_name") }} = allowed.source_id
 ),
 candidate_values as (
     select
@@ -67,6 +57,8 @@ candidate_values as (
         macro.metric_name,
         macro.metric_value,
         macro.effective_from,
+        macro.available_from,
+        macro.available_from_assumption_flag,
         row_number() over (
             partition by dates.country_code, dates.dt, macro.metric_name
             order by macro.effective_from desc, macro.source_priority asc
@@ -75,13 +67,15 @@ candidate_values as (
     left join macro_series as macro
       on dates.country_code = macro.country_code
      and macro.effective_from <= dates.dt
+     and macro.available_from <= dates.dt
 ),
 latest_values as (
     select
         country_code,
         dt,
         metric_name,
-        metric_value
+        metric_value,
+        available_from_assumption_flag
     from candidate_values
     where recency_rank = 1
 )
@@ -107,7 +101,8 @@ select
         or max(case when metric_name = 'fr_cpi_yoy_latest' then metric_value end) is not null
         or max(case when metric_name = 'fr_food_cpi_yoy_latest' then metric_value end) is not null
         or max(case when metric_name = 'fr_retail_food_volume_index_latest' then metric_value end) is not null
-    ) as macro_available
+    ) as macro_available,
+    bool_or(coalesce(available_from_assumption_flag, false)) as macro_available_from_assumption_flag
 from latest_values
 group by
     country_code,
