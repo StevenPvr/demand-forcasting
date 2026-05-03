@@ -26,6 +26,9 @@ _bootstrap_import_paths()
 
 
 def main() -> None:
+    from praedixa.demand_forecast.contracts.targets import (
+        DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
+    )
     from praedixa.demand_forecast.evaluation.pipeline import (
         EvaluationBuildRequest,
         build_evaluation_outputs,
@@ -38,6 +41,7 @@ def main() -> None:
     build_evaluation_outputs(
         EvaluationBuildRequest(
             model_backend="xgboost",
+            target_col=DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
         )
     )
 

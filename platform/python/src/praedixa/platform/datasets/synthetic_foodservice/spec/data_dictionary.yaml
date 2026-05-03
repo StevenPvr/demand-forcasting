@@ -1,0 +1,1306 @@
+# Restaurant simulator — relational schema (tables A–T + extensions).
+# Convention: amounts decimal(10,2); vat_rate decimal(5,4); levels 0–3 unless noted.
+# schema_version must match schema_version.SCHEMA_VERSION when materialized.
+schema_version: "1.0.0"
+conventions:
+  id_string: "Human-readable or UUID, stable within a simulation_id run unless export corruption applies."
+  money_eur: "decimal(10,2) — TTC or HT per column name."
+  timestamptz: "ISO-8601 with timezone; DST transitions must be scenario-configurable."
+  flag: "boolean; in dirty export may appear 0/1 smallint."
+  level_0_3: "tinyint 0–3 ordinal (e.g. dependency intensity)."
+  level_0_1: "float 0.0–1.0 for probabilities or shares."
+
+enums:
+  business_type:
+    - traditional_restaurant
+    - brasserie
+    - fast_food
+    - bakery
+    - pastry_shop
+    - sandwich_shop
+    - coffee_shop
+    - snack
+    - dark_kitchen
+    - seasonal_tourist
+  activity_size:
+    - tiny
+    - small
+    - medium
+    - large
+    - xlarge
+    - extreme_peaks
+  city_type:
+    - village
+    - small_town
+    - medium_city
+    - large_city
+    - hypercenter
+    - suburb
+  location_type:
+    - office_district
+    - student_zone
+    - touristic
+    - mall_shopping_center
+    - train_station
+    - airport
+    - residential
+    - industrial
+    - transit
+    - premium_quarter
+    - popular_quarter
+  structure:
+    - independent_single
+    - franchise_single
+    - franchise_multi
+    - integrated_chain
+    - dark_kitchen_multi_brand
+    - family_run
+  positioning:
+    - budget
+    - mid
+    - premium
+    - single_product_focus
+    - short_menu
+    - wide_catalog
+    - dine_in
+    - takeaway
+    - delivery
+    - mixed
+    - lunch_only
+    - lunch_dinner
+    - late_night
+    - open_7d
+    - partial_week
+  sales_channel:
+    - on_site
+    - takeaway
+    - delivery_own
+    - uber_eats
+    - deliveroo
+    - just_eat
+    - other_platform
+  promotion_type:
+    - percent_off
+    - fixed_off
+    - bxgy
+    - bundle
+    - menu
+    - happy_hour
+    - platform_subsidy
+    - waste_reduction
+    - other
+  inventory_movement_type:
+    - inbound
+    - outbound_sale
+    - outbound_waste
+    - outbound_transfer
+    - adjustment_up
+    - adjustment_down
+    - production_output
+    - correction
+  stockout_type:
+    - finished_good
+    - ingredient
+    - supplier
+    - undetected
+    - detected_unrecorded
+    - short
+    - long
+    - partial
+    - channel_only
+  waste_reason:
+    - expiry
+    - overproduction
+    - damaged
+    - quality
+    - donation
+    - unrecorded_loss
+    - other
+  closure_reason:
+    - public_holiday
+    - private_event
+    - staffing
+    - equipment
+    - renovation
+    - supply
+    - regulatory
+    - weather
+    - other
+  local_event_type:
+    - sport
+    - concert
+    - fair
+    - market
+    - festival
+    - protest
+    - strike
+    - construction
+    - transport_disruption
+    - competitor_open
+    - competitor_close
+    - reputation
+    - extreme_weather
+    - health_crisis
+    - inflation_shock
+    - regulatory
+    - other
+  impact_direction:
+    - positive
+    - negative
+    - mixed
+
+tables:
+  locations:
+    description: "Shared geography for weather/events when multiple sites sit in the same metro area."
+    columns:
+      location_id:
+        type: string
+        pk: true
+        nullable: false
+      country:
+        type: string
+        nullable: false
+      region:
+        type: string
+        nullable: true
+      city_name:
+        type: string
+        nullable: true
+      geo_lat:
+        type: float
+        nullable: true
+      geo_lon:
+        type: float
+        nullable: true
+      timezone:
+        type: string
+        nullable: false
+    foreign_keys: []
+
+  sites:
+    description: "A — Establishments."
+    columns:
+      site_id:
+        type: string
+        pk: true
+        nullable: false
+      location_id:
+        type: string
+        nullable: false
+        fk: locations.location_id
+      site_name:
+        type: string
+        nullable: false
+      business_type:
+        type: enum.business_type
+        nullable: false
+      city_type:
+        type: enum.city_type
+        nullable: false
+      location_type:
+        type: enum.location_type
+        nullable: false
+      positioning:
+        type: string
+        nullable: false
+        notes: "Comma-separated or JSON list of enum.positioning values for mixed modes."
+      structure:
+        type: enum.structure
+        nullable: false
+      franchise_flag:
+        type: boolean
+        nullable: false
+      network_id:
+        type: string
+        nullable: true
+      opening_date:
+        type: date
+        nullable: false
+      closing_date:
+        type: date
+        nullable: true
+      surface_area_m2:
+        type: float
+        nullable: true
+      seating_capacity:
+        type: int
+        nullable: true
+      kitchen_capacity_level:
+        type: int
+        nullable: false
+        notes: "Ordinal 1–5 kitchen throughput tier."
+      average_daily_traffic_level:
+        type: int
+        nullable: false
+        notes: "Ordinal footfall / demand driver 0–3."
+      delivery_available_flag:
+        type: boolean
+        nullable: false
+      takeaway_available_flag:
+        type: boolean
+        nullable: false
+      terrace_flag:
+        type: boolean
+        nullable: false
+      tourism_dependency_level:
+        type: int
+        nullable: false
+        notes: "0–3"
+      office_dependency_level:
+        type: int
+        nullable: false
+      student_dependency_level:
+        type: int
+        nullable: false
+      weather_sensitivity_level:
+        type: int
+        nullable: false
+      event_sensitivity_level:
+        type: int
+        nullable: false
+      data_quality_level:
+        type: string
+        nullable: false
+        notes: "Maps to export corruption profile: high, medium, medium_low, low."
+    foreign_keys:
+      - column: location_id
+        references: locations.location_id
+
+  delivery_zones:
+    description: "Optional delivery polygons / radii for dark kitchen and platform routing."
+    columns:
+      delivery_zone_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      zone_label:
+        type: string
+        nullable: true
+      center_lat:
+        type: float
+        nullable: true
+      center_lon:
+        type: float
+        nullable: true
+      radius_km:
+        type: float
+        nullable: true
+      notes:
+        type: string
+        nullable: true
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  pos_versions:
+    description: "POS software version windows; drives mapping degradation and export quirks."
+    columns:
+      pos_version_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      pos_system_name:
+        type: string
+        nullable: false
+      valid_from:
+        type: timestamptz
+        nullable: false
+      valid_to:
+        type: timestamptz
+        nullable: true
+      mapping_quality_score:
+        type: float
+        nullable: false
+        notes: "0–1 lower means more ID churn and category drift in export layer."
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  product_id_mappings:
+    description: "SKU lineage for renamed, split, merged products (POS instability)."
+    columns:
+      mapping_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: true
+        fk: sites.site_id
+      network_id:
+        type: string
+        nullable: true
+      old_product_id:
+        type: string
+        nullable: false
+      new_product_id:
+        type: string
+        nullable: false
+      effective_from:
+        type: timestamptz
+        nullable: false
+      effective_to:
+        type: timestamptz
+        nullable: true
+      mapping_reason:
+        type: string
+        nullable: true
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  product_categories:
+    description: "C — Product category hierarchy."
+    columns:
+      category_id:
+        type: string
+        pk: true
+        nullable: false
+      category_name:
+        type: string
+        nullable: false
+      parent_category_id:
+        type: string
+        nullable: true
+        fk: product_categories.category_id
+      typical_margin_level:
+        type: int
+        nullable: true
+        notes: "0–3"
+      typical_shelf_life:
+        type: string
+        nullable: true
+        notes: "e.g. short_perishable, daily, ambient"
+      weather_sensitivity:
+        type: string
+        nullable: true
+      seasonality_type:
+        type: string
+        nullable: true
+      typical_sales_pattern:
+        type: string
+        nullable: true
+    foreign_keys: []
+
+  products:
+    description: "B — Sellable items."
+    columns:
+      product_id:
+        type: string
+        pk: true
+        nullable: false
+      product_name:
+        type: string
+        nullable: false
+      category:
+        type: string
+        nullable: false
+        fk: product_categories.category_id
+      sub_category:
+        type: string
+        nullable: true
+      product_type:
+        type: string
+        nullable: false
+      site_id:
+        type: string
+        nullable: true
+        fk: sites.site_id
+      network_product_id:
+        type: string
+        nullable: true
+      launch_date:
+        type: date
+        nullable: false
+      end_date:
+        type: date
+        nullable: true
+      active_flag:
+        type: boolean
+        nullable: false
+      seasonal_flag:
+        type: boolean
+        nullable: false
+      permanent_flag:
+        type: boolean
+        nullable: false
+      rare_product_flag:
+        type: boolean
+        nullable: false
+      best_seller_flag:
+        type: boolean
+        nullable: false
+      premium_flag:
+        type: boolean
+        nullable: false
+      preparation_time_seconds:
+        type: int
+        nullable: true
+      shelf_life_hours:
+        type: float
+        nullable: true
+      cold_product_flag:
+        type: boolean
+        nullable: false
+      hot_product_flag:
+        type: boolean
+        nullable: false
+      delivery_compatible_flag:
+        type: boolean
+        nullable: false
+      substitution_group_id:
+        type: string
+        nullable: true
+      complement_group_id:
+        type: string
+        nullable: true
+      lifecycle_state:
+        type: string
+        nullable: true
+        notes: "new | ramp_up | stable | best_seller | decline | retired | replaced | renamed | merged"
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: category
+        references: product_categories.category_id
+
+  reservations:
+    description: "Optional table for traditional restaurant covers and no-shows."
+    columns:
+      reservation_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      reservation_datetime:
+        type: timestamptz
+        nullable: false
+      party_size:
+        type: int
+        nullable: false
+      table_id:
+        type: string
+        nullable: true
+      no_show_flag:
+        type: boolean
+        nullable: false
+      cancelled_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  prices:
+    description: "D — SCD Type 2 price history."
+    columns:
+      price_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      channel:
+        type: string
+        nullable: true
+        notes: "null = default list price for all channels if simulator uses single list."
+      start_datetime:
+        type: timestamptz
+        nullable: false
+      end_datetime:
+        type: timestamptz
+        nullable: true
+      price_ttc:
+        type: money_eur
+        nullable: false
+      price_ht:
+        type: money_eur
+        nullable: false
+      vat_rate:
+        type: decimal
+        nullable: false
+      price_change_reason:
+        type: string
+        nullable: true
+      rounded_price_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  promotions:
+    description: "E — Commercial offers."
+    columns:
+      promotion_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: true
+        fk: products.product_id
+      promotion_type:
+        type: enum.promotion_type
+        nullable: false
+      start_datetime:
+        type: timestamptz
+        nullable: false
+      end_datetime:
+        type: timestamptz
+        nullable: false
+      discount_rate:
+        type: float
+        nullable: true
+      discount_amount:
+        type: money_eur
+        nullable: true
+      bundle_flag:
+        type: boolean
+        nullable: false
+      menu_flag:
+        type: boolean
+        nullable: false
+      channel:
+        type: string
+        nullable: true
+      promotion_intensity:
+        type: float
+        nullable: true
+        notes: "0–1 lifts latent demand multiplier."
+      planned_flag:
+        type: boolean
+        nullable: false
+      actually_applied_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  opening_hours:
+    description: "F — Theoretical opening by day and service."
+    columns:
+      opening_hours_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      day_of_week:
+        type: int
+        nullable: false
+        notes: "0=Monday .. 6=Sunday"
+      opening_time:
+        type: string
+        nullable: false
+        notes: "HH:MM local"
+      closing_time:
+        type: string
+        nullable: false
+      service_type:
+        type: string
+        nullable: false
+        notes: "breakfast | lunch | dinner | continuous | cafe | bakery_morning"
+      valid_from:
+        type: date
+        nullable: false
+      valid_to:
+        type: date
+        nullable: true
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  closures:
+    description: "G — Exceptional closures."
+    columns:
+      closure_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      start_datetime:
+        type: timestamptz
+        nullable: false
+      end_datetime:
+        type: timestamptz
+        nullable: false
+      closure_reason:
+        type: enum.closure_reason
+        nullable: false
+      planned_flag:
+        type: boolean
+        nullable: false
+      visible_in_source_data_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  sales_tickets:
+    description: "H — POS tickets."
+    columns:
+      ticket_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      datetime:
+        type: timestamptz
+        nullable: false
+      date:
+        type: date
+        nullable: false
+      time:
+        type: string
+        nullable: false
+        notes: "HH:MM:SS local snapshot; may disagree with datetime in dirty export."
+      time_bucket_15min:
+        type: string
+        nullable: false
+        notes: "e.g. 2026-04-28T12:00:00+02:00 slot label or HH:MM interval key."
+      channel:
+        type: enum.sales_channel
+        nullable: false
+      order_type:
+        type: string
+        nullable: true
+      delivery_platform:
+        type: string
+        nullable: true
+      table_id:
+        type: string
+        nullable: true
+      customer_type:
+        type: string
+        nullable: true
+      total_amount_ttc:
+        type: money_eur
+        nullable: false
+      total_amount_ht:
+        type: money_eur
+        nullable: false
+      total_discount:
+        type: money_eur
+        nullable: false
+      payment_method:
+        type: string
+        nullable: true
+      cancelled_flag:
+        type: boolean
+        nullable: false
+      refunded_flag:
+        type: boolean
+        nullable: false
+      correction_flag:
+        type: boolean
+        nullable: false
+      pos_system_id:
+        type: string
+        nullable: true
+      cashier_id:
+        type: string
+        nullable: true
+      data_anomaly_flags:
+        type: string
+        nullable: true
+        notes: "Optional JSON for intentional POS corruption audit."
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  sales_lines:
+    description: "I — Ticket lines."
+    columns:
+      sales_line_id:
+        type: string
+        pk: true
+        nullable: false
+      ticket_id:
+        type: string
+        nullable: false
+        fk: sales_tickets.ticket_id
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      datetime:
+        type: timestamptz
+        nullable: false
+      quantity:
+        type: float
+        nullable: false
+      unit_price_ttc:
+        type: money_eur
+        nullable: false
+      unit_price_ht:
+        type: money_eur
+        nullable: false
+      line_amount_ttc:
+        type: money_eur
+        nullable: false
+      line_amount_ht:
+        type: money_eur
+        nullable: false
+      discount_amount:
+        type: money_eur
+        nullable: false
+      promotion_id:
+        type: string
+        nullable: true
+        fk: promotions.promotion_id
+      returned_flag:
+        type: boolean
+        nullable: false
+      cancelled_flag:
+        type: boolean
+        nullable: false
+      menu_component_flag:
+        type: boolean
+        nullable: false
+      bundle_id:
+        type: string
+        nullable: true
+    foreign_keys:
+      - column: ticket_id
+        references: sales_tickets.ticket_id
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+      - column: promotion_id
+        references: promotions.promotion_id
+
+  weather:
+    description: "J — Local weather series."
+    columns:
+      weather_id:
+        type: string
+        pk: true
+        nullable: false
+      location_id:
+        type: string
+        nullable: false
+        fk: locations.location_id
+      site_id:
+        type: string
+        nullable: true
+        fk: sites.site_id
+        notes: "Optional denormalized copy for single-site exports."
+      datetime:
+        type: timestamptz
+        nullable: false
+      date:
+        type: date
+        nullable: false
+      temperature:
+        type: float
+        nullable: true
+      apparent_temperature:
+        type: float
+        nullable: true
+      rain_mm:
+        type: float
+        nullable: true
+      snow_flag:
+        type: boolean
+        nullable: false
+      wind_speed:
+        type: float
+        nullable: true
+      humidity:
+        type: float
+        nullable: true
+      sunshine_duration:
+        type: float
+        nullable: true
+      weather_condition:
+        type: string
+        nullable: true
+      heatwave_flag:
+        type: boolean
+        nullable: false
+      cold_wave_flag:
+        type: boolean
+        nullable: false
+      storm_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: location_id
+        references: locations.location_id
+      - column: site_id
+        references: sites.site_id
+
+  local_events:
+    description: "K — External shocks and local demand drivers."
+    columns:
+      event_id:
+        type: string
+        pk: true
+        nullable: false
+      location_id:
+        type: string
+        nullable: false
+        fk: locations.location_id
+      site_id:
+        type: string
+        nullable: true
+        fk: sites.site_id
+      event_name:
+        type: string
+        nullable: false
+      event_type:
+        type: enum.local_event_type
+        nullable: false
+      start_datetime:
+        type: timestamptz
+        nullable: false
+      end_datetime:
+        type: timestamptz
+        nullable: false
+      expected_attendance:
+        type: int
+        nullable: true
+      distance_to_site_km:
+        type: float
+        nullable: true
+      impact_radius_km:
+        type: float
+        nullable: true
+      expected_impact_direction:
+        type: enum.impact_direction
+        nullable: false
+      expected_impact_strength:
+        type: float
+        nullable: false
+        notes: "0–1"
+      affected_channels:
+        type: string
+        nullable: true
+        notes: "JSON list of channels or category tags."
+      recovery_halflife_days:
+        type: float
+        nullable: true
+    foreign_keys:
+      - column: location_id
+        references: locations.location_id
+      - column: site_id
+        references: sites.site_id
+
+  holidays:
+    description: "L — Calendar context."
+    columns:
+      date:
+        type: date
+        pk: true
+        nullable: false
+        notes: "Composite key with country in practice — use holiday_row_id if needed."
+      country:
+        type: string
+        pk: true
+        nullable: false
+      region:
+        type: string
+        pk: true
+        nullable: false
+        notes: "Use empty string for country-wide."
+      holiday_name:
+        type: string
+        nullable: true
+      public_holiday_flag:
+        type: boolean
+        nullable: false
+      school_holiday_flag:
+        type: boolean
+        nullable: false
+      vacation_zone:
+        type: string
+        nullable: true
+      bridge_day_flag:
+        type: boolean
+        nullable: false
+      payday_period_flag:
+        type: boolean
+        nullable: false
+      special_calendar_flag:
+        type: boolean
+        nullable: false
+    foreign_keys: []
+
+  inventory_movements:
+    description: "M — Stock and ingredient movements."
+    columns:
+      movement_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: true
+        fk: products.product_id
+      ingredient_id:
+        type: string
+        nullable: true
+      datetime:
+        type: timestamptz
+        nullable: false
+      movement_type:
+        type: enum.inventory_movement_type
+        nullable: false
+      quantity:
+        type: float
+        nullable: false
+      unit:
+        type: string
+        nullable: false
+      reason:
+        type: string
+        nullable: true
+      supplier_id:
+        type: string
+        nullable: true
+      theoretical_flag:
+        type: boolean
+        nullable: false
+      manual_adjustment_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  stock_snapshots:
+    description: "N — Point-in-time stock state."
+    columns:
+      snapshot_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: true
+        fk: products.product_id
+      ingredient_id:
+        type: string
+        nullable: true
+      datetime:
+        type: timestamptz
+        nullable: false
+      theoretical_stock_qty:
+        type: float
+        nullable: false
+      observed_stock_qty:
+        type: float
+        nullable: true
+      stock_quality_flag:
+        type: string
+        nullable: true
+      inventory_error_level:
+        type: float
+        nullable: true
+        notes: "0–1 severity of count discrepancy."
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  stockouts:
+    description: "O — Out-of-stock episodes."
+    columns:
+      stockout_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      start_datetime:
+        type: timestamptz
+        nullable: false
+      end_datetime:
+        type: timestamptz
+        nullable: false
+      stockout_type:
+        type: enum.stockout_type
+        nullable: false
+      detected_flag:
+        type: boolean
+        nullable: false
+      visible_in_pos_flag:
+        type: boolean
+        nullable: false
+      estimated_lost_sales_internal:
+        type: float
+        nullable: true
+      substitution_observed_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  production_batches:
+    description: "P — Production (e.g. bakery batches)."
+    columns:
+      batch_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      datetime_start:
+        type: timestamptz
+        nullable: false
+      datetime_end:
+        type: timestamptz
+        nullable: false
+      produced_qty:
+        type: float
+        nullable: false
+      batch_size:
+        type: float
+        nullable: false
+      production_reason:
+        type: string
+        nullable: true
+      staff_id:
+        type: string
+        nullable: true
+      waste_expected_qty:
+        type: float
+        nullable: true
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  waste:
+    description: "Q — Shrinkage and unsold."
+    columns:
+      waste_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      datetime:
+        type: timestamptz
+        nullable: false
+      quantity_wasted:
+        type: float
+        nullable: false
+      waste_reason:
+        type: enum.waste_reason
+        nullable: false
+      expired_flag:
+        type: boolean
+        nullable: false
+      overproduction_flag:
+        type: boolean
+        nullable: false
+      damaged_flag:
+        type: boolean
+        nullable: false
+      donation_flag:
+        type: boolean
+        nullable: false
+      recorded_flag:
+        type: boolean
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  staff_schedules:
+    description: "R — Planned vs actual staffing (capacity drivers only)."
+    columns:
+      schedule_id:
+        type: string
+        pk: true
+        nullable: false
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      staff_role:
+        type: string
+        nullable: false
+      planned_start_datetime:
+        type: timestamptz
+        nullable: false
+      planned_end_datetime:
+        type: timestamptz
+        nullable: false
+      actual_start_datetime:
+        type: timestamptz
+        nullable: true
+      actual_end_datetime:
+        type: timestamptz
+        nullable: true
+      absence_flag:
+        type: boolean
+        nullable: false
+      delay_minutes:
+        type: int
+        nullable: true
+      temporary_worker_flag:
+        type: boolean
+        nullable: false
+      productivity_level:
+        type: float
+        nullable: false
+        notes: "0–1 multiplier vs baseline experienced worker."
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+
+  latent_demand_internal:
+    description: "S — Simulator ground truth demand before censoring (not POS sales)."
+    columns:
+      site_id:
+        type: string
+        nullable: false
+        fk: sites.site_id
+      product_id:
+        type: string
+        nullable: false
+        fk: products.product_id
+      datetime:
+        type: timestamptz
+        nullable: false
+      latent_demand_qty:
+        type: float
+        nullable: false
+      demand_driver_weather_effect:
+        type: float
+        nullable: true
+      demand_driver_event_effect:
+        type: float
+        nullable: true
+      demand_driver_price_effect:
+        type: float
+        nullable: true
+      demand_driver_promotion_effect:
+        type: float
+        nullable: true
+      demand_driver_seasonality_effect:
+        type: float
+        nullable: true
+      random_noise:
+        type: float
+        nullable: true
+      internal_only_flag:
+        type: boolean
+        nullable: false
+        notes: "Always true; separate export bundle for audits."
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id
+      - column: product_id
+        references: products.product_id
+
+  simulation_parameters:
+    description: "T — Run configuration audit trail (atomic rows preferred)."
+    columns:
+      simulation_id:
+        type: string
+        nullable: false
+      site_id:
+        type: string
+        nullable: true
+        fk: sites.site_id
+      parameter_name:
+        type: string
+        nullable: false
+      parameter_value:
+        type: string
+        nullable: false
+        notes: "JSON-encoded for complex structures."
+      parameter_distribution:
+        type: string
+        nullable: true
+      seed:
+        type: int
+        nullable: false
+      scenario_name:
+        type: string
+        nullable: true
+      created_at:
+        type: timestamptz
+        nullable: false
+    foreign_keys:
+      - column: site_id
+        references: sites.site_id

@@ -55,7 +55,7 @@ def _synthetic_train_valid_frames() -> tuple[pd.DataFrame, pd.DataFrame, list[st
                     "client_id": group,
                     "location_id": f"loc_{group}",
                     "product_id": f"prod_{group}",
-                    "dataset_source": "freshretail_lt",
+                    "dataset_source": "synthetic_foodservice_qsr",
                     "dt": dt,
                     "rolling_mean_7": float(offset),
                     "target_demand_qty_d_plus_1": float(offset + 1),

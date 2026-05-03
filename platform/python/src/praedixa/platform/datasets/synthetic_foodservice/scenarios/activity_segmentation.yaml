@@ -1,0 +1,43 @@
+# Bounds and simulation notes by activity_size (tickets per day, pre-censoring latent intensity).
+schema_version: "1.0.0"
+segments:
+  tiny:
+    tickets_per_day:
+      min: 10
+      max: 50
+    demand_model: "mixture_poisson_regulars_plus_background"
+    zero_inflation: high
+    data_noise: high
+    notes: "ZIP on SKUs; few recurring customers drive variance; anomalies very visible."
+  small:
+    tickets_per_day:
+      min: 50
+      max: 150
+    weekly_seasonality: strong
+    weather_effect: sometimes_dominant
+    stockout_frequency: high
+    waste_frequency: high
+    catalog_stability: low
+  medium:
+    tickets_per_day:
+      min: 150
+      max: 500
+    intraday_peaks: lunch_and_dinner
+    promotions: occasional
+    stockout_frequency: medium
+  large:
+    tickets_per_day:
+      min: 500
+      max: 1500
+    intraday_resolution: "15min rich"
+    kitchen_saturation: possible
+    delivery_mix: high
+    stockout_on_bestsellers: frequent
+  xlarge:
+    tickets_per_day:
+      min: 1501
+      max: 8000
+    continuous_flow: true
+    channels: multi
+    substitution: high
+    pos_errors: elevated_absolute_count

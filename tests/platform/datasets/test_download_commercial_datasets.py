@@ -30,13 +30,7 @@ class DownloadCommercialDatasetsPlanTests(unittest.TestCase):
 
         entries_by_name = {entry.name: entry for entry in entries}
 
-        self.assertEqual(
-            set(entries_by_name),
-            {
-                "freshretail_lt_train",
-                "freshretail_lt_eval",
-            },
-        )
+        self.assertEqual(set(entries_by_name), set())
         self.assertNotIn("m5_forecasting_accuracy_zenodo", entries_by_name)
         self.assertNotIn("maven_pizza_place_sales", entries_by_name)
         self.assertNotIn("maven_coffee_shop_sales", entries_by_name)

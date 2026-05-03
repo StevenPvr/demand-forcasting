@@ -39,29 +39,7 @@ def _is_missing_country_code(country_code: object) -> bool:
     return False
 
 
-def _fixed_source_metadata(
-    *,
-    country_code: str | None,
-    assumption_source: str,
-    delivery_flag: bool,
-    pickup_flag: bool,
-) -> dict[str, object]:
-    return {
-        "country_code": country_code,
-        "assumption_source": assumption_source,
-        "delivery_flag": delivery_flag,
-        "pickup_flag": pickup_flag,
-    }
-
-
-FIXED_SOURCE_METADATA = {
-    "freshretail_lt": _fixed_source_metadata(
-        country_code="CN",
-        assumption_source="freshretail_lt_without_public_geocoding",
-        delivery_flag=True,
-        pickup_flag=True,
-    ),
-}
+FIXED_SOURCE_METADATA: dict[str, dict[str, object]] = {}
 
 
 def _location_profile_fields(
@@ -113,27 +91,6 @@ def _bakery_location_metadata_row(
     }
 
 
-def _freshretail_location_metadata_row(location: object) -> dict[str, object]:
-    return {
-        DATASET_SOURCE_COL: getattr(location, DATASET_SOURCE_COL),
-        LOCATION_ID_COL: getattr(location, LOCATION_ID_COL),
-        COUNTRY_CODE_COL: "CN",
-        REGION_CODE_COL: getattr(location, REGION_CODE_COL),
-        "city_name": None,
-        "latitude": None,
-        "longitude": None,
-        SCHOOL_ZONE_COL: None,
-        WEATHER_LOCATION_LABEL_COL: None,
-        ASSUMPTION_SOURCE_COL: "freshretail_city_id_without_public_geocoding",
-        **_location_profile_fields(
-            drive_through_flag=False,
-            delivery_flag=True,
-            pickup_flag=True,
-            mall_flag=False,
-            transit_hub_flag=False,
-            tourism_flag=False,
-        ),
-    }
 
 
 def _fixed_country_location_metadata_row(
@@ -183,8 +140,6 @@ def _location_metadata_row(
             bakery_latitude=bakery_latitude,
             bakery_longitude=bakery_longitude,
         )
-    if dataset_source == "freshretail":
-        return _freshretail_location_metadata_row(location)
     spec = FIXED_SOURCE_METADATA.get(str(dataset_source))
     if spec is None:
         return None

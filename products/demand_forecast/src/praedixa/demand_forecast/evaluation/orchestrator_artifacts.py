@@ -62,10 +62,8 @@ class EvaluationRunArtifacts:
 
 
 def _context_model_family(context: EvaluationPreparedContext) -> str:
-    if context.model_backend == "xgboost":
-        return "xgboost"
-    if context.model_backend == "chronos2":
-        return "chronos2"
+    if context.model_backend in {"xgboost", "chronos2", "moirai", "timesfm"}:
+        return context.model_backend
     return "foundation_tft"
 
 
@@ -77,7 +75,7 @@ def evaluation_output_paths(
     prefix = model_family.lower()
     final_model_name = (
         f"{prefix}_final_model.json"
-        if prefix in {"xgboost", "chronos2"}
+        if prefix in {"xgboost", "chronos2", "moirai", "timesfm"}
         else f"{prefix}_final_model.pt"
     )
     return {
@@ -335,6 +333,11 @@ def build_evaluation_metadata_payload(
         "monitor_metric": str(
             context.best_params.get("validation_monitor_metric", "business_val_wape")
         ),
+        "economic_objective_config": context.best_params.get(
+            "segmented_economic_objective_config",
+            context.best_params.get("economic_objective_config"),
+        ),
+        "economic_calibration": context.best_params.get("economic_calibration"),
         "training_eligibility_policy": {
             "usable_for_training_flag": "must_be_true_when_present",
             "censor_flag": "must_be_false_when_present",
@@ -382,6 +385,11 @@ def build_evaluation_model_card_payload(
         "probabilistic_metrics": probabilistic_metrics_payload,
         "business_impact": baseline_savings_payload,
         "economic_gain": economic_gain_payload,
+        "economic_objective_config": context.best_params.get(
+            "segmented_economic_objective_config",
+            context.best_params.get("economic_objective_config"),
+        ),
+        "economic_calibration": context.best_params.get("economic_calibration"),
         "interpretability_path": str(output_paths["interpretability_json"]),
         "interpretability": interpretability_payload,
         "feature_manifest_path": str(output_paths["feature_manifest_json"]),
@@ -468,6 +476,11 @@ def build_promotable_bundle_manifest_payload(
         "monitor_metric": str(
             context.best_params.get("validation_monitor_metric", "business_val_wape")
         ),
+        "economic_objective_config": context.best_params.get(
+            "segmented_economic_objective_config",
+            context.best_params.get("economic_objective_config"),
+        ),
+        "economic_calibration": context.best_params.get("economic_calibration"),
         "runtime_profile": getattr(final_model, "runtime_profile", None),
         "normalization_strategy": getattr(final_model, "normalization_strategy", {}),
         "system_info": getattr(final_model, "system_info", {}),

@@ -30,10 +30,12 @@ def _load_optimisation_main_defaults() -> tuple[
         DEFAULT_OPTIMISATION_MAIN_TRAIN_SAMPLE_FRACTION,
         DEFAULT_OPTIMISATION_MAIN_TUNING_SAMPLE_FRACTION,
     )
-    from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR
+    from praedixa.demand_forecast.feature_selection.paths import (
+        DEFAULT_FEATURE_SELECTION_DIR,
+    )
 
     return (
-        str(TRAINING_BUNDLE_DIR),
+        str(DEFAULT_FEATURE_SELECTION_DIR),
         DEFAULT_MODEL_BACKEND,
         DEFAULT_OPTIMISATION_MAIN_RUNTIME_PROFILE,
         DEFAULT_OPTIMISATION_MAIN_N_FOLDS,

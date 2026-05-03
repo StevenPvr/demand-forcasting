@@ -506,7 +506,6 @@ def evaluate_statistical_baselines_macro(
                 failed_baselines.add(baseline_name)
                 continue
             baseline_results[baseline_name].append(fold_result)
-    report_rows: list[dict[str, object]] = []
     for baseline_name in baseline_names:
         fold_results = baseline_results[baseline_name]
         if baseline_name in failed_baselines or len(fold_results) != len(folds):

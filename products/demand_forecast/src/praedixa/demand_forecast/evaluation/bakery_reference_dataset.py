@@ -76,6 +76,9 @@ def _normalized_reference_source_frame(source_frame: pd.DataFrame) -> pl.DataFra
 
 
 def _dense_reference_frame(source_frame: pl.DataFrame) -> pl.DataFrame:
+    source_frame = source_frame.with_columns(
+        pl.col(REFERENCE_DATE_COL).cast(pl.Datetime("ns"))
+    )
     min_date = source_frame.get_column(REFERENCE_DATE_COL).min()
     max_date = source_frame.get_column(REFERENCE_DATE_COL).max()
     if min_date is None or max_date is None:
@@ -88,6 +91,8 @@ def _dense_reference_frame(source_frame: pl.DataFrame) -> pl.DataFrame:
                 freq="D",
             )
         }
+    ).with_columns(
+        pl.col(REFERENCE_DATE_COL).cast(pl.Datetime("ns"))
     )
     product_frame = source_frame.select(pl.col(REFERENCE_PRODUCT_COL).unique().sort())
     observed_dates = (
@@ -106,7 +111,7 @@ def _dense_reference_frame(source_frame: pl.DataFrame) -> pl.DataFrame:
             [
                 pl.col(REFERENCE_TARGET_COL).fill_null(0.0),
                 (~pl.col(REFERENCE_DATE_COL).is_in(observed_dates.implode())).cast(pl.Int8).alias("is_missing_day"),
-                pl.col("__is_observed_row").fill_null(False).alias("__is_observed_row"),
+                pl.col("__is_observed_row").fill_null(False).alias("is_observed_row"),
             ]
         )
         .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
@@ -151,11 +156,7 @@ def _split_reference_frame(reference_frame: pl.DataFrame) -> tuple[pl.DataFrame,
     val_df = indexed.filter((pl.col("__row_idx") >= pl.col("__train_end")) & (pl.col("__row_idx") < pl.col("__val_end")))
     test_df = indexed.filter(pl.col("__row_idx") >= pl.col("__val_end"))
     drop_cols = ["__row_idx", "__row_count", "__train_end", "__val_len", "__val_end"]
-    return (
-        train_df.drop([*drop_cols, "__is_observed_row"]),
-        val_df.drop([*drop_cols, "__is_observed_row"]),
-        test_df.drop([*drop_cols, "__is_observed_row"]),
-    )
+    return (train_df.drop(drop_cols), val_df.drop(drop_cols), test_df.drop(drop_cols))
 
 
 def _reference_metadata(

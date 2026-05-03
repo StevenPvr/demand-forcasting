@@ -7,13 +7,29 @@ from typing import Any, Callable, cast
 
 import optuna
 import pandas as pd
+from pandas.api.types import (
+    is_bool_dtype,
+    is_numeric_dtype,
+    is_object_dtype,
+    is_string_dtype,
+)
 
 from praedixa.demand_forecast.backends.xgboost.model_common import (
     resolve_xgboost_model_params,
 )
-from praedixa.demand_forecast.contracts.targets import TargetContract
+from praedixa.demand_forecast.backends.xgboost.model_fit import (
+    fit_xgboost_model_and_predict_validation,
+)
+from praedixa.demand_forecast.contracts.targets import (
+    TargetContract,
+    reconstruct_absolute_predictions,
+)
 from praedixa.demand_forecast.training.shared.metrics import (
     compute_wape_improvement_pct,
+)
+from praedixa.demand_forecast.training.shared.economic_objective import (
+    economic_objective_config_payload,
+    fit_economic_decision_calibration,
 )
 from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TARGET_TRANSFORM,
@@ -26,6 +42,8 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE,
     DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES,
+    DEFAULT_XGBOOST_TUNING_MAX_CAT_THRESHOLD_CHOICES,
+    DEFAULT_XGBOOST_TUNING_MAX_CAT_TO_ONEHOT_CHOICES,
     DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES,
     DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE,
     DEFAULT_XGBOOST_TUNING_REG_ALPHA_RANGE,
@@ -79,6 +97,14 @@ def sample_xgboost_optuna_params(
         "max_bin": trial.suggest_categorical(
             "max_bin", DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES
         ),
+        "max_cat_to_onehot": trial.suggest_categorical(
+            "max_cat_to_onehot",
+            DEFAULT_XGBOOST_TUNING_MAX_CAT_TO_ONEHOT_CHOICES,
+        ),
+        "max_cat_threshold": trial.suggest_categorical(
+            "max_cat_threshold",
+            DEFAULT_XGBOOST_TUNING_MAX_CAT_THRESHOLD_CHOICES,
+        ),
         "enable_early_stopping": True,
         "enable_categorical": True,
         "early_stopping_rounds": DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
@@ -87,10 +113,13 @@ def sample_xgboost_optuna_params(
 
 
 def _objective_score(tuning_result: dict[str, object]) -> float:
-    return -float(cast(Any, tuning_result["macro_mean_wape"]))
+    decision_loss = tuning_result.get("mean_decision_loss")
+    if isinstance(decision_loss, bool) or not isinstance(decision_loss, (int, float)):
+        return -float(cast(Any, tuning_result["macro_mean_wape"]))
+    return -float(decision_loss)
 
 
-def _guardrail_failure_reason(
+def guardrail_failure_reason(
     *,
     tuning_result: dict[str, object],
     baseline_wape: float,
@@ -133,6 +162,47 @@ def _tuning_report_row(trial: optuna.trial.FrozenTrial) -> dict[str, object]:
             trial,
             "mean_abs_normalized_bias",
         ),
+        "mean_decision_loss": _trial_user_attr_float(trial, "mean_decision_loss"),
+        "mean_normalized_economic_loss": _trial_user_attr_float(
+            trial,
+            "mean_normalized_economic_loss",
+        ),
+        "mean_normalized_bias": _trial_user_attr_float(
+            trial,
+            "mean_normalized_bias",
+        ),
+        "mean_positive_bias_penalty": _trial_user_attr_float(
+            trial,
+            "mean_positive_bias_penalty",
+        ),
+        "mean_severe_negative_bias_penalty": _trial_user_attr_float(
+            trial,
+            "mean_severe_negative_bias_penalty",
+        ),
+        "validation_economic_loss": _trial_user_attr_float(
+            trial,
+            "validation_economic_loss",
+        ),
+        "validation_bias": _trial_user_attr_float(trial, "validation_bias"),
+        "validation_positive_bias_penalty": _trial_user_attr_float(
+            trial,
+            "validation_positive_bias_penalty",
+        ),
+        "validation_severe_negative_bias_penalty": _trial_user_attr_float(
+            trial,
+            "validation_severe_negative_bias_penalty",
+        ),
+        "validation_wape": _trial_user_attr_float(trial, "validation_wape"),
+        "validation_monitor_metric": str(
+            trial.user_attrs.get(
+                "validation_monitor_metric",
+                "segmented_asymmetric_decision_loss",
+            )
+        ),
+        "segment_decision_loss": trial.user_attrs.get("segment_decision_loss", {}),
+        "segment_bias": trial.user_attrs.get("segment_bias", {}),
+        "product_decision_loss": trial.user_attrs.get("product_decision_loss", {}),
+        "product_bias": trial.user_attrs.get("product_bias", {}),
         "coverage_80": float("nan"),
         "coverage_95": float("nan"),
         "objective_score": _trial_user_attr_float(trial, "objective_score"),
@@ -166,6 +236,52 @@ def _build_tuning_report(study: optuna.study.Study) -> pd.DataFrame:
         pd.DataFrame([_tuning_report_row(trial) for trial in study.trials])
         .sort_values(by="objective_score", ascending=False)
         .reset_index(drop=True)
+    )
+
+
+def _is_categorical_feature(series: pd.Series) -> bool:
+    return bool(
+        isinstance(series.dtype, pd.CategoricalDtype)
+        or is_object_dtype(series)
+        or is_string_dtype(series)
+    )
+
+
+def _is_numeric_feature(series: pd.Series) -> bool:
+    return bool(is_numeric_dtype(series) or is_bool_dtype(series))
+
+
+def _top_categorical_cardinalities(
+    frame: pd.DataFrame,
+    categorical_cols: list[str],
+) -> dict[str, int]:
+    cardinalities = {
+        column: int(frame[column].astype("string").nunique(dropna=True))
+        for column in categorical_cols
+    }
+    return dict(
+        sorted(cardinalities.items(), key=lambda item: item[1], reverse=True)[:10]
+    )
+
+
+def _log_xgboost_feature_space(
+    train_frame: pd.DataFrame,
+    feature_cols: list[str],
+    logger: logging.Logger,
+) -> None:
+    categorical_cols = [
+        column for column in feature_cols if _is_categorical_feature(train_frame[column])
+    ]
+    numeric_cols = [
+        column for column in feature_cols if _is_numeric_feature(train_frame[column])
+    ]
+    logger.info(
+        "XGBoost feature space resolved: feature_count=%s numeric_features=%s "
+        "categorical_features=%s top_categorical_cardinalities=%s",
+        len(feature_cols),
+        len(numeric_cols),
+        len(categorical_cols),
+        _top_categorical_cardinalities(train_frame, categorical_cols),
     )
 
 
@@ -217,6 +333,18 @@ def _final_best_params(
     best_params["enable_categorical"] = True
     best_params["enable_early_stopping"] = True
     best_params["early_stopping_rounds"] = DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS
+    best_params["validation_monitor_metric"] = "segmented_asymmetric_decision_loss"
+    best_params["economic_objective_config"] = best_trial.user_attrs.get(
+        "economic_objective_config",
+        economic_objective_config_payload(),
+    )
+    best_params["segmented_economic_objective_config"] = best_trial.user_attrs.get(
+        "segmented_economic_objective_config",
+        best_params["economic_objective_config"],
+    )
+    for key in _BEST_TRIAL_DECISION_ATTRS:
+        if key in best_trial.user_attrs:
+            best_params[key] = best_trial.user_attrs[key]
     return resolve_xgboost_model_params(best_params)
 
 
@@ -260,7 +388,7 @@ def _build_objective(
 
     def objective(trial: optuna.trial.Trial) -> float:
         objective_start = time.perf_counter()
-        logger.debug(
+        logger.info(
             "XGBoost Optuna trial entering objective: trial=%s/%s train_rows=%s tuning_rows=%s folds=%s features=%s threads_per_fold=%s",
             trial.number + 1,
             tuning_trials,
@@ -274,7 +402,7 @@ def _build_objective(
             **(model_params or {}),
             **sample_xgboost_optuna_params(trial, random_seed=random_seed),
         }
-        logger.debug(
+        logger.info(
             "XGBoost Optuna trial sampled params: trial=%s params=%s",
             trial.number,
             {
@@ -329,11 +457,12 @@ def _build_objective(
                 objective_score=objective_score,
                 logger=logger,
             )
-            logger.debug(
-                "XGBoost Optuna trial completed: trial=%s objective_score=%.6f mean_wape=%.6f selected_n_estimators=%s duration_seconds=%.3f",
+            logger.info(
+                "XGBoost Optuna trial completed: trial=%s objective_score=%.6f mean_wape=%.6f mean_decision_loss=%s selected_n_estimators=%s duration_seconds=%.3f",
                 trial.number,
                 objective_score,
                 float(cast(Any, result["macro_mean_wape"])),
+                result.get("mean_decision_loss"),
                 result.get("selected_n_estimators"),
                 time.perf_counter() - objective_start,
             )
@@ -370,7 +499,7 @@ def _build_fold_matrix_cache_for_objective(
 ) -> XGBoostFoldMatrixCache | None:
     cache_params = _fold_matrix_cache_params(model_params)
     if cache_params is None:
-        logger.debug(
+        logger.info(
             "XGBoost fold matrix cache skipped: max_bin search space is not fixed."
         )
         return None
@@ -404,6 +533,7 @@ def _record_trial_result(
         "mean_abs_normalized_bias",
         tuning_result.get("mean_abs_normalized_bias"),
     )
+    _record_decision_trial_attrs(trial=trial, tuning_result=tuning_result)
     trial.set_user_attr(
         "selected_learning_rate", tuning_result["selected_learning_rate"]
     )
@@ -413,7 +543,7 @@ def _record_trial_result(
     trial.set_user_attr("baseline_wape_improvement_pct", improvement_pct)
     trial.set_user_attr("fold_wape_scores", tuning_result["fold_results"])
     trial.set_user_attr("folds_completed", tuning_result["folds_completed"])
-    failure_reason = _guardrail_failure_reason(
+    failure_reason = guardrail_failure_reason(
         tuning_result=tuning_result,
         baseline_wape=baseline_wape,
         baseline_dataset_wape=baseline_dataset_wape,
@@ -423,6 +553,71 @@ def _record_trial_result(
         trial.set_user_attr("terminal_status", "REJECTED")
         raise optuna.TrialPruned(f"Guardrail rejected trial: {failure_reason}")
     return objective_score
+
+
+_BEST_TRIAL_DECISION_ATTRS: tuple[str, ...] = (
+    "mean_decision_loss",
+    "mean_normalized_economic_loss",
+    "mean_economic_loss",
+    "mean_normalized_bias",
+    "mean_positive_bias_penalty",
+    "mean_severe_negative_bias_penalty",
+    "mean_wape_guardrail_penalty",
+    "validation_economic_loss",
+    "validation_bias",
+    "validation_positive_bias_penalty",
+    "validation_severe_negative_bias_penalty",
+    "validation_wape",
+    "segment_decision_loss",
+    "segment_bias",
+    "product_decision_loss",
+    "product_bias",
+)
+
+
+def _record_decision_trial_attrs(
+    *,
+    trial: optuna.trial.Trial,
+    tuning_result: dict[str, object],
+) -> None:
+    for key in _BEST_TRIAL_DECISION_ATTRS:
+        if key in tuning_result:
+            trial.set_user_attr(key, tuning_result[key])
+    trial.set_user_attr(
+        "validation_economic_loss",
+        tuning_result.get("mean_normalized_economic_loss"),
+    )
+    trial.set_user_attr("validation_bias", tuning_result.get("mean_normalized_bias"))
+    trial.set_user_attr(
+        "validation_positive_bias_penalty",
+        tuning_result.get("mean_positive_bias_penalty"),
+    )
+    trial.set_user_attr(
+        "validation_severe_negative_bias_penalty",
+        tuning_result.get("mean_severe_negative_bias_penalty"),
+    )
+    trial.set_user_attr("validation_wape", tuning_result.get("macro_mean_wape"))
+    trial.set_user_attr(
+        "validation_monitor_metric",
+        tuning_result.get(
+            "validation_monitor_metric",
+            "segmented_asymmetric_decision_loss",
+        ),
+    )
+    trial.set_user_attr(
+        "economic_objective_config",
+        tuning_result.get(
+            "economic_objective_config",
+            economic_objective_config_payload(),
+        ),
+    )
+    trial.set_user_attr(
+        "segmented_economic_objective_config",
+        tuning_result.get(
+            "segmented_economic_objective_config",
+            tuning_result.get("economic_objective_config", economic_objective_config_payload()),
+        ),
+    )
 
 
 def _log_progress(
@@ -438,7 +633,7 @@ def _log_progress(
         or completed == tuning_trials
         or completed % DEFAULT_TUNING_PROGRESS_LOG_EVERY == 0
     ):
-        logger.debug(
+        logger.info(
             "XGBoost optimisation progress: trial=%s/%s current_best_objective_score=%.6f",
             completed,
             tuning_trials,
@@ -476,7 +671,8 @@ def optimize_xgboost_model_params(
         resolved_base_params,
         fold_count=len(folds),
     )
-    logger.debug(
+    _log_xgboost_feature_space(train_frame, feature_cols, logger)
+    logger.info(
         "Starting final XGBoost optimisation with Optuna: trials=%s feature_count=%s baseline_wape=%.6f train_rows=%s tuning_rows=%s folds=%s execution_policy=%s",
         tuning_trials,
         len(feature_cols),
@@ -519,12 +715,20 @@ def optimize_xgboost_model_params(
         len(study.trials),
     )
     best_trial = _best_completed_trial(study)
+    best_params = _final_best_params(
+        best_trial=best_trial,
+        model_params=resolved_base_params,
+        random_seed=random_seed,
+        total_threads=total_threads,
+    )
     return (
-        _final_best_params(
-            best_trial=best_trial,
-            model_params=resolved_base_params,
-            random_seed=random_seed,
-            total_threads=total_threads,
+        _best_params_with_economic_calibration(
+            train_frame=train_frame,
+            tuning_frame=tuning_frame,
+            feature_cols=feature_cols,
+            target_contract=target_contract,
+            best_params=best_params,
+            logger=logger,
         ),
         _build_tuning_report(study),
         build_hpo_runtime_metadata(
@@ -535,3 +739,56 @@ def optimize_xgboost_model_params(
             best_trial=best_trial,
         ),
     )
+
+
+def _best_params_with_economic_calibration(
+    *,
+    train_frame: pd.DataFrame,
+    tuning_frame: pd.DataFrame,
+    feature_cols: list[str],
+    target_contract: TargetContract,
+    best_params: dict[str, object],
+    logger: logging.Logger,
+) -> dict[str, object]:
+    calibrated_params = dict(best_params)
+    try:
+        eligible_train_frame = filter_training_eligible_rows(
+            train_frame,
+            label="xgboost_economic_calibration_train",
+            logger=logger,
+            log_level=logging.DEBUG,
+        )
+        _, raw_predictions = fit_xgboost_model_and_predict_validation(
+            eligible_train_frame,
+            tuning_frame,
+            feature_cols,
+            target_col=target_contract.learning_target_col,
+            model_params=calibrated_params,
+        )
+        absolute_predictions = reconstruct_absolute_predictions(
+            raw_predictions,
+            tuning_frame,
+            target_contract,
+        )
+        calibration = fit_economic_decision_calibration(
+            tuning_frame,
+            tuning_frame[target_contract.absolute_target_col],
+            absolute_predictions,
+        )
+        calibrated_params["economic_calibration"] = calibration
+        logger.info(
+            "XGBoost economic calibration fitted: applied=%s global=%s families=%s products=%s",
+            calibration.get("applied"),
+            cast(dict[str, object], calibration.get("global", {})),
+            len(cast(dict[str, object], calibration.get("families", {}))),
+            len(cast(dict[str, object], calibration.get("products", {}))),
+        )
+    except Exception as exc:
+        calibrated_params["economic_calibration"] = {
+            "version": "economic_decision_calibration_final",
+            "enabled": False,
+            "applied": False,
+            "failure_reason": str(exc),
+        }
+        logger.warning("XGBoost economic calibration skipped: %s", exc)
+    return calibrated_params

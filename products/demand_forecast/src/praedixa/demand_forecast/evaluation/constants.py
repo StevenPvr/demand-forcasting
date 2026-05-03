@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from praedixa.demand_forecast.contracts.targets import DEFAULT_ABSOLUTE_TARGET_COL
+from praedixa.demand_forecast.feature_selection.paths import (
+    DEFAULT_FEATURE_SELECTION_DIR,
+)
 from praedixa.platform.runtime.paths import EVALUATION_DIR
 from praedixa.platform.runtime.paths import OPTIMISATION_DIR
-from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR
 
 
 DEFAULT_TRAIN_SELECTION_INPUT_PATH = None
 DEFAULT_TRAIN_TUNING_INPUT_PATH = None
 DEFAULT_VAL_INPUT_PATH = None
 DEFAULT_BEST_PARAMS_PATH = OPTIMISATION_DIR / "best_optuna_params.json"
-DEFAULT_TRAINING_FEATURE_MANIFEST_PATH = TRAINING_BUNDLE_DIR / "feature_manifest.json"
+DEFAULT_TRAINING_FEATURE_MANIFEST_PATH = (
+    DEFAULT_FEATURE_SELECTION_DIR / "feature_manifest.json"
+)
 DEFAULT_OUTPUT_DIR = EVALUATION_DIR
 DEFAULT_REQUESTED_TARGET_COL = DEFAULT_ABSOLUTE_TARGET_COL
 DEFAULT_EVALUATION_TRAIN_SAMPLE_FRACTION = 1.0

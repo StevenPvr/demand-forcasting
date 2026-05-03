@@ -390,10 +390,6 @@ def prepare_bronze_batch(spec: BronzeTableSpec, batch: pd.DataFrame) -> pd.DataF
             }
         )
         prepared["source_partition"] = "historical"
-    elif spec.table_name == "bronze_freshretail_daily":
-        prepared["source_partition"] = (
-            "train" if "data_train" in spec.source_path.name else "val"
-        )
 
     return prepared
 

@@ -96,7 +96,7 @@ Important :
 
 Le contrat `gold.gold_model_training_panel_d1` sépare optimisation et évaluation:
 
-- `freshretail` et `freshretail_lt` alimentent uniquement `train` et `val`;
+- les sources d'entraînement autorisées alimentent uniquement `train` et `val`;
 - leur split est chronologique 60/40 par `dataset_source`;
 - `bakery` alimente uniquement `test`;
 - le `test` Bakery couvre les 3 derniers mois disponibles par défaut

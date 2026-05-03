@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from typing import Any, cast
+from typing import Any, Callable, cast
 import unittest
 
 import numpy as np
@@ -37,14 +37,31 @@ from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
     DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE,
     DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE,
 )
+import praedixa.demand_forecast.training.xgboost.tuning as xgboost_tuning  # noqa: E402
 from praedixa.demand_forecast.training.xgboost.tuning import (  # noqa: E402
-    _guardrail_failure_reason,
     fit_and_score_xgboost_model_on_tuning,
+    guardrail_failure_reason,
     sample_xgboost_optuna_params,
 )
 from praedixa.demand_forecast.training.xgboost.scoring import (  # noqa: E402
     build_xgboost_fold_matrix_cache,
     xgboost_execution_policy,
+)
+from praedixa.demand_forecast.training.shared.hpo import (  # noqa: E402
+    build_hpo_runtime_metadata,
+)
+
+
+ObjectiveScoreFn = Callable[[dict[str, object]], float]
+FinalBestParamsFn = Callable[..., dict[str, object]]
+
+OBJECTIVE_SCORE = cast(
+    ObjectiveScoreFn,
+    getattr(xgboost_tuning, "_objective_score"),
+)
+FINAL_BEST_PARAMS = cast(
+    FinalBestParamsFn,
+    getattr(xgboost_tuning, "_final_best_params"),
 )
 
 
@@ -88,40 +105,44 @@ class XGBoostTuningTests(unittest.TestCase):
         trial = optuna.trial.FixedTrial(
             {
                 "learning_rate": 0.04,
-                "max_depth": 5,
+                "max_depth": 6,
                 "min_child_weight": 64.0,
                 "subsample": 0.85,
                 "colsample_bytree": 0.75,
                 "reg_alpha": 1e-2,
                 "reg_lambda": 20.0,
-                "max_bin": 128,
+                "max_bin": 256,
+                "max_cat_to_onehot": 16,
+                "max_cat_threshold": 128,
             }
         )
 
         params = sample_xgboost_optuna_params(cast(Any, trial), random_seed=11)
 
         self.assertNotIn("n_estimators", params)
-        self.assertEqual(params["max_depth"], 5)
+        self.assertEqual(params["max_depth"], 6)
         self.assertTrue(params["enable_early_stopping"])
         self.assertTrue(params["enable_categorical"])
         self.assertEqual(params["early_stopping_rounds"], 100)
-        self.assertEqual(params["max_bin"], 128)
+        self.assertEqual(params["max_bin"], 256)
+        self.assertEqual(params["max_cat_to_onehot"], 16)
+        self.assertEqual(params["max_cat_threshold"], 128)
         self.assertEqual(params["random_state"], 12)
 
-    def test_xgboost_tuning_space_is_regularized_for_large_multiseries_panels(
+    def test_xgboost_tuning_space_is_expressive_for_fine_metadata_panels(
         self,
     ) -> None:
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES, (5, 6, 7, 8, 9, 10))
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE, (0.005, 0.05))
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES, (128,))
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE, (4.0, 128.0))
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_ALPHA_RANGE, (1e-6, 1.0))
-        self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE, (10.0, 1000.0))
-        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[0], 0.75)
-        self.assertLessEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[1], 0.95)
-        self.assertLessEqual(DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE[1], 0.90)
-        self.assertLessEqual(DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT, 8)
-        self.assertGreaterEqual(DEFAULT_XGBOOST_MAX_CAT_THRESHOLD, 64)
+        self.assertIn(14, DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES)
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE, (0.005, 0.12))
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES, (256,))
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE, (0.5, 64.0))
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_ALPHA_RANGE, (1e-8, 10.0))
+        self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE, (0.1, 300.0))
+        self.assertLessEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[0], 0.65)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE[1], 1.0)
+        self.assertGreaterEqual(DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE[1], 1.0)
+        self.assertEqual(DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT, 8)
+        self.assertEqual(DEFAULT_XGBOOST_MAX_CAT_THRESHOLD, 64)
 
     def test_fit_and_score_xgboost_uses_walk_forward_folds(self) -> None:
         train_frame, tuning_frame = self._frames()
@@ -164,6 +185,17 @@ class XGBoostTuningTests(unittest.TestCase):
         self.assertTrue(
             bool(np.isfinite(float(cast(Any, result["mean_abs_normalized_bias"]))))
         )
+        self.assertTrue(
+            bool(np.isfinite(float(cast(Any, result["mean_decision_loss"]))))
+        )
+        self.assertEqual(
+            result["validation_monitor_metric"],
+            "segmented_asymmetric_decision_loss",
+        )
+        self.assertIn("economic_objective_config", result)
+        self.assertIn("segmented_economic_objective_config", result)
+        self.assertIn("segment_decision_loss", result)
+        self.assertIn("product_decision_loss", result)
         execution_policy = cast(dict[str, object], result["execution_policy"])
         self.assertEqual(execution_policy["backend"], "xgboost")
         self.assertEqual(execution_policy["fold_workers"], 5)
@@ -264,20 +296,117 @@ class XGBoostTuningTests(unittest.TestCase):
         }
 
         self.assertIsNone(
-            _guardrail_failure_reason(
+            guardrail_failure_reason(
                 tuning_result=accepted_result,
                 baseline_wape=0.50,
                 baseline_dataset_wape={"fixture": 0.50},
             )
         )
         self.assertEqual(
-            _guardrail_failure_reason(
+            guardrail_failure_reason(
                 tuning_result=rejected_result,
                 baseline_wape=0.50,
                 baseline_dataset_wape={"fixture": 0.50},
             ),
             "absolute_bias_too_high",
         )
+
+    def test_xgboost_objective_prefers_decision_loss_over_wape(self) -> None:
+        lower_wape_but_overproducing: dict[str, object] = {
+            "macro_mean_wape": 0.10,
+            "mean_decision_loss": 0.40,
+        }
+        higher_wape_but_better_decision: dict[str, object] = {
+            "macro_mean_wape": 0.12,
+            "mean_decision_loss": 0.20,
+        }
+
+        self.assertGreater(
+            OBJECTIVE_SCORE(higher_wape_but_better_decision),
+            OBJECTIVE_SCORE(lower_wape_but_overproducing),
+        )
+
+    def test_final_best_params_keep_economic_objective_artifacts(self) -> None:
+        economic_config = {"version": "segmented_asymmetric_economic_objective_final"}
+        best_trial = optuna.trial.create_trial(
+            params={},
+            distributions={},
+            value=-0.25,
+            user_attrs={
+                "economic_objective_config": economic_config,
+                "mean_decision_loss": 0.25,
+                "validation_economic_loss": 0.12,
+                "validation_bias": -0.02,
+                "validation_positive_bias_penalty": 0.0,
+                "validation_severe_negative_bias_penalty": 0.0,
+                "validation_wape": 0.18,
+                "segmented_economic_objective_config": economic_config,
+                "segment_decision_loss": {"bread": 0.25},
+                "product_decision_loss": {"BAGUETTE": 0.25},
+            },
+        )
+
+        params = FINAL_BEST_PARAMS(
+            best_trial=best_trial,
+            model_params={"n_jobs": 1, "runtime_profile": "local_cpu"},
+            random_seed=7,
+            total_threads=1,
+        )
+
+        self.assertEqual(
+            params["validation_monitor_metric"],
+            "segmented_asymmetric_decision_loss",
+        )
+        self.assertEqual(params["economic_objective_config"], economic_config)
+        self.assertEqual(params["segmented_economic_objective_config"], economic_config)
+        self.assertEqual(params["mean_decision_loss"], 0.25)
+        self.assertEqual(params["validation_bias"], -0.02)
+        self.assertEqual(params["segment_decision_loss"], {"bread": 0.25})
+
+    def test_hpo_metadata_serializes_economic_objective(self) -> None:
+        economic_config = {"version": "segmented_asymmetric_economic_objective_final"}
+        study = optuna.create_study(direction="maximize")
+        study.add_trial(
+            optuna.trial.create_trial(
+                params={},
+                distributions={},
+                value=-0.25,
+                user_attrs={
+                    "mean_wape": 0.18,
+                    "mean_abs_bias": 0.8,
+                    "mean_decision_loss": 0.25,
+                    "mean_normalized_economic_loss": 0.12,
+                    "mean_normalized_bias": -0.02,
+                    "mean_positive_bias_penalty": 0.0,
+                    "mean_severe_negative_bias_penalty": 0.0,
+                    "validation_monitor_metric": "segmented_asymmetric_decision_loss",
+                    "economic_objective_config": economic_config,
+                    "segmented_economic_objective_config": economic_config,
+                    "segment_decision_loss": {"bread": 0.25},
+                    "product_decision_loss": {"BAGUETTE": 0.25},
+                },
+            )
+        )
+
+        metadata = build_hpo_runtime_metadata(
+            study=study,
+            execution_policy={
+                "runtime_profile": "local_cpu",
+                "fold_workers": 1,
+                "threads_per_fold": 1,
+            },
+            tuning_trials=1,
+            stage_budget="quick",
+        )
+
+        self.assertEqual(metadata["best_decision_loss"], 0.25)
+        self.assertEqual(metadata["best_normalized_bias"], -0.02)
+        self.assertEqual(metadata["economic_objective_config"], economic_config)
+        self.assertEqual(
+            metadata["segmented_economic_objective_config"],
+            economic_config,
+        )
+        self.assertEqual(metadata["segment_decision_loss"], {"bread": 0.25})
 
 
 if __name__ == "__main__":

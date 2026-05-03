@@ -16,12 +16,21 @@ from praedixa.demand_forecast.evaluation.bakery_metrics import (
     REFERENCE_PRODUCT_COL,
     REFERENCE_TARGET_COL,
 )
-from praedixa.demand_forecast.evaluation.reference import build_bakery_reference_feature_frame
+from praedixa.demand_forecast.evaluation.reference import (
+    build_bakery_reference_feature_frame,
+)
 from praedixa.platform.utils.memory import downcast_pandas_frame, read_parquet_projected
-from praedixa.demand_forecast.training.config.constants import DEFAULT_DATASET_SOURCE_COL, DEFAULT_DATE_COL
+from praedixa.demand_forecast.training.config.constants import (
+    DEFAULT_DATASET_SOURCE_COL,
+    DEFAULT_DATE_COL,
+)
 from praedixa.demand_forecast.training.sampling.loaders import (
     load_gold_train_tuning_frames,
     load_parquet_train_tuning_frames,
+)
+from praedixa.demand_forecast.training.validation.eligibility import (
+    TRAINING_ELIGIBILITY_COLUMNS,
+    training_eligibility_mask,
 )
 from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
@@ -31,6 +40,12 @@ from praedixa.demand_forecast.contracts.targets import (
     ensure_learning_target_column,
     resolve_target_contract,
 )
+
+_BAKERY_REFIT_SEED_FLAG_COL = "bakery_refit_seed_flag"
+_TRANSFER_HOLDOUT_MODEL_BACKENDS: frozenset[str] = frozenset(
+    {"xgboost", "chronos2", "moirai", "timesfm"}
+)
+_BAKERY_REFIT_SEED_HISTORY_MONTHS = 1
 
 
 def resolve_reference_product_col(frame: pd.DataFrame) -> str:
@@ -73,9 +88,15 @@ def to_reference_frame(
         pl.from_pandas(frame, include_index=False)
         .select(
             [
-                pl.col(date_col).cast(pl.Datetime, strict=False).alias(REFERENCE_DATE_COL),
-                pl.col(product_col).cast(pl.Utf8, strict=False).alias(REFERENCE_PRODUCT_COL),
-                pl.col(target_col).cast(pl.Float64, strict=False).alias(REFERENCE_TARGET_COL),
+                pl.col(date_col)
+                .cast(pl.Datetime, strict=False)
+                .alias(REFERENCE_DATE_COL),
+                pl.col(product_col)
+                .cast(pl.Utf8, strict=False)
+                .alias(REFERENCE_PRODUCT_COL),
+                pl.col(target_col)
+                .cast(pl.Float64, strict=False)
+                .alias(REFERENCE_TARGET_COL),
             ]
         )
         .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
@@ -127,6 +148,129 @@ def _reference_full_frame(
     )
 
 
+def _bakery_refit_seed_reference_frame(
+    *,
+    reference_train: pd.DataFrame,
+    reference_val: pd.DataFrame,
+    reference_test: pd.DataFrame,
+) -> pd.DataFrame:
+    test_start = pd.Timestamp(reference_test[REFERENCE_DATE_COL].min()).normalize()
+    seed_start = test_start - pd.DateOffset(months=_BAKERY_REFIT_SEED_HISTORY_MONTHS)
+    history = downcast_pandas_frame(
+        pl.concat(
+            [
+                pl.from_pandas(reference_train, include_index=False),
+                pl.from_pandas(reference_val, include_index=False),
+            ],
+            how="diagonal_relaxed",
+            rechunk=True,
+        ).to_pandas()
+    )
+    history_dates = pd.to_datetime(history[REFERENCE_DATE_COL], errors="coerce")
+    seed_mask = (history_dates >= seed_start) & (history_dates < test_start)
+    return history.loc[seed_mask].reset_index(drop=True)
+
+
+def _append_refit_seed_frame(
+    train_frame: pd.DataFrame,
+    seed_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    if seed_frame.empty:
+        return train_frame
+    tagged_seed = seed_frame.copy()
+    tagged_seed[_BAKERY_REFIT_SEED_FLAG_COL] = True
+    base_train = train_frame.copy()
+    if _BAKERY_REFIT_SEED_FLAG_COL not in base_train.columns:
+        base_train[_BAKERY_REFIT_SEED_FLAG_COL] = False
+    return downcast_pandas_frame(
+        pl.concat(
+            [
+                pl.from_pandas(base_train, include_index=False),
+                pl.from_pandas(tagged_seed, include_index=False),
+            ],
+            how="diagonal_relaxed",
+            rechunk=True,
+        ).to_pandas()
+    )
+
+
+def _refit_seed_metadata(seed_reference: pd.DataFrame) -> dict[str, object]:
+    if seed_reference.empty:
+        return {
+            "bakery_pretest_seed_rows_used_for_evaluation_refits": 0,
+            "bakery_pretest_seed_days_used_for_evaluation_refits": 0,
+            "bakery_pretest_seed_start_date": None,
+            "bakery_pretest_seed_end_date": None,
+        }
+    seed_dates = pd.to_datetime(seed_reference[REFERENCE_DATE_COL], errors="coerce")
+    return {
+        "bakery_pretest_seed_rows_used_for_evaluation_refits": int(len(seed_reference)),
+        "bakery_pretest_seed_days_used_for_evaluation_refits": int(
+            seed_dates.dt.normalize().nunique()
+        ),
+        "bakery_pretest_seed_start_date": pd.Timestamp(seed_dates.min()).strftime(
+            "%Y-%m-%d"
+        ),
+        "bakery_pretest_seed_end_date": pd.Timestamp(seed_dates.max()).strftime(
+            "%Y-%m-%d"
+        ),
+    }
+
+
+def _date_col_for_seed_frame(seed_frame: pd.DataFrame) -> str | None:
+    for candidate in (REFERENCE_DATE_COL, "dt", "target_dt"):
+        if candidate in seed_frame.columns:
+            return candidate
+    return None
+
+
+def _refit_seed_eligibility_metadata(seed_frame: pd.DataFrame) -> dict[str, object]:
+    if seed_frame.empty:
+        return {
+            "eligible_bakery_pretest_seed_rows_used_for_evaluation_refits": 0,
+            "eligible_bakery_pretest_seed_days_used_for_evaluation_refits": 0,
+        }
+    if any(column not in seed_frame.columns for column in TRAINING_ELIGIBILITY_COLUMNS):
+        return {
+            "eligible_bakery_pretest_seed_rows_used_for_evaluation_refits": 0,
+            "eligible_bakery_pretest_seed_days_used_for_evaluation_refits": 0,
+        }
+    eligible_mask = training_eligibility_mask(seed_frame)
+    eligible_seed = seed_frame.loc[eligible_mask].copy()
+    date_col = _date_col_for_seed_frame(eligible_seed)
+    eligible_days = 0
+    if date_col is not None and not eligible_seed.empty:
+        eligible_days = int(
+            pd.to_datetime(eligible_seed[date_col], errors="coerce")
+            .dt.normalize()
+            .nunique()
+        )
+    return {
+        "eligible_bakery_pretest_seed_rows_used_for_evaluation_refits": int(
+            len(eligible_seed)
+        ),
+        "eligible_bakery_pretest_seed_days_used_for_evaluation_refits": eligible_days,
+    }
+
+
+def _raise_if_refit_seed_not_trainable(seed_frame: pd.DataFrame) -> None:
+    if seed_frame.empty:
+        return
+    eligibility = _refit_seed_eligibility_metadata(seed_frame)
+    eligible_rows = int(
+        cast(
+            Any,
+            eligibility["eligible_bakery_pretest_seed_rows_used_for_evaluation_refits"],
+        )
+    )
+    if eligible_rows > 0:
+        return
+    raise RuntimeError(
+        "Bakery pretest refit seed was materialized but no seed row is trainable. "
+        "Check target metadata propagation before running the transfer daily refit."
+    )
+
+
 def _dataset_sources(frame: pd.DataFrame) -> list[str]:
     if DEFAULT_DATASET_SOURCE_COL not in frame.columns:
         return []
@@ -134,8 +278,31 @@ def _dataset_sources(frame: pd.DataFrame) -> list[str]:
     return sorted(str(value) for value in values)
 
 
+def _row_count_for_dataset_source(frame: pd.DataFrame, dataset_source: str) -> int:
+    if DEFAULT_DATASET_SOURCE_COL not in frame.columns:
+        return 0
+    return int((frame[DEFAULT_DATASET_SOURCE_COL].astype(str) == dataset_source).sum())
+
+
+def _row_count_excluding_dataset_source(
+    frame: pd.DataFrame, dataset_source: str
+) -> int:
+    if DEFAULT_DATASET_SOURCE_COL not in frame.columns:
+        return 0
+    return int((frame[DEFAULT_DATASET_SOURCE_COL].astype(str) != dataset_source).sum())
+
+
+def uses_bakery_reference_transfer_holdout(model_backend: str) -> bool:
+    return model_backend.strip().lower() in _TRANSFER_HOLDOUT_MODEL_BACKENDS
+
+
 def _uses_transfer_training(model_backend: str) -> bool:
-    return model_backend.strip().lower() == "xgboost"
+    return uses_bakery_reference_transfer_holdout(model_backend)
+
+
+def _uses_foundation_hybrid_training(model_backend: str) -> bool:
+    _ = model_backend
+    return False
 
 
 def _load_transfer_training_frames(
@@ -166,7 +333,9 @@ def _materialize_bakery_reference_feature_frame(
     gold_base_df: pd.DataFrame,
     split_name: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    feature_df = build_bakery_reference_feature_frame(reference_full_df, reference_split_df, gold_base_df)
+    feature_df = build_bakery_reference_feature_frame(
+        reference_full_df, reference_split_df, gold_base_df
+    )
     if feature_df.empty:
         raise ValueError("No bakery reference rows were materialized for evaluation.")
 
@@ -201,7 +370,9 @@ def load_gold_bakery_overlap_test_frame(
     resolved_gold_feature_df = (
         gold_feature_df
         if gold_feature_df is not None
-        else _load_gold_bakery_feature_frame(duckdb_path=duckdb_path, gold_table=gold_table)
+        else _load_gold_bakery_feature_frame(
+            duckdb_path=duckdb_path, gold_table=gold_table
+        )
     )
     overlap_df, scored_reference_test = _materialize_bakery_reference_feature_frame(
         reference_full_df=reference_full_df,
@@ -215,7 +386,9 @@ def load_gold_bakery_overlap_test_frame(
         "overlap_test_rows": int(len(scored_reference_test)),
         "missing_reference_test_rows": 0,
         "overlap_start_date": overlap_start_date.strftime("%Y-%m-%d"),
-        "overlap_end_date": pd.Timestamp(scored_reference_test[REFERENCE_DATE_COL].max()).strftime("%Y-%m-%d"),
+        "overlap_end_date": pd.Timestamp(
+            scored_reference_test[REFERENCE_DATE_COL].max()
+        ).strftime("%Y-%m-%d"),
         "product_count": int(scored_reference_test[REFERENCE_PRODUCT_COL].nunique()),
     }
     return overlap_df, scored_reference_test, metadata
@@ -240,14 +413,18 @@ def prepare_scored_test_frame(
     target_contract: TargetContract,
 ) -> tuple[pd.DataFrame, pd.DataFrame, int]:
     prepared = ensure_learning_target_column(test_frame.copy(), target_contract)
-    prepared_pl = pl.from_pandas(prepared, include_index=False).with_row_index("__row_nr")
+    prepared_pl = pl.from_pandas(prepared, include_index=False).with_row_index(
+        "__row_nr"
+    )
     valid_row_idx = (
         prepared_pl.filter(pl.col(target_contract.learning_target_col).is_not_null())
         .get_column("__row_nr")
         .to_numpy()
     )
     filtered_test = downcast_pandas_frame(
-        prepared_pl.filter(pl.col(target_contract.learning_target_col).is_not_null()).drop("__row_nr").to_pandas()
+        prepared_pl.filter(pl.col(target_contract.learning_target_col).is_not_null())
+        .drop("__row_nr")
+        .to_pandas()
     )
     filtered_reference = downcast_pandas_frame(
         pl.from_pandas(scored_reference_test, include_index=False)
@@ -286,7 +463,10 @@ def _reference_history_frame(
     *,
     evaluation_dataset_source: str | None,
 ) -> pd.DataFrame:
-    if evaluation_dataset_source is None or DEFAULT_DATASET_SOURCE_COL not in frame.columns:
+    if (
+        evaluation_dataset_source is None
+        or DEFAULT_DATASET_SOURCE_COL not in frame.columns
+    ):
         return frame
     return frame[frame[DEFAULT_DATASET_SOURCE_COL] == evaluation_dataset_source].copy()
 
@@ -301,7 +481,14 @@ def load_local_mode_frames(
     tuning_sample_fraction: float,
     evaluation_dataset_source: str | None,
     logger: logging.Logger,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, object] | None]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, object] | None,
+]:
     train_frame, valid_frame, _, _, _ = load_parquet_train_tuning_frames(
         train_input_path=train_selection_input_path,
         tuning_input_path=train_tuning_input_path,
@@ -326,7 +513,9 @@ def load_local_mode_frames(
             rechunk=True,
         ).to_pandas()
     )
-    target_contract = resolve_target_contract(combined_history, test_frame, requested_target_col=requested_target_col)
+    target_contract = resolve_target_contract(
+        combined_history, test_frame, requested_target_col=requested_target_col
+    )
     absolute_target_col = target_contract.absolute_target_col
     history_reference = to_reference_frame(
         _reference_history_frame(
@@ -351,9 +540,17 @@ def load_gold_reference_mode_frames(
     train_frame: pd.DataFrame | None = None,
     valid_frame: pd.DataFrame | None = None,
     model_backend: str = "tft",
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, object]]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, object],
+]:
     logger = logging.getLogger(__name__)
     transfer_training = _uses_transfer_training(model_backend)
+    foundation_hybrid_training = _uses_foundation_hybrid_training(model_backend)
     reference_bundle = build_bakery_reference_splits_from_gold(
         duckdb_path=duckdb_path,
         logger=logger,
@@ -361,8 +558,12 @@ def load_gold_reference_mode_frames(
     reference_train = reference_bundle.train_df
     reference_val = reference_bundle.val_df
     reference_test = reference_bundle.test_df
-    reference_full = _reference_full_frame(reference_train, reference_val, reference_test)
-    gold_feature_df = _load_gold_bakery_feature_frame(duckdb_path=duckdb_path, gold_table=gold_table)
+    reference_full = _reference_full_frame(
+        reference_train, reference_val, reference_test
+    )
+    gold_feature_df = _load_gold_bakery_feature_frame(
+        duckdb_path=duckdb_path, gold_table=gold_table
+    )
     logger.info(
         "Loaded bakery reference feature table from gold: table=%s rows=%s columns=%s",
         gold_table,
@@ -371,6 +572,23 @@ def load_gold_reference_mode_frames(
     )
     scored_reference_train = normalize_reference_split_frame(reference_train)
     scored_reference_val = normalize_reference_split_frame(reference_val)
+    seed_reference = _bakery_refit_seed_reference_frame(
+        reference_train=reference_train,
+        reference_val=reference_val,
+        reference_test=reference_test,
+    )
+    refit_seed_frame = (
+        _materialize_bakery_reference_feature_frame(
+            reference_full_df=reference_full,
+            reference_split_df=seed_reference,
+            gold_base_df=gold_feature_df,
+            split_name="pretest_refit_seed",
+        )[0]
+        if not seed_reference.empty
+        else pd.DataFrame()
+    )
+    if transfer_training or foundation_hybrid_training:
+        _raise_if_refit_seed_not_trainable(refit_seed_frame)
     if transfer_training:
         resolved_train_frame, resolved_valid_frame = (
             (train_frame, valid_frame)
@@ -383,6 +601,39 @@ def load_gold_reference_mode_frames(
                 logger=logger,
             )
         )
+        resolved_train_frame = _append_refit_seed_frame(
+            resolved_train_frame,
+            refit_seed_frame,
+        )
+    elif foundation_hybrid_training:
+        transfer_train_frame, transfer_valid_frame = (
+            (train_frame, valid_frame)
+            if train_frame is not None and valid_frame is not None
+            else _load_transfer_training_frames(
+                duckdb_path=duckdb_path,
+                gold_table=gold_table,
+                train_sample_fraction=train_sample_fraction,
+                tuning_sample_fraction=tuning_sample_fraction,
+                logger=logger,
+            )
+        )
+        _, scored_reference_train = _materialize_bakery_reference_feature_frame(
+            reference_full_df=reference_full,
+            reference_split_df=reference_train,
+            gold_base_df=gold_feature_df,
+            split_name="train",
+        )
+        _, scored_reference_val = _materialize_bakery_reference_feature_frame(
+            reference_full_df=reference_full,
+            reference_split_df=reference_val,
+            gold_base_df=gold_feature_df,
+            split_name="val",
+        )
+        resolved_train_frame = _append_refit_seed_frame(
+            transfer_train_frame,
+            refit_seed_frame,
+        )
+        resolved_valid_frame = transfer_valid_frame
     else:
         resolved_train_frame, scored_reference_train = (
             (train_frame, scored_reference_train)
@@ -404,16 +655,20 @@ def load_gold_reference_mode_frames(
                 split_name="val",
             )
         )
-    overlap_test_frame, scored_reference_test, overlap_metadata = load_gold_bakery_overlap_test_frame(
-        duckdb_path=duckdb_path,
-        reference_full_df=reference_full,
-        reference_test_df=reference_test,
-        gold_table=gold_table,
-        gold_feature_df=gold_feature_df,
+    overlap_test_frame, scored_reference_test, overlap_metadata = (
+        load_gold_bakery_overlap_test_frame(
+            duckdb_path=duckdb_path,
+            reference_full_df=reference_full,
+            reference_test_df=reference_test,
+            gold_table=gold_table,
+            gold_feature_df=gold_feature_df,
+        )
     )
     training_protocol = (
-        "freshretail_transfer_holdout_with_bakery_test_refits"
+        "transfer_holdout_with_bakery_test_refits"
         if transfer_training
+        else "transfer_train_val_with_bakery_test_refits"
+        if foundation_hybrid_training
         else "bakery_supervised_reference_train_val"
     )
     logger.info(
@@ -447,15 +702,26 @@ def load_gold_reference_mode_frames(
         "model_training_excluded_dataset_sources": list(
             DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES
         )
-        if transfer_training
+        if transfer_training or foundation_hybrid_training
         else [],
-        "bakery_pretest_rows_used_for_model_training": 0
-        if transfer_training
-        else int(len(resolved_train_frame) + len(resolved_valid_frame)),
+        "bakery_pretest_rows_used_for_model_training": (
+            int(len(refit_seed_frame))
+            if transfer_training or foundation_hybrid_training
+            else _row_count_for_dataset_source(resolved_train_frame, "bakery")
+            + _row_count_for_dataset_source(resolved_valid_frame, "bakery")
+        ),
+        "non_bakery_pretest_rows_used_for_model_training": (
+            _row_count_excluding_dataset_source(resolved_train_frame, "bakery")
+            + _row_count_excluding_dataset_source(resolved_valid_frame, "bakery")
+            if foundation_hybrid_training
+            else 0
+        ),
         "bakery_history_rows_used_for_baselines": int(
             len(scored_reference_train) + len(scored_reference_val)
         ),
-        "bakery_refit_policy": "test_window_history_only",
+        **_refit_seed_metadata(seed_reference),
+        **_refit_seed_eligibility_metadata(refit_seed_frame),
+        "bakery_refit_policy": "one_month_pretest_seed_plus_test_window_history",
     }
     return (
         resolved_train_frame,

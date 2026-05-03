@@ -2,4 +2,4 @@
 
 select * from {{ ref("gold_feature_bakery_d1") }}
 union all
-select * from {{ ref("gold_feature_freshretail_d1") }}
+select * from {{ ref("gold_feature_synthetic_foodservice_d1") }}

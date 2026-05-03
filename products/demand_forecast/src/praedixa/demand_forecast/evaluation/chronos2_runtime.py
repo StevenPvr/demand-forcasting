@@ -119,4 +119,10 @@ def _chronos2_model_params(model_params: dict[str, object]) -> dict[str, object]
     resolved.setdefault("device_map", "cpu")
     resolved.setdefault("cross_learning", True)
     resolved.setdefault("quantile_levels", [0.1, 0.5, 0.9])
+    resolved.setdefault("enable_daily_prediction_calibration", False)
+    resolved.setdefault("initialize_daily_prediction_calibration_from_valid", True)
+    resolved.setdefault("daily_prediction_calibration_min_rows", 35)
+    resolved.setdefault("daily_prediction_calibration_slope_min", 0.25)
+    resolved.setdefault("daily_prediction_calibration_slope_max", 2.0)
+    resolved.setdefault("daily_prediction_calibration_progress_series_batch_size", 512)
     return resolved

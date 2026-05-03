@@ -167,6 +167,46 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
             model_backend="tft",
         )
 
+    def test_load_evaluation_frames_routes_foundation_backends_like_xgboost(
+        self,
+    ) -> None:
+        request = EvaluationBuildRequest(model_backend="timesfm")
+        expected_loaded = _build_bakery_loaded_frames()
+        logger = logging.getLogger(__name__)
+
+        with patch(
+            "praedixa.demand_forecast.evaluation.orchestrator_context.load_gold_reference_mode_frames",
+            return_value=(
+                expected_loaded.train_frame,
+                expected_loaded.valid_frame,
+                expected_loaded.test_frame,
+                expected_loaded.history_reference,
+                expected_loaded.scored_reference_test,
+                expected_loaded.overlap_metadata,
+            ),
+        ) as mocked_load_gold_reference:
+            loaded = load_evaluation_frames(
+                train_selection_input_path=None,
+                train_tuning_input_path=None,
+                val_input_path=None,
+                requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,
+                duckdb_path=request.duckdb_path,
+                gold_table=request.gold_table,
+                train_sample_fraction=request.train_sample_fraction,
+                tuning_sample_fraction=request.tuning_sample_fraction,
+                logger=logger,
+                model_backend=request.model_backend,
+            )
+
+        self.assertEqual(loaded.evaluation_mode, "bakery_reference_transfer_holdout")
+        mocked_load_gold_reference.assert_called_once_with(
+            duckdb_path=request.duckdb_path,
+            gold_table=request.gold_table,
+            train_sample_fraction=1.0,
+            tuning_sample_fraction=1.0,
+            model_backend="timesfm",
+        )
+
     def test_prepare_evaluation_context_accepts_best_params_for_bakery_overlap(
         self,
     ) -> None:
@@ -241,6 +281,49 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
                         model_backend="xgboost",
                     )
 
+    def test_xgboost_bakery_context_uses_manifest_features_as_source_of_truth(
+        self,
+    ) -> None:
+        loaded = _build_bakery_loaded_frames()
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            best_params_path = Path(temp_dir) / "best_optuna_params.json"
+            best_params_path.write_text(
+                json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
+                encoding="utf-8",
+            )
+            with patch(
+                "praedixa.demand_forecast.evaluation.orchestrator_context._training_manifest_feature_columns",
+                return_value=[
+                    "dataset_source",
+                    "rolling_mean_7",
+                    "client_id",
+                    "location_id",
+                    "product_id",
+                ],
+            ):
+                context = prepare_evaluation_context(
+                    loaded=loaded,
+                    requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,
+                    best_params_path=best_params_path,
+                    logger=logger,
+                    model_backend="xgboost",
+                )
+
+        self.assertEqual(
+            context.feature_cols,
+            [
+                "dataset_source",
+                "rolling_mean_7",
+                "client_id",
+                "location_id",
+                "product_id",
+            ],
+        )
+        self.assertNotIn("observed_discount_amount", context.feature_cols)
+        self.assertNotIn("weather_humidity", context.feature_cols)
+
     def test_xgboost_transfer_holdout_rejects_bakery_pretest_training(self) -> None:
         loaded = _build_bakery_loaded_frames()
         loaded = LoadedEvaluationFrames(
@@ -269,6 +352,48 @@ class EvaluationOrchestratorContextTests(unittest.TestCase):
                     logger=logger,
                     model_backend="xgboost",
                 )
+
+    def test_xgboost_transfer_holdout_allows_tagged_bakery_refit_seed(self) -> None:
+        loaded = _build_bakery_loaded_frames()
+        tagged_train = loaded.train_frame.copy()
+        tagged_train["bakery_refit_seed_flag"] = True
+        loaded = LoadedEvaluationFrames(
+            evaluation_mode="bakery_reference_transfer_holdout",
+            train_frame=tagged_train,
+            valid_frame=loaded.valid_frame.assign(dataset_source="synthetic_foodservice_bakery"),
+            test_frame=loaded.test_frame,
+            history_reference=loaded.history_reference,
+            scored_reference_test=loaded.scored_reference_test,
+            overlap_metadata=loaded.overlap_metadata,
+        )
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            best_params_path = Path(temp_dir) / "best_optuna_params.json"
+            best_params_path.write_text(
+                json.dumps({"model_backend": "xgboost", "n_jobs": 1}),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "praedixa.demand_forecast.evaluation.orchestrator_context._training_manifest_feature_columns",
+                return_value=[
+                    "dataset_source",
+                    "rolling_mean_7",
+                    "client_id",
+                    "location_id",
+                    "product_id",
+                ],
+            ):
+                context = prepare_evaluation_context(
+                    loaded=loaded,
+                    requested_target_col=DEFAULT_ABSOLUTE_TARGET_COL,
+                    best_params_path=best_params_path,
+                    logger=logger,
+                    model_backend="xgboost",
+                )
+
+        self.assertEqual(len(context.train_frame), len(tagged_train))
 
 
 if __name__ == "__main__":

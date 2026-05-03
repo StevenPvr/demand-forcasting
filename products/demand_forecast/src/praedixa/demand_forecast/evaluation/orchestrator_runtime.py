@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -207,9 +209,133 @@ def _evaluation_run_artifacts(
 
 
 def _model_family_for_paths(model_backend: str) -> str:
-    if model_backend in {"xgboost", "chronos2"}:
+    if model_backend in {"xgboost", "chronos2", "moirai", "timesfm"}:
         return model_backend
     return "foundation_tft"
+
+
+def _weight_experiment_label(multiplier: float) -> str:
+    label = f"{float(multiplier):g}".replace(".", "_")
+    return f"bakery_effective_share_{label}"
+
+
+def _context_with_bakery_weight(context: Any, *, multiplier: float) -> Any:
+    target_share = min(max(float(multiplier) / 100.0, 1e-6), 0.999999)
+    best_params = {
+        **context.best_params,
+        "daily_refit_bakery_weight_strategy": "target_effective_share",
+        "daily_refit_bakery_min_effective_share": 0.50,
+        "daily_refit_bakery_max_effective_share": target_share,
+        "daily_refit_bakery_weight_experiment": _weight_experiment_label(multiplier),
+    }
+    return replace(context, best_params=best_params)
+
+
+def _run_weighted_evaluation_branch(
+    *,
+    request: Any,
+    target_dir: Path,
+    context: Any,
+    multiplier: float,
+    logger: logging.Logger,
+    evaluate_daily_refit_fn: Callable[..., tuple[pd.DataFrame, pd.DataFrame, int]],
+    fit_final_model_fn: Callable[..., Any],
+    save_model_fn: Callable[[Any, Path], Path],
+    plot_actual_vs_predicted_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_qq_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_acf_pacf_fn: Callable[[pd.DataFrame, Path], None],
+) -> dict[str, Path]:
+    experiment_label = _weight_experiment_label(multiplier)
+    branch_context = _context_with_bakery_weight(context, multiplier=multiplier)
+    branch_dir = target_dir / experiment_label
+    branch_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Starting weighted bakery refit evaluation branch: label=%s multiplier=%.3f output_dir=%s",
+        experiment_label,
+        multiplier,
+        branch_dir,
+    )
+    predictions_df, daily_report_df, best_iteration = _run_daily_refit(
+        context=branch_context,
+        logger=logger,
+        evaluate_daily_refit_fn=evaluate_daily_refit_fn,
+    )
+    artifacts = _built_evaluation_artifacts(
+        request=request,
+        target_dir=branch_dir,
+        context=branch_context,
+        predictions_df=predictions_df,
+        daily_report_df=daily_report_df,
+        best_iteration=best_iteration,
+        fit_final_model_fn=fit_final_model_fn,
+    )
+    outputs = persist_evaluation_outputs(
+        artifacts=artifacts,
+        save_model_fn=save_model_fn,
+        plot_actual_vs_predicted_fn=plot_actual_vs_predicted_fn,
+        plot_residuals_fn=plot_residuals_fn,
+        plot_residuals_qq_fn=plot_residuals_qq_fn,
+        plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf_fn,
+    )
+    log_evaluation_completion(
+        evaluation_mode=f"{branch_context.evaluation_mode}:{experiment_label}",
+        metrics_payload=artifacts.metrics_payload,
+        baseline_savings_payload=artifacts.metrics_payload.get("business_impact"),
+        economic_gain_payload=artifacts.economic_gain_payload,
+        logger=logger,
+    )
+    return {f"{experiment_label}.{key}": value for key, value in outputs.items()}
+
+
+def _run_parallel_weighted_evaluations(
+    *,
+    request: Any,
+    target_dir: Path,
+    context: Any,
+    logger: logging.Logger,
+    evaluate_daily_refit_fn: Callable[..., tuple[pd.DataFrame, pd.DataFrame, int]],
+    fit_final_model_fn: Callable[..., Any],
+    save_model_fn: Callable[[Any, Path], Path],
+    plot_actual_vs_predicted_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_qq_fn: Callable[[pd.DataFrame, Path], None],
+    plot_residuals_acf_pacf_fn: Callable[[pd.DataFrame, Path], None],
+) -> dict[str, Path]:
+    multipliers = tuple(
+        float(multiplier)
+        for multiplier in (request.daily_refit_bakery_weight_multipliers or ())
+    )
+    workers = max(1, min(len(multipliers), int(request.daily_refit_parallel_workers)))
+    logger.info(
+        "Starting parallel bakery effective-share evaluations from single loaded dataset: "
+        "target_shares=%s workers=%s",
+        multipliers,
+        workers,
+    )
+    outputs: dict[str, Path] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                _run_weighted_evaluation_branch,
+                request=request,
+                target_dir=target_dir,
+                context=context,
+                multiplier=multiplier,
+                logger=logger,
+                evaluate_daily_refit_fn=evaluate_daily_refit_fn,
+                fit_final_model_fn=fit_final_model_fn,
+                save_model_fn=save_model_fn,
+                plot_actual_vs_predicted_fn=plot_actual_vs_predicted_fn,
+                plot_residuals_fn=plot_residuals_fn,
+                plot_residuals_qq_fn=plot_residuals_qq_fn,
+                plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf_fn,
+            )
+            for multiplier in multipliers
+        ]
+        for future in as_completed(futures):
+            outputs.update(future.result())
+    return outputs
 
 
 def _artifact_side_payloads(
@@ -263,6 +389,20 @@ def run_evaluation_pipeline(
 ) -> dict[str, Path]:
     require_backend_available_fn("evaluation.build_evaluation_outputs")
     context = _loaded_evaluation_context(request=request, logger=logger)
+    if request.daily_refit_bakery_weight_multipliers:
+        return _run_parallel_weighted_evaluations(
+            request=request,
+            target_dir=target_dir,
+            context=context,
+            logger=logger,
+            evaluate_daily_refit_fn=evaluate_daily_refit_fn,
+            fit_final_model_fn=fit_final_model_fn,
+            save_model_fn=save_model_fn,
+            plot_actual_vs_predicted_fn=plot_actual_vs_predicted_fn,
+            plot_residuals_fn=plot_residuals_fn,
+            plot_residuals_qq_fn=plot_residuals_qq_fn,
+            plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf_fn,
+        )
     predictions_df, daily_report_df, best_iteration = _run_daily_refit(
         context=context,
         logger=logger,

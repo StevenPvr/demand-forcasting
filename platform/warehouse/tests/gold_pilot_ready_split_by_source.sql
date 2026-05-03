@@ -20,23 +20,6 @@ bakery_bounds as (
 ),
 violations as (
     select
-        'freshretail_lt_train_val_contract' as violation,
-        source_splits.*
-    from source_splits
-    where dataset_source = 'freshretail_lt'
-      and (
-        split_count <> 2
-        or train_rows = 0
-        or val_rows = 0
-        or test_rows <> 0
-        or train_max_dt >= val_min_dt
-        or train_min_dt is null
-        or val_min_dt is null
-      )
-
-    union all
-
-    select
         'bakery_test_holdout_contract' as violation,
         source_splits.*
     from source_splits
@@ -53,10 +36,25 @@ violations as (
     union all
 
     select
+        'synthetic_foodservice_pilot_ready_contract' as violation,
+        source_splits.*
+    from source_splits
+    where dataset_source like 'synthetic_foodservice%'
+      and (
+        split_count <> 3
+        or train_rows = 0
+        or val_rows = 0
+        or test_rows = 0
+      )
+
+    union all
+
+    select
         'unexpected_dataset_source' as violation,
         source_splits.*
     from source_splits
-    where dataset_source not in ('freshretail_lt', 'bakery')
+    where dataset_source != 'bakery'
+      and dataset_source not like 'synthetic_foodservice%'
 )
 select *
 from violations

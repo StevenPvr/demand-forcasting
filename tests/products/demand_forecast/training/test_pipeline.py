@@ -157,7 +157,7 @@ def _assert_output_artifacts(output_dir: Path) -> dict[str, Any]:
 def _gold_frame() -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     dataset_specs = (
-        ("freshretail_lt", "store_1", "sku_1"),
+        ("synthetic_foodservice_qsr", "store_1", "sku_1"),
         ("bakery", "store_2", "sku_2"),
     )
     for dataset_offset, (dataset_source, location_id, product_id) in enumerate(
@@ -211,7 +211,7 @@ class OptimisationPipelineTests(unittest.TestCase):
         self.assertEqual(request.tuning_sample_fraction, 1.0)
         self.assertEqual(request.model_backend, "xgboost")
 
-    def test_chronos2_finetune_config_scopes_to_full_freshretail(
+    def test_chronos2_finetune_config_scopes_to_full_bakery(
         self,
     ) -> None:
         config = build_chronos2_finetune_optimisation_main_config()
@@ -221,7 +221,7 @@ class OptimisationPipelineTests(unittest.TestCase):
         self.assertEqual(config.max_trials, 30)
         self.assertEqual(config.train_sample_fraction, 1.0)
         self.assertEqual(config.tuning_sample_fraction, 1.0)
-        self.assertEqual(config.included_dataset_sources, ("freshretail_lt",))
+        self.assertEqual(config.included_dataset_sources, ("bakery",))
 
     def test_chronos2_future_frame_pads_short_series_to_prediction_length(
         self,

@@ -16,6 +16,7 @@ _CHRONOS_ID_COL = "series_id"
 _CHRONOS_TIMESTAMP_COL = "timestamp"
 _CHRONOS_TARGET_COL = "target"
 _CHRONOS_FREQUENCY_ANCHOR_ID = "__praedixa_chronos2_daily_frequency_anchor__"
+_COLD_START_SERIES_ID = "__praedixa_foundation_cold_start__"
 _DEFAULT_MODEL_PATH = "amazon/chronos-2"
 _DEFAULT_QUANTILES = (0.1, 0.5, 0.9)
 _PREDICTION_COLUMN_BY_QUANTILE = {
@@ -39,6 +40,7 @@ class Chronos2ZeroShotModel:
     batch_size: int | None = None
     context_length: int | None = None
     cross_learning: bool = True
+    cold_start_series_id: str = _COLD_START_SERIES_ID
     runtime_profile: str = "chronos2_zero_shot"
     normalization_strategy: dict[str, object] | None = None
     system_info: dict[str, object] | None = None
@@ -80,6 +82,7 @@ def fit_chronos2_zero_shot_model(
         target_col=target_col,
         include_target=True,
     )
+    context_frame = _with_cold_start_context(context_frame)
     covariate_kinds = _chronos_covariate_kinds(context_frame)
     return (
         Chronos2ZeroShotModel(
@@ -116,7 +119,7 @@ def predict_chronos2_quantiles(
     model: Chronos2ZeroShotModel,
     frame: pd.DataFrame,
 ) -> pd.DataFrame:
-    future_frame = _chronos_frame(
+    initial_future_frame = _chronos_frame(
         frame,
         feature_cols=model.feature_cols,
         target_col=model.target_col,
@@ -124,14 +127,31 @@ def predict_chronos2_quantiles(
         preferred_series_order=model.series_order,
         covariate_kinds=model.covariate_kinds,
     )
+    context_frame = _context_frame_with_cold_started_series(
+        model.context_frame,
+        future_frame=initial_future_frame,
+        cold_start_series_id=model.cold_start_series_id,
+    )
+    requested_series_order = _requested_series_order(
+        context_frame,
+        initial_future_frame,
+    )
+    context_frame = _context_frame_for_series(
+        context_frame,
+        series_order=requested_series_order,
+    )
+    future_frame = _sort_chronos_frame(
+        initial_future_frame,
+        preferred_series_order=requested_series_order,
+    )
     prediction_length = _prediction_length(future_frame)
     future_frame = _with_frequency_anchor_future(
         future_frame,
-        context_frame=model.context_frame,
+        context_frame=context_frame,
         prediction_length=prediction_length,
     )
     forecast_frame = model.pipeline.predict_df(
-        model.context_frame,
+        context_frame,
         future_df=future_frame,
         prediction_length=prediction_length,
         quantile_levels=list(model.quantiles),
@@ -203,30 +223,51 @@ def _chronos_frame(
     preferred_series_order: list[str] | None = None,
     covariate_kinds: dict[str, str] | None = None,
 ) -> pd.DataFrame:
-    output = pd.DataFrame(
-        {
-            _CHRONOS_ID_COL: _series_ids(frame),
-            _CHRONOS_TIMESTAMP_COL: pd.to_datetime(frame[_REFERENCE_DATE_COL]),
-        }
-    )
+    columns: dict[str, object] = {
+        _CHRONOS_ID_COL: _series_ids(frame),
+        _CHRONOS_TIMESTAMP_COL: _date_values(frame),
+    }
     if include_target:
-        output[_CHRONOS_TARGET_COL] = frame[target_col].astype(float).to_numpy()
+        columns[_CHRONOS_TARGET_COL] = frame[target_col].astype(float).to_numpy()
     for column in _chronos_covariate_columns(feature_cols, frame):
-        output[column] = _chronos_covariate_series(
+        columns[column] = _chronos_covariate_series(
             frame[column],
             forced_kind=None
             if covariate_kinds is None
             else covariate_kinds.get(column),
         )
+    output = pd.DataFrame(columns, copy=False)
     if include_target:
         output = _with_frequency_anchor_context(output)
     return _sort_chronos_frame(output, preferred_series_order=preferred_series_order)
 
 
 def _series_ids(frame: pd.DataFrame) -> pd.Series:
-    if "client_id" in frame.columns and not frame["client_id"].isna().all():
-        return frame["client_id"].astype(str)
-    return frame[_REFERENCE_PRODUCT_COL].astype(str)
+    product_ids = _product_ids(frame)
+    if "dataset_source" in frame.columns:
+        bakery_mask = frame["dataset_source"].astype(str) == "bakery"
+    else:
+        bakery_mask = pd.Series(False, index=frame.index)
+    if "client_id" not in frame.columns:
+        return product_ids
+    client_ids = frame["client_id"].astype("string")
+    return client_ids.where(~bakery_mask & client_ids.notna(), product_ids).astype(str)
+
+
+def _product_ids(frame: pd.DataFrame) -> pd.Series:
+    if _REFERENCE_PRODUCT_COL in frame.columns:
+        return frame[_REFERENCE_PRODUCT_COL].astype(str)
+    if "product_id" in frame.columns:
+        return frame["product_id"].astype(str)
+    raise KeyError(_REFERENCE_PRODUCT_COL)
+
+
+def _date_values(frame: pd.DataFrame) -> pd.Series:
+    if _REFERENCE_DATE_COL in frame.columns:
+        return pd.to_datetime(frame[_REFERENCE_DATE_COL])
+    if "dt" in frame.columns:
+        return pd.to_datetime(frame["dt"])
+    raise KeyError(_REFERENCE_DATE_COL)
 
 
 def _chronos_covariate_columns(
@@ -316,6 +357,88 @@ def _series_order_with_inferable_frequency(frame: pd.DataFrame) -> list[str]:
     return base_order
 
 
+def _requested_series_order(
+    context_frame: pd.DataFrame,
+    future_frame: pd.DataFrame,
+) -> list[str]:
+    context_series_order = (
+        context_frame[_CHRONOS_ID_COL].drop_duplicates().astype(str).tolist()
+    )
+    requested_series = set(future_frame[_CHRONOS_ID_COL].astype(str).tolist())
+    requested_order = [
+        series_id for series_id in context_series_order if series_id in requested_series
+    ]
+    if not requested_order:
+        raise ValueError(
+            "Chronos-2 prediction frame has no series present in model context."
+        )
+    return requested_order
+
+
+def _with_cold_start_context(frame: pd.DataFrame) -> pd.DataFrame:
+    base_frame = frame.loc[
+        ~frame[_CHRONOS_ID_COL].isin(
+            {_CHRONOS_FREQUENCY_ANCHOR_ID, _COLD_START_SERIES_ID}
+        )
+    ].copy()
+    if base_frame.empty:
+        return frame
+    cold_context = _cold_start_aggregate_frame(base_frame)
+    return pd.concat([frame, cold_context], ignore_index=True)
+
+
+def _cold_start_aggregate_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    aggregation: dict[str, str] = {}
+    for column in frame.columns:
+        if column in {_CHRONOS_ID_COL, _CHRONOS_TIMESTAMP_COL}:
+            continue
+        aggregation[column] = (
+            "mean" if pd.api.types.is_numeric_dtype(frame[column]) else "first"
+        )
+    grouped = frame.groupby(_CHRONOS_TIMESTAMP_COL, sort=True).agg(aggregation)
+    columns: dict[str, object] = {
+        _CHRONOS_ID_COL: _COLD_START_SERIES_ID,
+        _CHRONOS_TIMESTAMP_COL: grouped.index.to_numpy(copy=True),
+    }
+    for column in aggregation:
+        columns[column] = grouped[column].to_numpy(copy=True)
+    return pd.DataFrame(columns, copy=False)
+
+
+def _context_frame_with_cold_started_series(
+    frame: pd.DataFrame,
+    *,
+    future_frame: pd.DataFrame,
+    cold_start_series_id: str,
+) -> pd.DataFrame:
+    requested_series = set(future_frame[_CHRONOS_ID_COL].astype(str).tolist())
+    known_series = set(frame[_CHRONOS_ID_COL].astype(str).tolist())
+    missing_series = sorted(requested_series.difference(known_series))
+    if not missing_series:
+        return frame
+    cold_context = frame.loc[frame[_CHRONOS_ID_COL] == cold_start_series_id].copy()
+    if cold_context.empty:
+        return frame
+    cold_parts: list[pd.DataFrame] = []
+    for series_id in missing_series:
+        series_context = cold_context.copy()
+        series_context[_CHRONOS_ID_COL] = series_id
+        cold_parts.append(series_context)
+    return pd.concat([frame, *cold_parts], ignore_index=True)
+
+
+def _context_frame_for_series(
+    context_frame: pd.DataFrame,
+    *,
+    series_order: list[str],
+) -> pd.DataFrame:
+    requested = set(series_order)
+    requested.add(_CHRONOS_FREQUENCY_ANCHOR_ID)
+    return context_frame.loc[
+        context_frame[_CHRONOS_ID_COL].astype(str).isin(requested)
+    ].copy()
+
+
 def _with_frequency_anchor_context(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or _CHRONOS_FREQUENCY_ANCHOR_ID in set(
         frame[_CHRONOS_ID_COL].astype(str)
@@ -403,7 +526,7 @@ def _aligned_forecast(
     expected = pd.DataFrame(
         {
             _CHRONOS_ID_COL: _series_ids(source_frame),
-            _CHRONOS_TIMESTAMP_COL: pd.to_datetime(source_frame[_REFERENCE_DATE_COL]),
+            _CHRONOS_TIMESTAMP_COL: _date_values(source_frame),
             "_row_order": np.arange(len(source_frame), dtype=np.int64),
         }
     )

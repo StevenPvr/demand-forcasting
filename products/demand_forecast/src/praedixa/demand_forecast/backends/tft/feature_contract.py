@@ -8,6 +8,7 @@ from praedixa.demand_forecast.backends.tft.feature_mapping import (
 from praedixa.demand_forecast.backends.tft.feature_mapping_spec import (
     FEATURE_ROLE_ORDER,
     TFTColumnRole,
+    strip_feature_role_suffix,
 )
 
 
@@ -44,6 +45,7 @@ def feature_available_at_prediction(role: TFTColumnRole) -> bool:
 
 
 def _source_system_for_column(column: str) -> str:
+    column = strip_feature_role_suffix(column)
     if column.startswith("weather_"):
         return "weather"
     if column.startswith("label_quality_score") or column.startswith("data_quality_"):
@@ -75,6 +77,7 @@ def _source_system_for_column(column: str) -> str:
         "dataset_source",
         "client_id",
         "source_role",
+        "is_synthetic_source",
         "vertical_level_1",
         "vertical_level_2",
         "commerce_modality",
@@ -102,12 +105,15 @@ def _source_system_for_column(column: str) -> str:
 
 
 def _decision_time_scope_for_column(column: str) -> str:
+    column = strip_feature_role_suffix(column)
     if (
         column.startswith("target_")
         or column.startswith("sin_target_")
         or column.startswith("cos_target_")
     ):
         return "target_calendar_known"
+    if column.startswith("field_baseline_"):
+        return "decision_day_history"
     if "_lag_" in column or column.startswith("lag_"):
         return "historical_observed"
     if (

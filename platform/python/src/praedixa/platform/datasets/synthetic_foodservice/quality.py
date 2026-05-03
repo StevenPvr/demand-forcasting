@@ -27,6 +27,9 @@ class SyntheticGenerationStats:
     censored_rows: int
     zero_rows: int
     promo_rows: int
+    missing_label_rows: int
+    incomplete_rows: int
+    training_usable_rows: int
     sources: dict[str, dict[str, int]]
 
     def to_dict(self) -> dict[str, object]:
@@ -47,6 +50,9 @@ class GenerationStatsBuilder:
         self._censored_rows = 0
         self._zero_rows = 0
         self._promo_rows = 0
+        self._missing_label_rows = 0
+        self._incomplete_rows = 0
+        self._training_usable_rows = 0
         self._sources: dict[str, dict[str, int]] = {}
         self._source_sites: dict[str, set[str]] = {}
         self._source_series: dict[str, set[str]] = {}
@@ -60,7 +66,13 @@ class GenerationStatsBuilder:
         self._min_dt = _min_date(self._min_dt, pd.to_datetime(daily["dt"]).min().date())
         self._max_dt = _max_date(self._max_dt, pd.to_datetime(daily["dt"]).max().date())
         self._censored_rows += int(daily["censor_flag"].astype(bool).sum())
-        self._zero_rows += int(pd.to_numeric(daily["observed_demand_qty"]).eq(0).sum())
+        observed = pd.to_numeric(daily["observed_demand_qty"], errors="coerce")
+        self._zero_rows += int(observed.eq(0).sum())
+        self._missing_label_rows += int(observed.isna().sum())
+        self._incomplete_rows += int((~daily["day_complete_flag"].astype(bool)).sum())
+        self._training_usable_rows += int(
+            daily["usable_for_training_flag"].fillna(False).astype(bool).sum()
+        )
         self._promo_rows += int(daily["promo_flag"].astype(bool).sum())
         for source, source_rows in daily.groupby("dataset_source"):
             self._add_source_rows(str(source), source_rows)
@@ -77,13 +89,22 @@ class GenerationStatsBuilder:
             censored_rows=self._censored_rows,
             zero_rows=self._zero_rows,
             promo_rows=self._promo_rows,
+            missing_label_rows=self._missing_label_rows,
+            incomplete_rows=self._incomplete_rows,
+            training_usable_rows=self._training_usable_rows,
             sources=self._sources,
         )
 
     def _add_source_rows(self, source: str, frame: pd.DataFrame) -> None:
         summary = self._sources.setdefault(
             source,
-            {"rows": 0, "sites": 0, "series": 0, "censored_rows": 0},
+            {
+                "rows": 0,
+                "sites": 0,
+                "series": 0,
+                "censored_rows": 0,
+                "training_usable_rows": 0,
+            },
         )
         sites = self._source_sites.setdefault(source, set())
         series = self._source_series.setdefault(source, set())
@@ -93,6 +114,9 @@ class GenerationStatsBuilder:
         summary["sites"] = len(sites)
         summary["series"] = len(series)
         summary["censored_rows"] += int(frame["censor_flag"].astype(bool).sum())
+        summary["training_usable_rows"] += int(
+            frame["usable_for_training_flag"].fillna(False).astype(bool).sum()
+        )
 
 
 def validate_model_facing_frame(frame: pd.DataFrame) -> None:
@@ -112,6 +136,17 @@ def validate_model_facing_frame(frame: pd.DataFrame) -> None:
         )
     if pd.to_numeric(frame["observed_demand_qty"], errors="coerce").lt(0).any():
         raise ValueError("Synthetic observed_demand_qty must be non-negative.")
+    observed = pd.to_numeric(frame["observed_demand_qty"], errors="coerce")
+    usable = frame["usable_for_training_flag"].fillna(False).astype(bool)
+    incomplete = ~frame["day_complete_flag"].fillna(False).astype(bool)
+    low_quality = (
+        pd.to_numeric(frame["label_quality_score"], errors="coerce").fillna(0.0).le(0.0)
+    )
+    invalid_training_labels = usable & (observed.isna() | incomplete | low_quality)
+    if invalid_training_labels.any():
+        raise ValueError(
+            "Synthetic daily feed has training-usable rows with missing or incomplete labels."
+        )
 
 
 def build_manifest_payload(
@@ -122,6 +157,7 @@ def build_manifest_payload(
     stats: SyntheticGenerationStats,
     location_metadata_path: str,
     hidden_oracle_columns: tuple[str, ...],
+    config_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the JSON manifest written next to the one-shot source CSV."""
 
@@ -132,6 +168,7 @@ def build_manifest_payload(
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
         },
+        "config": config_metadata or {},
         "stats": stats.to_dict(),
         "model_facing_policy": {
             "daily_source_is_stable_one_shot_csv": True,

@@ -117,6 +117,8 @@
 ] %}
 {% set data_quality_operations_bases = [
     "target_delta_log_wow_d_plus_1",
+    "field_baseline_blend_lag_1_lag_7_d_plus_1",
+    "target_residual_field_blend_lag_1_lag_7_d_plus_1",
     "current_day_demand_qty",
     "observed_stockout_flag",
 ] %}
@@ -369,6 +371,8 @@ dataset_applicability as (
         max(case when category_level_2 is not null then 1 else 0 end) as category_level_2_applicable_flag,
         max(case when category_level_3 is not null then 1 else 0 end) as category_level_3_applicable_flag,
         max(case when target_delta_log_wow_d_plus_1 is not null then 1 else 0 end) as target_delta_log_wow_d_plus_1_applicable_flag,
+        max(case when field_baseline_blend_lag_1_lag_7_d_plus_1 is not null then 1 else 0 end) as field_baseline_blend_lag_1_lag_7_d_plus_1_applicable_flag,
+        max(case when target_residual_field_blend_lag_1_lag_7_d_plus_1 is not null then 1 else 0 end) as target_residual_field_blend_lag_1_lag_7_d_plus_1_applicable_flag,
         max(case when current_day_demand_qty is not null then 1 else 0 end) as current_day_demand_qty_applicable_flag,
         max(case when observed_stockout_flag is not null then 1 else 0 end) as observed_stockout_flag_applicable_flag,
         max(case when observed_discount_amount is not null then 1 else 0 end) as observed_discount_amount_applicable_flag,
@@ -469,21 +473,9 @@ select
     weighted.client_id,
     weighted.vertical_level_1,
     weighted.vertical_level_2,
-    case
-        when weighted.dataset_source = 'freshretail_lt' then 'grocery_delivery'
-        when weighted.dataset_source = 'bakery' then 'foodservice'
-        else 'unknown'
-    end as commerce_modality,
-    case
-        when weighted.dataset_source = 'freshretail_lt' then 'grocery_delivery'
-        when weighted.dataset_source = 'bakery' then 'bakery_pastry'
-        else 'unknown'
-    end as operation_type,
-    case
-        when weighted.dataset_source = 'freshretail_lt' then 'grocery'
-        when weighted.dataset_source = 'bakery' then 'prepared_food'
-        else 'unknown'
-    end as service_pattern,
+    'foodservice' as commerce_modality,
+    'bakery_pastry' as operation_type,
+    'prepared_food' as service_pattern,
     weighted.country_code_applicable_flag as country_code_applicable_flag,
 
     coalesce(weighted.country_code, '0') as country_code,
@@ -544,6 +536,12 @@ select
 
     coalesce(weighted.target_delta_log_wow_d_plus_1, 0) as target_delta_log_wow_d_plus_1,
     case when weighted.target_delta_log_wow_d_plus_1_applicable_flag = 1 and weighted.target_delta_log_wow_d_plus_1 is null then 1 else 0 end as target_delta_log_wow_d_plus_1_missing_flag,
+    weighted.field_baseline_blend_lag_1_lag_7_d_plus_1_applicable_flag as field_baseline_blend_lag_1_lag_7_d_plus_1_applicable_flag,
+    weighted.field_baseline_blend_lag_1_lag_7_d_plus_1 as field_baseline_blend_lag_1_lag_7_d_plus_1,
+    case when weighted.field_baseline_blend_lag_1_lag_7_d_plus_1_applicable_flag = 1 and weighted.field_baseline_blend_lag_1_lag_7_d_plus_1 is null then 1 else 0 end as field_baseline_blend_lag_1_lag_7_d_plus_1_missing_flag,
+    weighted.target_residual_field_blend_lag_1_lag_7_d_plus_1_applicable_flag as target_residual_field_blend_lag_1_lag_7_d_plus_1_applicable_flag,
+    weighted.target_residual_field_blend_lag_1_lag_7_d_plus_1 as target_residual_field_blend_lag_1_lag_7_d_plus_1,
+    case when weighted.target_residual_field_blend_lag_1_lag_7_d_plus_1_applicable_flag = 1 and weighted.target_residual_field_blend_lag_1_lag_7_d_plus_1 is null then 1 else 0 end as target_residual_field_blend_lag_1_lag_7_d_plus_1_missing_flag,
     weighted.current_day_demand_qty_applicable_flag as current_day_demand_qty_applicable_flag,
     coalesce(weighted.current_day_demand_qty, 0) as current_day_demand_qty,
     case when weighted.current_day_demand_qty_applicable_flag = 1 and weighted.current_day_demand_qty is null then 1 else 0 end as current_day_demand_qty_missing_flag,
@@ -672,6 +670,7 @@ select
     weighted.source_review_status,
     weighted.source_legal_status_snapshot,
     weighted.source_role,
+    weighted.is_synthetic_source,
     weighted.lag_1_applicable_flag as lag_1_applicable_flag,
 
     coalesce(weighted.lag_1, 0) as lag_1,

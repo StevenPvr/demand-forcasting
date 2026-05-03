@@ -43,6 +43,7 @@ from praedixa.demand_forecast.backends.xgboost.model_fit import (
 
 LOGGER = logging.getLogger(__name__)
 _native_categorical_eval_override_logged: bool = False
+_BUSINESS_SAMPLE_WEIGHT_COL = "sample_weight_business"
 
 
 def _model_param_as_int(params: dict[str, object], key: str) -> int:
@@ -78,6 +79,27 @@ def compute_equal_dataset_row_weights(
         dtype=float,
     )
     return relative_weights * float(len(frame))
+
+
+def _evaluation_sample_weights(frame: pd.DataFrame) -> np.ndarray | None:
+    weights = compute_equal_dataset_row_weights(
+        frame,
+        dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
+    )
+    if _BUSINESS_SAMPLE_WEIGHT_COL not in frame.columns:
+        return weights
+    if weights is None:
+        weights = np.ones(len(frame), dtype=float)
+    business_weights = pd.to_numeric(
+        frame[_BUSINESS_SAMPLE_WEIGHT_COL],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    resolved_business_weights = np.where(
+        np.isfinite(business_weights) & (business_weights > 0.0),
+        business_weights,
+        1.0,
+    )
+    return weights * resolved_business_weights
 
 
 def drop_constant_feature_columns(
@@ -131,7 +153,7 @@ def _feature_selection_frame(
     *,
     model_backend: str,
 ) -> pd.DataFrame:
-    if model_backend not in {"xgboost", "chronos2"}:
+    if model_backend not in {"xgboost", "chronos2", "moirai", "timesfm"}:
         return train_frame
     mapped_columns = [
         column
@@ -176,12 +198,8 @@ def fit_evaluation_model(
     model_params: dict[str, object],
 ) -> tuple[Any, int]:
     learning_target_col = target_contract.learning_target_col
-    train_weights = compute_equal_dataset_row_weights(
-        train_frame, dataset_source_col=DEFAULT_DATASET_SOURCE_COL
-    )
-    valid_weights = compute_equal_dataset_row_weights(
-        valid_frame, dataset_source_col=DEFAULT_DATASET_SOURCE_COL
-    )
+    train_weights = _evaluation_sample_weights(train_frame)
+    valid_weights = _evaluation_sample_weights(valid_frame)
     train_for_model = train_frame.copy()
     valid_for_model = valid_frame.copy()
     model = fit_tft_model(
@@ -253,9 +271,7 @@ def fit_final_model(
     num_boost_round: int,
 ) -> Any:
     learning_target_col = target_contract.learning_target_col
-    fit_weights = compute_equal_dataset_row_weights(
-        fit_frame, dataset_source_col=DEFAULT_DATASET_SOURCE_COL
-    )
+    fit_weights = _evaluation_sample_weights(fit_frame)
     fit_for_model = fit_frame.copy()
     return fit_tft_model(
         fit_for_model,
@@ -301,10 +317,7 @@ def fit_xgboost_evaluation_model(
                 target_col=learning_target_col,
             ),
         )
-    train_weights = compute_equal_dataset_row_weights(
-        train_frame,
-        dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
-    )
+    train_weights = _evaluation_sample_weights(train_frame)
     LOGGER.debug(
         "XGBoost evaluation backend fit sample weights prepared: %s",
         _sample_weight_summary(train_weights),
@@ -379,10 +392,7 @@ def fit_final_xgboost_model(
         target_col=target_contract.learning_target_col,
         model_params=fit_params,
         default_params=DEFAULT_XGBOOST_MODEL_PARAMS,
-        train_sample_weight=compute_equal_dataset_row_weights(
-            fit_frame,
-            dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
-        ),
+        train_sample_weight=_evaluation_sample_weights(fit_frame),
     )
 
 

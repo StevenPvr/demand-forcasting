@@ -28,7 +28,19 @@ class SourceRegistryTests(unittest.TestCase):
 
         self.assertEqual(
             allowed_sources,
-            ["bakery", "freshretail_lt"],
+            [
+                "bakery",
+                "m5_forecasting_accuracy",
+                "synthetic_foodservice_bakery",
+                "synthetic_foodservice_brasserie",
+                "synthetic_foodservice_coffee_shop",
+                "synthetic_foodservice_dark_kitchen",
+                "synthetic_foodservice_qsr",
+                "synthetic_foodservice_restaurant",
+                "synthetic_foodservice_sandwich_shop",
+                "synthetic_foodservice_seasonal_tourist",
+                "synthetic_foodservice_snack",
+            ],
         )
         self.assertNotIn("open_meteo_api", allowed_sources)
 

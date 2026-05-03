@@ -6,7 +6,6 @@ import logging
 
 import polars as pl
 
-from praedixa.platform.datasets.standardization.freshretail import build_freshretail_standardized_frame
 from praedixa.platform.datasets.standardization.quality import raise_on_error_issues, validate_canonical_frame
 
 
@@ -43,9 +42,7 @@ def _validate_frame_or_raise(frame: pl.DataFrame, *, dataset_name: str) -> dict[
 
 
 def _build_source_frames() -> dict[str, pl.DataFrame]:
-    return {
-        "freshretail_lt": build_freshretail_standardized_frame(),
-    }
+    return {}
 
 
 def build_global_daily_standardization() -> GlobalDatasetArtifacts:
@@ -60,9 +57,12 @@ def build_global_daily_standardization() -> GlobalDatasetArtifacts:
         source_name: _validate_frame_or_raise(frame, dataset_name=source_name)
         for source_name, frame in source_frames.items()
     }
-    combined = pl.concat(list(source_frames.values()), how="vertical_relaxed")
-    source_summaries["combined"] = _summarize_frame(combined)
-    combined_quality = _validate_frame_or_raise(combined, dataset_name="combined")
+    if source_frames:
+        combined = pl.concat(list(source_frames.values()), how="vertical_relaxed")
+        source_summaries["combined"] = _summarize_frame(combined)
+        combined_quality = _validate_frame_or_raise(combined, dataset_name="combined")
+    else:
+        combined_quality = {}
     return GlobalDatasetArtifacts(
         source_summaries=source_summaries,
         data_quality={

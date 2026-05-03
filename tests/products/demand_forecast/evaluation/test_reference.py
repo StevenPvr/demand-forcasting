@@ -8,7 +8,11 @@ import warnings
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -17,7 +21,9 @@ for path in (PLATFORM_SRC, PRODUCT_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from praedixa.demand_forecast.evaluation.reference import build_bakery_reference_feature_frame  # noqa: E402
+from praedixa.demand_forecast.evaluation.reference import (  # noqa: E402
+    build_bakery_reference_feature_frame,
+)
 
 
 def _build_reference_full_frame() -> pd.DataFrame:
@@ -103,28 +109,61 @@ def _build_reference_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
 
 
 class EvaluationReferenceTests(unittest.TestCase):
-    def test_build_bakery_reference_feature_frame_keeps_exact_reference_universe(self) -> None:
+    def test_build_bakery_reference_feature_frame_keeps_exact_reference_universe(
+        self,
+    ) -> None:
         reference_full, reference_test, gold_base = _build_reference_inputs()
 
-        feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_base)
+        feature_frame = build_bakery_reference_feature_frame(
+            reference_full, reference_test, gold_base
+        )
 
         self.assertEqual(len(feature_frame), len(reference_test))
-        self.assertEqual(feature_frame["target_demand_qty_d_plus_1"].tolist(), [18.0, 19.0])
+        self.assertEqual(
+            feature_frame["target_demand_qty_d_plus_1"].tolist(), [18.0, 19.0]
+        )
         self.assertTrue(feature_frame["target_lag_7"].notna().all())
         self.assertEqual(feature_frame["target_lag_7"].tolist(), [11.0, 12.0])
+        self.assertEqual(
+            feature_frame["field_baseline_blend_lag_1_lag_7_d_plus_1"].tolist(),
+            [14.0, 15.0],
+        )
+        self.assertEqual(
+            feature_frame["target_residual_field_blend_lag_1_lag_7_d_plus_1"].tolist(),
+            [4.0, 4.0],
+        )
+        self.assertEqual(
+            feature_frame["target_source"].tolist(),
+            ["observed_sales", "observed_sales"],
+        )
+        self.assertEqual(feature_frame["label_quality_score"].tolist(), [1.0, 1.0])
+        self.assertEqual(
+            feature_frame["usable_for_training_flag"].tolist(), [True, True]
+        )
+        self.assertEqual(
+            feature_frame["source_role"].tolist(), ["benchmark", "benchmark"]
+        )
+        self.assertEqual(feature_frame["is_synthetic_source"].tolist(), [False, False])
         self.assertEqual(feature_frame["weather_temperature_lag_0"].iloc[0], 20.0)
         self.assertTrue(pd.isna(feature_frame["weather_temperature_lag_0"].iloc[1]))
         self.assertNotIn("avg_selling_price_lag_1", feature_frame.columns)
-        self.assertEqual(feature_frame["client_id"].tolist(), ["public_bakery_sales", "public_bakery_sales"])
+        self.assertEqual(
+            feature_frame["client_id"].tolist(),
+            ["public_bakery_sales", "public_bakery_sales"],
+        )
         self.assertEqual(feature_frame["promo_rate_7"].tolist(), [0.0, 0.0])
         self.assertEqual(feature_frame["activity_rate_7"].tolist(), [1.0, 1.0])
 
-    def test_build_bakery_reference_feature_frame_preserves_gold_feature_columns(self) -> None:
+    def test_build_bakery_reference_feature_frame_preserves_gold_feature_columns(
+        self,
+    ) -> None:
         reference_full = _build_reference_full_frame()
         reference_test = reference_full.iloc[-2:].reset_index(drop=True)
         gold_feature = _build_reference_gold_feature_frame()
 
-        feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_feature)
+        feature_frame = build_bakery_reference_feature_frame(
+            reference_full, reference_test, gold_feature
+        )
 
         self.assertIn("target_day_of_week", feature_frame.columns)
         self.assertIn("rolling_mean_7", feature_frame.columns)
@@ -133,20 +172,31 @@ class EvaluationReferenceTests(unittest.TestCase):
         self.assertEqual(feature_frame["weather_temperature_lag_0"].iloc[0], 207.0)
         self.assertTrue(pd.isna(feature_frame["weather_temperature_lag_0"].iloc[1]))
 
-    def test_build_bakery_reference_feature_frame_synthesizes_missing_client_id(self) -> None:
+    def test_build_bakery_reference_feature_frame_synthesizes_missing_client_id(
+        self,
+    ) -> None:
         reference_full, reference_test, gold_base = _build_reference_inputs()
         gold_base = gold_base.drop(columns=["client_id"])
 
-        feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_base)
+        feature_frame = build_bakery_reference_feature_frame(
+            reference_full, reference_test, gold_base
+        )
 
-        self.assertEqual(feature_frame["client_id"].tolist(), ["bakery_store_1__A", "bakery_store_1__A"])
+        self.assertEqual(
+            feature_frame["client_id"].tolist(),
+            ["bakery_store_1__A", "bakery_store_1__A"],
+        )
 
-    def test_build_bakery_reference_feature_frame_avoids_fragmentation_warning(self) -> None:
+    def test_build_bakery_reference_feature_frame_avoids_fragmentation_warning(
+        self,
+    ) -> None:
         reference_full, reference_test, gold_base = _build_reference_inputs()
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", pd.errors.PerformanceWarning)
-            feature_frame = build_bakery_reference_feature_frame(reference_full, reference_test, gold_base)
+            feature_frame = build_bakery_reference_feature_frame(
+                reference_full, reference_test, gold_base
+            )
 
         self.assertEqual(len(feature_frame), 2)
         self.assertIn("target_same_dow_mean_4w", feature_frame.columns)

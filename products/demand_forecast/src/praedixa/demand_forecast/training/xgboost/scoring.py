@@ -18,7 +18,6 @@ from praedixa.demand_forecast.backends.xgboost.model_fit import (
     fit_xgboost_model_and_predict_validation,
     fit_prepared_xgboost_matrices_and_predict_validation,
     prepare_xgboost_training_matrices,
-    warm_up_xgboost_runtime,
 )
 from praedixa.demand_forecast.backends.xgboost.runtime import xgboost_uses_cuda
 from praedixa.demand_forecast.contracts.targets import (
@@ -36,6 +35,13 @@ from praedixa.demand_forecast.training.validation.eligibility import (
 from praedixa.demand_forecast.training.shared.metrics import (
     FLOAT_COMPARISON_EPSILON,
     compute_wape,
+)
+from praedixa.demand_forecast.training.shared.economic_objective import (
+    aggregate_asymmetric_decision_scores,
+    decision_scores_by_group,
+    economic_scoring_metadata_columns,
+    resolve_economic_segments,
+    score_segmented_asymmetric_forecast_decision,
 )
 
 
@@ -314,7 +320,7 @@ def fit_and_score_xgboost_model_on_tuning(
             "fold_matrix_cache": "prebuilt",
             "fold_matrix_cache_folds": len(fold_matrix_cache.folds),
         }
-    logger.debug(
+    logger.info(
         "XGBoost scoring started: trial=%s train_rows=%s tuning_rows=%s folds=%s features=%s execution_policy=%s params=%s",
         trial_number,
         len(train_frame),
@@ -364,6 +370,7 @@ def fit_and_score_xgboost_model_on_tuning(
             fold_results,
             metric_key="abs_normalized_bias",
         ),
+        **aggregate_asymmetric_decision_scores(fold_results),
         "mean_coverage_80": None,
         "mean_coverage_95": None,
         "mean_pinball_loss": None,
@@ -376,11 +383,12 @@ def fit_and_score_xgboost_model_on_tuning(
         "folds_completed": folds_completed,
         "execution_policy": execution_policy,
     }
-    logger.debug(
-        "XGBoost scoring completed: trial=%s folds_completed=%s macro_mean_wape=%.6f selected_n_estimators=%s native_best_score=%s duration_seconds=%.3f",
+    logger.info(
+        "XGBoost scoring completed: trial=%s folds_completed=%s macro_mean_wape=%.6f mean_decision_loss=%s selected_n_estimators=%s native_best_score=%s duration_seconds=%.3f",
         trial_number,
         folds_completed,
         result["macro_mean_wape"],
+        result["mean_decision_loss"],
         result["selected_n_estimators"],
         result["native_best_score"],
         time.perf_counter() - scoring_start,
@@ -557,15 +565,13 @@ def _score_cached_xgboost_folds_parallel(
     trial_number: int | None,
     fold_workers: int,
 ) -> tuple[list[dict[str, object]], int]:
-    logger.debug(
+    logger.info(
         "XGBoost cached folds parallel execution starting: trial=%s folds=%s workers=%s threads_per_worker=%s",
         trial_number,
         len(fold_matrix_cache.folds),
         fold_workers,
         int(cast(Any, resolved_params["n_jobs"])),
     )
-    if int(cast(Any, resolved_params["n_jobs"])) > 1:
-        warm_up_xgboost_runtime(int(cast(Any, resolved_params["n_jobs"])))
     completed: list[_FoldResult] = []
     with ThreadPoolExecutor(max_workers=fold_workers) as executor:
         future_to_position = {
@@ -726,15 +732,13 @@ def _score_xgboost_folds_parallel(
     trial_number: int | None,
     fold_workers: int,
 ) -> tuple[list[dict[str, object]], int]:
-    logger.debug(
+    logger.info(
         "XGBoost folds parallel execution starting: trial=%s folds=%s workers=%s threads_per_worker=%s",
         trial_number,
         len(folds),
         fold_workers,
         int(cast(Any, resolved_params["n_jobs"])),
     )
-    if int(cast(Any, resolved_params["n_jobs"])) > 1:
-        warm_up_xgboost_runtime(int(cast(Any, resolved_params["n_jobs"])))
     completed = _parallel_fold_results(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
@@ -760,11 +764,7 @@ def _report_trial_progress(
     *,
     step: int,
 ) -> None:
-    dataset_mean_wape = _dataset_macro_scores(fold_results)
-    trial.report(
-        -float(np.mean(list(dataset_mean_wape.values()))),
-        step=step,
-    )
+    trial.report(_partial_objective_score(fold_results), step=step)
 
 
 @dataclass(frozen=True, order=True)
@@ -870,7 +870,7 @@ def _log_fold_starting(
     fold_position: int,
     fold_count: int,
 ) -> None:
-    logger.debug(
+    logger.info(
         "XGBoost fold starting: trial=%s fold=%s/%s fold_id=%s train_extension_rows=%s valid_rows=%s",
         trial_number,
         fold_position,
@@ -891,7 +891,7 @@ def _log_fold_completed(
     single_fold_results: list[dict[str, object]],
     duration_seconds: float,
 ) -> None:
-    logger.debug(
+    logger.info(
         "XGBoost fold completed: trial=%s fold=%s/%s fold_id=%s dataset_results=%s duration_seconds=%.3f",
         trial_number,
         fold_position,
@@ -1003,8 +1003,12 @@ def _score_predictions_by_dataset(
     selected_n_estimators: int | None,
     native_best_score: float | None,
 ) -> list[dict[str, object]]:
-    scored = frame[[DEFAULT_DATASET_SOURCE_COL, absolute_target_col]].copy()
+    metadata_cols = economic_scoring_metadata_columns(frame)
+    scored = frame[
+        [DEFAULT_DATASET_SOURCE_COL, absolute_target_col, *metadata_cols]
+    ].copy()
     scored["prediction"] = predictions
+    scored["economic_segment"] = resolve_economic_segments(scored)
     rows: list[dict[str, object]] = []
     for dataset_source, dataset_frame in scored.groupby(
         DEFAULT_DATASET_SOURCE_COL, sort=False
@@ -1033,9 +1037,28 @@ def _score_predictions_by_dataset(
                 "rows_scored": int(len(dataset_frame)),
                 "selected_n_estimators": selected_n_estimators,
                 "native_best_score": native_best_score,
+                **score_segmented_asymmetric_forecast_decision(
+                    target,
+                    prediction,
+                    frame=dataset_frame,
+                ),
+                "product_decision_loss": decision_scores_by_group(
+                    dataset_frame,
+                    target,
+                    prediction,
+                    group_col=_product_group_col(dataset_frame),
+                ),
             }
         )
     return rows
+
+
+def _product_group_col(frame: pd.DataFrame) -> str:
+    if "product_id" in frame.columns:
+        return "product_id"
+    if "product" in frame.columns:
+        return "product"
+    return "economic_segment"
 
 
 def _dataset_weight_by_source(frame: pd.DataFrame) -> dict[str, float]:
@@ -1070,6 +1093,14 @@ def _dataset_macro_scores(fold_results: list[dict[str, object]]) -> dict[str, fl
         ]
         dataset_scores[dataset_source] = float(np.mean(scores))
     return dataset_scores
+
+
+def _partial_objective_score(fold_results: list[dict[str, object]]) -> float:
+    mean_decision_loss = _mean_metric(fold_results, metric_key="decision_loss")
+    if mean_decision_loss is not None:
+        return -float(mean_decision_loss)
+    dataset_mean_wape = _dataset_macro_scores(fold_results)
+    return -float(np.mean(list(dataset_mean_wape.values())))
 
 
 def _mean_metric(

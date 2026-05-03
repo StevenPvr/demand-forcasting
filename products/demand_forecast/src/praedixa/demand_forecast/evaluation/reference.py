@@ -28,6 +28,7 @@ def _normalized_reference_split_frame_polars(frame: pd.DataFrame) -> pl.DataFram
         .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
     )
 
+
 def _reference_base_frame(reference_full_df: pd.DataFrame) -> pl.DataFrame:
     return _normalized_reference_split_frame_polars(reference_full_df).select(
         [
@@ -56,7 +57,9 @@ def _reference_enrichment_columns(gold_base: pl.DataFrame) -> list[str]:
     ]
 
 
-def _merged_reference_frame(base: pl.DataFrame, gold_base: pl.DataFrame) -> pl.DataFrame:
+def _merged_reference_frame(
+    base: pl.DataFrame, gold_base: pl.DataFrame
+) -> pl.DataFrame:
     enrichment_cols = _reference_enrichment_columns(gold_base)
     return base.join(
         gold_base.select(["dt", "product_id", *enrichment_cols]),
@@ -66,8 +69,12 @@ def _merged_reference_frame(base: pl.DataFrame, gold_base: pl.DataFrame) -> pl.D
 
 
 def _reference_templates(gold_base: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
-    date_template = gold_base.sort(["dt", "product_id"]).group_by("dt", maintain_order=True).first()
-    product_template = gold_base.sort("dt").group_by("product_id", maintain_order=True).last()
+    date_template = (
+        gold_base.sort(["dt", "product_id"]).group_by("dt", maintain_order=True).first()
+    )
+    product_template = (
+        gold_base.sort("dt").group_by("product_id", maintain_order=True).last()
+    )
     return date_template, product_template
 
 
@@ -79,7 +86,11 @@ def _fill_template_columns(
     key_column: str,
     suffix: str,
 ) -> pl.DataFrame:
-    available = [column for column in fill_columns if column in merged.columns and column in template.columns]
+    available = [
+        column
+        for column in fill_columns
+        if column in merged.columns and column in template.columns
+    ]
     if not available:
         return merged
     renamed = {column: f"{column}{suffix}" for column in available}
@@ -89,7 +100,12 @@ def _fill_template_columns(
             how="left",
             on=key_column,
         )
-        .with_columns([pl.coalesce(pl.col(column), pl.col(renamed[column])).alias(column) for column in available])
+        .with_columns(
+            [
+                pl.coalesce(pl.col(column), pl.col(renamed[column])).alias(column)
+                for column in available
+            ]
+        )
         .drop(list(renamed.values()))
     )
 
@@ -123,7 +139,9 @@ def _resolved_column_expr(
     *,
     dtype: Any,
 ) -> pl.Expr:
-    base_expr = pl.col(column) if column in frame.columns else pl.lit(default, dtype=dtype)
+    base_expr = (
+        pl.col(column) if column in frame.columns else pl.lit(default, dtype=dtype)
+    )
     return base_expr.cast(dtype, strict=False).fill_null(default)
 
 
@@ -170,38 +188,54 @@ def _apply_reference_defaults(merged: pl.DataFrame) -> pl.DataFrame:
     base = merged.with_columns(
         [
             pl.lit("bakery").alias("dataset_source"),
-            _resolved_column_expr(merged, "location_id", "bakery_store_1", dtype=pl.Utf8).alias("location_id"),
-            _resolved_column_expr(merged, "day_complete_flag", True, dtype=pl.Boolean).alias("day_complete_flag"),
-            _resolved_column_expr(merged, "observed_stockout_flag", False, dtype=pl.Boolean).alias(
-                "observed_stockout_flag"
+            _resolved_column_expr(
+                merged, "location_id", "bakery_store_1", dtype=pl.Utf8
+            ).alias("location_id"),
+            _resolved_column_expr(
+                merged, "day_complete_flag", True, dtype=pl.Boolean
+            ).alias("day_complete_flag"),
+            _resolved_column_expr(
+                merged, "observed_stockout_flag", False, dtype=pl.Boolean
+            ).alias("observed_stockout_flag"),
+            _resolved_column_expr(
+                merged, "observed_stockout_available", False, dtype=pl.Boolean
+            ).alias("observed_stockout_available"),
+            _resolved_column_expr(
+                merged, "observed_discount_amount", 0.0, dtype=pl.Float64
+            ).alias("observed_discount_amount"),
+            _resolved_column_expr(merged, "promo_flag", False, dtype=pl.Boolean).alias(
+                "promo_flag"
             ),
-            _resolved_column_expr(merged, "observed_stockout_available", False, dtype=pl.Boolean).alias(
-                "observed_stockout_available"
-            ),
-            _resolved_column_expr(merged, "observed_discount_amount", 0.0, dtype=pl.Float64).alias(
-                "observed_discount_amount"
-            ),
-            _resolved_column_expr(merged, "promo_flag", False, dtype=pl.Boolean).alias("promo_flag"),
+            _resolved_column_expr(
+                merged, "source_role", "benchmark", dtype=pl.Utf8
+            ).alias("source_role"),
+            _resolved_column_expr(
+                merged, "is_synthetic_source", False, dtype=pl.Boolean
+            ).alias("is_synthetic_source"),
             (pl.col("dt") + pl.duration(days=1)).alias("target_dt"),
         ]
-    ).with_columns(
-        _client_id_expr(merged).alias("client_id")
-    )
-    return (
-        base.with_columns(
-            [
-                _resolved_column_expr(base, "is_observed_row", True, dtype=pl.Boolean).alias("is_observed_row"),
-                pl.col("current_day_demand_qty").fill_null(0.0).eq(0.0).alias("true_zero_demand_flag"),
-                _optional_float_expr(base, "observed_revenue_net").alias("observed_revenue_net"),
-            ]
-        )
-        .sort(["product_id", "dt"])
-    )
+    ).with_columns(_client_id_expr(merged).alias("client_id"))
+    return base.with_columns(
+        [
+            _resolved_column_expr(
+                base, "is_observed_row", True, dtype=pl.Boolean
+            ).alias("is_observed_row"),
+            pl.col("current_day_demand_qty")
+            .fill_null(0.0)
+            .eq(0.0)
+            .alias("true_zero_demand_flag"),
+            _optional_float_expr(base, "observed_revenue_net").alias(
+                "observed_revenue_net"
+            ),
+        ]
+    ).sort(["product_id", "dt"])
 
 
 def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
-    with_target_dow = merged.with_columns(((pl.col("target_dt").dt.weekday() - 1).cast(pl.Int8)).alias("__target_dow"))
-    return with_target_dow.with_columns(
+    with_target_dow = merged.with_columns(
+        ((pl.col("target_dt").dt.weekday() - 1).cast(pl.Int8)).alias("__target_dow")
+    )
+    with_features = with_target_dow.with_columns(
         [
             _coalesced_feature_expr(
                 with_target_dow,
@@ -235,6 +269,11 @@ def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
             ),
             _coalesced_feature_expr(
                 with_target_dow,
+                "target_lag_1",
+                pl.col("current_day_demand_qty"),
+            ),
+            _coalesced_feature_expr(
+                with_target_dow,
                 "target_lag_7",
                 pl.col("current_day_demand_qty").shift(6).over("product_id"),
             ),
@@ -246,39 +285,57 @@ def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
             _coalesced_feature_expr(
                 with_target_dow,
                 "promo_rate_7",
-                pl.col("promo_flag").cast(pl.Float64).rolling_mean(window_size=7, min_samples=1).over("product_id"),
+                pl.col("promo_flag")
+                .cast(pl.Float64)
+                .rolling_mean(window_size=7, min_samples=1)
+                .over("product_id"),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "activity_rate_7",
-                pl.col("activity_flag").cast(pl.Float64).rolling_mean(window_size=7, min_samples=1).over("product_id"),
+                pl.col("activity_flag")
+                .cast(pl.Float64)
+                .rolling_mean(window_size=7, min_samples=1)
+                .over("product_id"),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "weather_temperature_lag_0",
-                _optional_source_expr(with_target_dow, "weather_temperature", "weather_temperature_lag_0"),
+                _optional_source_expr(
+                    with_target_dow, "weather_temperature", "weather_temperature_lag_0"
+                ),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "weather_temperature_lag_1",
-                _optional_source_expr(with_target_dow, "weather_temperature", "weather_temperature_lag_0")
+                _optional_source_expr(
+                    with_target_dow, "weather_temperature", "weather_temperature_lag_0"
+                )
                 .shift(1)
                 .over("product_id"),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "weather_precipitation_lag_0",
-                _optional_source_expr(with_target_dow, "weather_precipitation", "weather_precipitation_lag_0"),
+                _optional_source_expr(
+                    with_target_dow,
+                    "weather_precipitation",
+                    "weather_precipitation_lag_0",
+                ),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "weather_humidity_lag_0",
-                _optional_source_expr(with_target_dow, "weather_humidity", "weather_humidity_lag_0"),
+                _optional_source_expr(
+                    with_target_dow, "weather_humidity", "weather_humidity_lag_0"
+                ),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
                 "weather_wind_level_lag_0",
-                _optional_source_expr(with_target_dow, "weather_wind_level", "weather_wind_level_lag_0"),
+                _optional_source_expr(
+                    with_target_dow, "weather_wind_level", "weather_wind_level_lag_0"
+                ),
             ),
             _coalesced_feature_expr(
                 with_target_dow,
@@ -289,26 +346,107 @@ def _build_bakery_overlap_feature_block(merged: pl.DataFrame) -> pl.DataFrame:
                 .over(["product_id", "__target_dow"]),
             ),
         ]
+    )
+    field_baseline = (
+        pl.when(
+            pl.col("target_lag_1").is_not_null() & pl.col("target_lag_7").is_not_null()
+        )
+        .then((pl.col("target_lag_1") * 0.5) + (pl.col("target_lag_7") * 0.5))
+        .otherwise(pl.coalesce(pl.col("target_lag_1"), pl.col("target_lag_7")))
+    )
+    with_baseline = with_features.with_columns(
+        _coalesced_feature_expr(
+            with_features,
+            "field_baseline_blend_lag_1_lag_7_d_plus_1",
+            field_baseline,
+        )
+    )
+    return with_baseline.with_columns(
+        _coalesced_feature_expr(
+            with_baseline,
+            "target_residual_field_blend_lag_1_lag_7_d_plus_1",
+            pl.col("target_demand_qty_d_plus_1")
+            - pl.col("field_baseline_blend_lag_1_lag_7_d_plus_1"),
+        )
     ).drop("__target_dow")
 
 
-def _target_rows_from_reference(merged: pl.DataFrame, reference_test: pl.DataFrame) -> pd.DataFrame:
-    target_rows = (
+def _reference_bool_expr(
+    frame: pl.DataFrame,
+    column: str,
+    default: bool,
+) -> pl.Expr:
+    if column not in frame.columns:
+        return pl.lit(default, dtype=pl.Boolean)
+    return pl.col(column).cast(pl.Boolean, strict=False).fill_null(default)
+
+
+def _target_source_expr(target_rows: pl.DataFrame) -> pl.Expr:
+    missing_day = _reference_bool_expr(target_rows, "is_missing_day", False)
+    observed_row = _reference_bool_expr(target_rows, "is_observed_row", True)
+    zero_quantity = (
+        pl.col(REFERENCE_TARGET_COL)
+        .cast(pl.Float64, strict=False)
+        .fill_null(0.0)
+        .eq(0.0)
+    )
+    return (
+        pl.when(missing_day)
+        .then(pl.lit("closed_or_missing_observation"))
+        .when((~observed_row) & zero_quantity)
+        .then(pl.lit("dense_calendar_zero_fill"))
+        .otherwise(pl.lit("observed_sales"))
+    )
+
+
+def _apply_reference_target_metadata(target_rows: pl.DataFrame) -> pl.DataFrame:
+    target_source = _target_source_expr(target_rows)
+    trainable_target = target_source.eq(pl.lit("observed_sales"))
+    return target_rows.with_columns(
+        [
+            pl.lit("observed_sales").alias("target_semantics"),
+            pl.lit(False, dtype=pl.Boolean).alias("censor_flag"),
+            target_source.alias("target_source"),
+            (
+                pl.when(trainable_target)
+                .then(pl.lit(1.0))
+                .when(target_source.eq(pl.lit("dense_calendar_zero_fill")))
+                .then(pl.lit(0.8))
+                .otherwise(pl.lit(0.0))
+            ).alias("label_quality_score"),
+            trainable_target.alias("usable_for_training_flag"),
+            pl.col(REFERENCE_TARGET_COL)
+            .cast(pl.Float64, strict=False)
+            .fill_null(0.0)
+            .eq(0.0)
+            .alias("target_true_zero_demand_flag"),
+        ]
+    )
+
+
+def _target_rows_from_reference(
+    merged: pl.DataFrame, reference_test: pl.DataFrame
+) -> pd.DataFrame:
+    target_rows = _apply_reference_target_metadata(
         reference_test.join(
             merged,
             how="left",
             left_on=[REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL],
             right_on=["product_id", "target_dt"],
-        )
-        .with_columns(
+        ).with_columns(
             [
-                pl.col(REFERENCE_PRODUCT_COL).cast(pl.Utf8, strict=False).alias("product_id"),
-                pl.col(REFERENCE_DATE_COL).cast(pl.Datetime, strict=False).alias("target_dt"),
-                pl.col(REFERENCE_TARGET_COL).cast(pl.Float64, strict=False).alias("target_demand_qty_d_plus_1"),
+                pl.col(REFERENCE_PRODUCT_COL)
+                .cast(pl.Utf8, strict=False)
+                .alias("product_id"),
+                pl.col(REFERENCE_DATE_COL)
+                .cast(pl.Datetime, strict=False)
+                .alias("target_dt"),
+                pl.col(REFERENCE_TARGET_COL)
+                .cast(pl.Float64, strict=False)
+                .alias("target_demand_qty_d_plus_1"),
             ]
         )
-        .sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
-    )
+    ).sort([REFERENCE_PRODUCT_COL, REFERENCE_DATE_COL])
     return downcast_pandas_frame(target_rows.to_pandas())
 
 
@@ -319,7 +457,9 @@ def build_bakery_reference_feature_frame(
 ) -> pd.DataFrame:
     reference_test = _normalized_reference_split_frame_polars(reference_test_df)
     gold_base = _normalized_gold_base_frame(gold_base_panel_df)
-    merged = _merged_reference_frame(_reference_base_frame(reference_full_df), gold_base)
+    merged = _merged_reference_frame(
+        _reference_base_frame(reference_full_df), gold_base
+    )
     date_template, product_template = _reference_templates(gold_base)
     merged = _fill_reference_templates(
         merged,
@@ -327,7 +467,9 @@ def build_bakery_reference_feature_frame(
         product_template=product_template,
     )
     prepared = _apply_reference_defaults(merged)
-    return _target_rows_from_reference(_build_bakery_overlap_feature_block(prepared), reference_test)
+    return _target_rows_from_reference(
+        _build_bakery_overlap_feature_block(prepared), reference_test
+    )
 
 
 _DATE_TEMPLATE_FILL_COLUMNS = [

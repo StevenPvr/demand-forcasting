@@ -103,18 +103,29 @@ class GlobalDatasetPipelineTests(unittest.TestCase):
     ) -> None:
         with (
             mock.patch(
-                "praedixa.platform.datasets.standardization.pipeline.build_freshretail_standardized_frame",
-                return_value=_canonical_fixture("freshretail_lt"),
+                "praedixa.platform.datasets.standardization.pipeline._build_source_frames",
+                return_value={
+                    "synthetic_foodservice_qsr": _canonical_fixture(
+                        "synthetic_foodservice_qsr"
+                    )
+                },
             ),
         ):
             artifacts = build_global_daily_standardization()
 
-        self.assertEqual(_source_rows(artifacts.source_summaries, "freshretail_lt"), 1)
+        self.assertEqual(
+            _source_rows(artifacts.source_summaries, "synthetic_foodservice_qsr"), 1
+        )
         self.assertNotIn("supplemental_corpus", artifacts.source_summaries)
         self.assertEqual(
             _source_rows(artifacts.source_summaries, "combined"), 1
         )
-        self.assertEqual(_quality_error_count(artifacts.data_quality, "freshretail_lt"), 0)
+        self.assertEqual(
+            _quality_error_count(
+                artifacts.data_quality, "synthetic_foodservice_qsr"
+            ),
+            0,
+        )
         self.assertEqual(
             _int_value(
                 _mapping_value(artifacts.data_quality, "combined"), "error_count"
@@ -131,8 +142,8 @@ class GlobalDatasetPipelineTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "praedixa.platform.datasets.standardization.pipeline.build_freshretail_standardized_frame",
-                return_value=duplicated_fresh,
+                "praedixa.platform.datasets.standardization.pipeline._build_source_frames",
+                return_value={"freshretail": duplicated_fresh},
             ),
         ):
             with self.assertRaisesRegex(ValueError, "duplicate_grain"):

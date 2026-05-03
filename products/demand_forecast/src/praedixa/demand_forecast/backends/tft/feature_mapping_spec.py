@@ -25,6 +25,38 @@ FEATURE_ROLE_ORDER: tuple[TFTColumnRole, ...] = (
     "time_varying_unknown_real",
 )
 
+FEATURE_ROLE_SUFFIX_BY_ROLE: dict[TFTColumnRole, str] = {
+    "static_categorical": "_static_cat",
+    "static_real": "_static_real",
+    "time_varying_known_categorical": "_known_cat",
+    "time_varying_known_real": "_known_real",
+    "time_varying_unknown_categorical": "_unknown_cat",
+    "time_varying_unknown_real": "_unknown_real",
+}
+
+
+def feature_role_suffix(role: TFTColumnRole) -> str:
+    suffix = FEATURE_ROLE_SUFFIX_BY_ROLE.get(role)
+    if suffix is None:
+        raise ValueError(f"TFT role `{role}` does not have a feature suffix.")
+    return suffix
+
+
+def suffixed_feature_name(column: str, role: TFTColumnRole) -> str:
+    return f"{column}{feature_role_suffix(role)}"
+
+
+def strip_feature_role_suffix(column: str) -> str:
+    for suffix in sorted(FEATURE_ROLE_SUFFIX_BY_ROLE.values(), key=len, reverse=True):
+        if column.endswith(suffix):
+            return column.removesuffix(suffix)
+    return column
+
+
+def _suffix_columns(columns: tuple[str, ...], role: TFTColumnRole) -> tuple[str, ...]:
+    return tuple(suffixed_feature_name(column, role) for column in columns)
+
+
 TFT_LAG_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 28)
 
 TFT_TARGET_LAG_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 21, 28)
@@ -121,7 +153,6 @@ REMOVED_MODEL_INPUT_COLUMNS: tuple[str, ...] = (
     "anomaly_flag",
     "kitchen_saturation_flag",
     "assortment_restriction_flag",
-    "freshretail_rescaled_flag",
     "target_scale_assumption",
     "price_available",
     "current_holiday_name",
@@ -152,49 +183,10 @@ REMOVED_MODEL_INPUT_COLUMNS: tuple[str, ...] = (
     "assortment_restriction_rate_28",
 )
 
-NON_FEATURE_COLUMN_ROLES: dict[str, TFTColumnRole] = {
-    **{column: "exclude" for column in EXCLUDED_FROM_TFT_LAG_COLUMNS},
-    **{column: "exclude" for column in REMOVED_MODEL_INPUT_COLUMNS},
-    "__tft_group_id": "exclude",
-    "__tft_split": "exclude",
-    "__tft_time_idx": "exclude",
-    "__tft_sample_weight": "exclude",
-    "__tft_prediction_row_id": "exclude",
-    "dt": "date",
-    "target": "target",
-    "target_dt": "exclude",
-    "forecast_horizon_days": "exclude",
-    "split_bucket": "exclude",
-    "source_partition": "exclude",
-    "source_run_id": "exclude",
-    "target_demand_qty_d_plus_1": "target",
-    "target_delta_log_wow_d_plus_1": "exclude",
-    "target_semantics": "exclude",
-    "censor_flag": "exclude",
-    "target_source": "exclude",
-    "label_quality_score": "exclude",
-    "usable_for_training_flag": "exclude",
-    "target_true_zero_demand_flag": "exclude",
-    "observed_revenue_net": "exclude",
-    "decision_timestamp": "exclude",
-    "feature_availability_profile": "exclude",
-    "rn_sample": "exclude",
-    "source_legal_basis": "exclude",
-    "source_license_type": "exclude",
-    "source_review_status": "exclude",
-    "source_legal_status_snapshot": "exclude",
-    "stratum_row_count": "exclude",
-    "sample_weight_source": "exclude",
-    "sample_weight_business": "exclude",
-    "is_primary_eval_dataset": "exclude",
-    "gold_run_id": "exclude",
-}
-
-TFT_GROUP_ID_COLUMNS: tuple[str, ...] = ("client_id",)
-
-TFT_STATIC_CATEGORICAL_COLUMNS: tuple[str, ...] = (
+TFT_STATIC_CATEGORICAL_BASE_COLUMNS: tuple[str, ...] = (
     "dataset_source",
     "source_role",
+    "is_synthetic_source",
     "vertical_level_1",
     "vertical_level_2",
     "commerce_modality",
@@ -220,9 +212,9 @@ TFT_STATIC_CATEGORICAL_COLUMNS: tuple[str, ...] = (
     "category_level_3_known_flag",
 )
 
-TFT_STATIC_REAL_COLUMNS: tuple[str, ...] = ("product_taxonomy_depth",)
+TFT_STATIC_REAL_BASE_COLUMNS: tuple[str, ...] = ("product_taxonomy_depth",)
 
-TFT_TIME_VARYING_KNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = (
+TFT_TIME_VARYING_KNOWN_CATEGORICAL_BASE_COLUMNS: tuple[str, ...] = (
     "cold_start_bucket",
     "is_observed_row",
     "true_zero_demand_flag",
@@ -244,7 +236,7 @@ TFT_TIME_VARYING_KNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = (
     "target_holiday_flag",
 )
 
-TFT_TIME_VARYING_KNOWN_REAL_COLUMNS: tuple[str, ...] = (
+TFT_TIME_VARYING_KNOWN_REAL_BASE_COLUMNS: tuple[str, ...] = (
     "history_available_days",
     "data_quality_metadata_unavailable_count",
     "data_quality_metadata_missing_count",
@@ -258,6 +250,7 @@ TFT_TIME_VARYING_KNOWN_REAL_COLUMNS: tuple[str, ...] = (
     "data_quality_operations_missing_count",
     "data_quality_history_unavailable_count",
     "data_quality_history_missing_count",
+    "field_baseline_blend_lag_1_lag_7_d_plus_1",
     "current_day_demand_qty",
     "observed_discount_amount",
     "sin_target_day_of_week",
@@ -295,5 +288,103 @@ TFT_TIME_VARYING_KNOWN_REAL_COLUMNS: tuple[str, ...] = (
     "target_same_dow_mean_4w",
 )
 
-TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = TFT_BOOLEAN_LAG_COLUMNS
-TFT_TIME_VARYING_UNKNOWN_REAL_COLUMNS: tuple[str, ...] = TFT_REAL_LAG_COLUMNS
+TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_BASE_COLUMNS: tuple[str, ...] = (
+    TFT_BOOLEAN_LAG_COLUMNS
+)
+TFT_TIME_VARYING_UNKNOWN_REAL_BASE_COLUMNS: tuple[str, ...] = TFT_REAL_LAG_COLUMNS
+
+BASE_FEATURE_COLUMNS: tuple[str, ...] = (
+    *TFT_STATIC_CATEGORICAL_BASE_COLUMNS,
+    *TFT_STATIC_REAL_BASE_COLUMNS,
+    *TFT_TIME_VARYING_KNOWN_CATEGORICAL_BASE_COLUMNS,
+    *TFT_TIME_VARYING_KNOWN_REAL_BASE_COLUMNS,
+    *TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_BASE_COLUMNS,
+    *TFT_TIME_VARYING_UNKNOWN_REAL_BASE_COLUMNS,
+)
+
+BASE_FEATURE_ROLE_BY_COLUMN: dict[str, TFTColumnRole] = {
+    **{column: "static_categorical" for column in TFT_STATIC_CATEGORICAL_BASE_COLUMNS},
+    **{column: "static_real" for column in TFT_STATIC_REAL_BASE_COLUMNS},
+    **{
+        column: "time_varying_known_categorical"
+        for column in TFT_TIME_VARYING_KNOWN_CATEGORICAL_BASE_COLUMNS
+    },
+    **{
+        column: "time_varying_known_real"
+        for column in TFT_TIME_VARYING_KNOWN_REAL_BASE_COLUMNS
+    },
+    **{
+        column: "time_varying_unknown_categorical"
+        for column in TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_BASE_COLUMNS
+    },
+    **{
+        column: "time_varying_unknown_real"
+        for column in TFT_TIME_VARYING_UNKNOWN_REAL_BASE_COLUMNS
+    },
+}
+
+NON_FEATURE_COLUMN_ROLES: dict[str, TFTColumnRole] = {
+    **{column: "exclude" for column in EXCLUDED_FROM_TFT_LAG_COLUMNS},
+    **{column: "exclude" for column in REMOVED_MODEL_INPUT_COLUMNS},
+    "__tft_group_id": "exclude",
+    "__tft_split": "exclude",
+    "__tft_time_idx": "exclude",
+    "__tft_sample_weight": "exclude",
+    "__tft_prediction_row_id": "exclude",
+    "dt": "date",
+    "target": "target",
+    "target_dt": "exclude",
+    "forecast_horizon_days": "exclude",
+    "split_bucket": "exclude",
+    "source_partition": "exclude",
+    "source_run_id": "exclude",
+    "target_demand_qty_d_plus_1": "target",
+    "target_residual_field_blend_lag_1_lag_7_d_plus_1": "target",
+    "target_delta_log_wow_d_plus_1": "exclude",
+    "target_semantics": "exclude",
+    "censor_flag": "exclude",
+    "target_source": "exclude",
+    "label_quality_score": "exclude",
+    "usable_for_training_flag": "exclude",
+    "target_true_zero_demand_flag": "exclude",
+    "observed_revenue_net": "exclude",
+    "decision_timestamp": "exclude",
+    "feature_availability_profile": "exclude",
+    "rn_sample": "exclude",
+    "source_legal_basis": "exclude",
+    "source_license_type": "exclude",
+    "source_review_status": "exclude",
+    "source_legal_status_snapshot": "exclude",
+    "stratum_row_count": "exclude",
+    "sample_weight_source": "exclude",
+    "sample_weight_business": "exclude",
+    "is_primary_eval_dataset": "exclude",
+    "gold_run_id": "exclude",
+}
+
+TFT_GROUP_ID_COLUMNS: tuple[str, ...] = ("client_id",)
+
+TFT_STATIC_CATEGORICAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_STATIC_CATEGORICAL_BASE_COLUMNS,
+    "static_categorical",
+)
+TFT_STATIC_REAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_STATIC_REAL_BASE_COLUMNS,
+    "static_real",
+)
+TFT_TIME_VARYING_KNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_TIME_VARYING_KNOWN_CATEGORICAL_BASE_COLUMNS,
+    "time_varying_known_categorical",
+)
+TFT_TIME_VARYING_KNOWN_REAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_TIME_VARYING_KNOWN_REAL_BASE_COLUMNS,
+    "time_varying_known_real",
+)
+TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_TIME_VARYING_UNKNOWN_CATEGORICAL_BASE_COLUMNS,
+    "time_varying_unknown_categorical",
+)
+TFT_TIME_VARYING_UNKNOWN_REAL_COLUMNS: tuple[str, ...] = _suffix_columns(
+    TFT_TIME_VARYING_UNKNOWN_REAL_BASE_COLUMNS,
+    "time_varying_unknown_real",
+)

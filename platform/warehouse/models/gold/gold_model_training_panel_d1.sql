@@ -121,6 +121,8 @@
     "source_review_status",
     "source_legal_status_snapshot",
     "source_role",
+    "is_synthetic_source",
+    "field_baseline_blend_lag_1_lag_7_d_plus_1",
     "lag_1",
     "lag_2",
     "lag_3",
@@ -257,6 +259,7 @@
 
 select
     cast(dataset_source as varchar) as dataset_source,
+    cast(dataset_source as varchar) as dataset_source_static_cat,
     cast(source_partition as varchar) as source_partition,
     cast(source_run_id as varchar) as source_run_id,
     cast(client_id as varchar) as client_id,
@@ -269,6 +272,7 @@ select
     cast(location_id as varchar) as location_id,
     cast(product_id as varchar) as product_id,
     try_cast(target_demand_qty_d_plus_1 as double) as target_demand_qty_d_plus_1,
+    try_cast(target_residual_field_blend_lag_1_lag_7_d_plus_1 as double) as target_residual_field_blend_lag_1_lag_7_d_plus_1,
     cast(target_semantics as varchar) as target_semantics,
     coalesce(try_cast(censor_flag as boolean), false) as censor_flag,
     cast(target_source as varchar) as target_source,
@@ -276,6 +280,10 @@ select
     coalesce(try_cast(usable_for_training_flag as boolean), false) as usable_for_training_flag,
     coalesce(try_cast(target_true_zero_demand_flag as boolean), false) as target_true_zero_demand_flag,
 {% for column in training_feature_columns %}
-    {{ column }}{{ "," if not loop.last }}
+    {%- set role_suffix = praedixa_feature_role_suffix(column) -%}
+    {{ column }}{{ "," if role_suffix or not loop.last }}
+    {%- if role_suffix %}
+    {{ column }} as {{ column }}{{ role_suffix }}{{ "," if not loop.last }}
+    {%- endif %}
 {% endfor %}
 from {{ ref("gold_daily_product_forecast_panel_d1") }}

@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -17,6 +21,8 @@ for path in (PLATFORM_SRC, PRODUCT_SRC):
 
 from praedixa.demand_forecast.contracts.targets import (  # noqa: E402
     DEFAULT_ABSOLUTE_TARGET_COL,
+    DEFAULT_FIELD_BASELINE_COL,
+    DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
     ensure_learning_target_column,
     reconstruct_absolute_predictions,
     resolve_target_contract,
@@ -34,12 +40,18 @@ class TargetUtilsTests(unittest.TestCase):
 
         target_contract = resolve_target_contract(frame, frame)
 
-        self.assertEqual(target_contract.learning_target_col, DEFAULT_ABSOLUTE_TARGET_COL)
-        self.assertEqual(target_contract.absolute_target_col, DEFAULT_ABSOLUTE_TARGET_COL)
+        self.assertEqual(
+            target_contract.learning_target_col, DEFAULT_ABSOLUTE_TARGET_COL
+        )
+        self.assertEqual(
+            target_contract.absolute_target_col, DEFAULT_ABSOLUTE_TARGET_COL
+        )
         self.assertEqual(target_contract.target_mode, "identity")
         self.assertIsNone(target_contract.reconstruction_anchor_col)
 
-    def test_ensure_learning_target_column_returns_materialized_absolute_target(self) -> None:
+    def test_ensure_learning_target_column_returns_materialized_absolute_target(
+        self,
+    ) -> None:
         frame = pd.DataFrame(
             {
                 DEFAULT_ABSOLUTE_TARGET_COL: [10.0, 12.0, 14.0],
@@ -55,7 +67,9 @@ class TargetUtilsTests(unittest.TestCase):
             frame[DEFAULT_ABSOLUTE_TARGET_COL].to_numpy(dtype=float),
         )
 
-    def test_reconstruct_absolute_predictions_is_identity_for_absolute_target(self) -> None:
+    def test_reconstruct_absolute_predictions_is_identity_for_absolute_target(
+        self,
+    ) -> None:
         frame = pd.DataFrame(
             {
                 DEFAULT_ABSOLUTE_TARGET_COL: [10.0, 12.0, 14.0],
@@ -83,6 +97,46 @@ class TargetUtilsTests(unittest.TestCase):
         target_contract = resolve_target_contract(train_frame, tuning_frame)
 
         self.assertEqual(target_contract.target_mode, "identity")
+
+    def test_resolve_target_contract_supports_field_baseline_residual(self) -> None:
+        frame = pd.DataFrame(
+            {
+                DEFAULT_ABSOLUTE_TARGET_COL: [10.0, 12.0, 14.0],
+                DEFAULT_FIELD_BASELINE_COL: [8.0, 9.0, 10.0],
+                DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL: [2.0, 3.0, 4.0],
+            }
+        )
+
+        target_contract = resolve_target_contract(
+            frame,
+            frame,
+            requested_target_col=DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
+        )
+
+        self.assertEqual(
+            target_contract.learning_target_col,
+            DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
+        )
+        self.assertEqual(target_contract.target_mode, "additive_residual")
+        self.assertEqual(
+            target_contract.reconstruction_anchor_col, DEFAULT_FIELD_BASELINE_COL
+        )
+        reconstructed = reconstruct_absolute_predictions(
+            np.array([2.0, 3.0, 4.0]),
+            frame,
+            target_contract,
+        )
+        np.testing.assert_allclose(reconstructed, [10.0, 12.0, 14.0])
+
+    def test_resolve_target_contract_rejects_unavailable_requested_target(self) -> None:
+        frame = pd.DataFrame({DEFAULT_ABSOLUTE_TARGET_COL: [1.0, 2.0]})
+
+        with self.assertRaisesRegex(ValueError, "Requested learning target"):
+            resolve_target_contract(
+                frame,
+                frame,
+                requested_target_col=DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
+            )
 
 
 if __name__ == "__main__":

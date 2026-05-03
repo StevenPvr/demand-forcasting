@@ -26,9 +26,11 @@ from praedixa.demand_forecast.evaluation.reference_mode import (
     load_local_mode_frames,
     prepare_scored_test_frame,
     prepare_training_target_frame,
+    uses_bakery_reference_transfer_holdout,
 )
 from praedixa.demand_forecast.evaluation.reporting import load_best_params
 from praedixa.demand_forecast.training.config.constants import (
+    DEFAULT_IDENTIFIER_FEATURE_COLS,
     DEFAULT_XGBOOST_IDENTIFIER_FEATURE_COLS,
 )
 
@@ -110,7 +112,7 @@ def _load_gold_evaluation_frames(
     )
     evaluation_mode = (
         "bakery_reference_transfer_holdout"
-        if model_backend.strip().lower() == "xgboost"
+        if uses_bakery_reference_transfer_holdout(model_backend)
         else "bakery_reference_overlap"
     )
     return LoadedEvaluationFrames(evaluation_mode, *loaded)
@@ -171,6 +173,7 @@ def load_evaluation_frames(
 
 def _resolve_feature_context(
     *,
+    evaluation_mode: str,
     train_frame: pd.DataFrame,
     valid_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
@@ -184,6 +187,17 @@ def _resolve_feature_context(
         absolute_target_col=target_contract.absolute_target_col,
         model_backend=model_backend,
     )
+    if model_backend == "xgboost" and evaluation_mode in {
+        "bakery_reference_overlap",
+        "bakery_reference_transfer_holdout",
+    }:
+        feature_cols, constant_feature_cols, identifier_feature_cols = (
+            _restrict_xgboost_feature_context_to_manifest(
+                train_frame=combined_pretest_frame,
+                feature_cols=feature_cols,
+                constant_feature_cols=constant_feature_cols,
+            )
+        )
     missing_in_test_feature_cols = [column for column in feature_cols if column not in test_frame.columns]
     filtered_feature_cols = [column for column in feature_cols if column in test_frame.columns]
     return filtered_feature_cols, constant_feature_cols, identifier_feature_cols, missing_in_test_feature_cols
@@ -291,6 +305,44 @@ def _expected_xgboost_feature_columns(
     return resolved
 
 
+def _restrict_xgboost_feature_context_to_manifest(
+    *,
+    train_frame: pd.DataFrame,
+    feature_cols: list[str],
+    constant_feature_cols: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    expected = _expected_xgboost_feature_columns(train_frame=train_frame)
+    if expected is None:
+        identifier_feature_cols = [
+            column
+            for column in DEFAULT_IDENTIFIER_FEATURE_COLS
+            if column in train_frame.columns and column not in feature_cols
+        ]
+        return feature_cols, constant_feature_cols, identifier_feature_cols
+    missing = [column for column in expected if column not in train_frame.columns]
+    if missing:
+        raise ValueError(
+            "XGBoost evaluation feature contract mismatch with the optimisation bundle "
+            f"(expected_count={len(expected)} actual_count={len(feature_cols)} "
+            f"missing={missing} extra=[])."
+        )
+    expected_set = set(expected)
+    resolved_feature_cols = [column for column in expected if column in expected_set]
+    resolved_constant_feature_cols = [
+        column for column in constant_feature_cols if column in expected_set
+    ]
+    identifier_feature_cols = [
+        column
+        for column in DEFAULT_IDENTIFIER_FEATURE_COLS
+        if column in train_frame.columns and column not in resolved_feature_cols
+    ]
+    return (
+        resolved_feature_cols,
+        resolved_constant_feature_cols,
+        identifier_feature_cols,
+    )
+
+
 def _validate_xgboost_feature_contract(
     *,
     evaluation_mode: str,
@@ -379,11 +431,18 @@ def _assert_transfer_holdout_training_sources(
     for split_name, frame in (("train", train_frame), ("valid", valid_frame)):
         if "dataset_source" not in frame.columns:
             continue
-        sources = set(frame["dataset_source"].dropna().astype(str).unique().tolist())
-        if DEFAULT_BAKERY_REFERENCE_DATASET_SOURCE not in sources:
+        bakery_mask = (
+            frame["dataset_source"].astype(str) == DEFAULT_BAKERY_REFERENCE_DATASET_SOURCE
+        )
+        if not bool(bakery_mask.any()):
+            continue
+        if (
+            "bakery_refit_seed_flag" in frame.columns
+            and bool(frame.loc[bakery_mask, "bakery_refit_seed_flag"].fillna(False).astype(bool).all())
+        ):
             continue
         raise ValueError(
-            "XGBoost transfer-holdout evaluation cannot train on bakery before the "
+            "Transfer-holdout evaluation cannot train on bakery before the "
             f"test window (split={split_name})."
         )
 
@@ -398,42 +457,6 @@ def _resolved_target_contract(
         combined_pretest_frame,
         loaded.test_frame,
         requested_target_col=requested_target_col,
-    )
-
-
-def _evaluation_context_payload(
-    *,
-    best_params: dict[str, Any],
-    model_backend: str,
-    loaded: LoadedEvaluationFrames,
-    target_contract: TargetContract,
-    train_frame: pd.DataFrame,
-    valid_frame: pd.DataFrame,
-    test_frame: pd.DataFrame,
-    scored_reference_test: pd.DataFrame,
-    feature_cols: list[str],
-    constant_feature_cols: list[str],
-    identifier_feature_cols: list[str],
-    missing_in_test_feature_cols: list[str],
-    dropped_test_rows: int,
-    overlap_metadata: dict[str, object] | None,
-) -> EvaluationPreparedContext:
-    return EvaluationPreparedContext(
-        best_params=best_params,
-        model_backend=model_backend,
-        evaluation_mode=loaded.evaluation_mode,
-        train_frame=train_frame,
-        valid_frame=valid_frame,
-        test_frame=test_frame,
-        history_reference=loaded.history_reference,
-        scored_reference_test=scored_reference_test,
-        target_contract=target_contract,
-        feature_cols=feature_cols,
-        constant_feature_cols=constant_feature_cols,
-        identifier_feature_cols=identifier_feature_cols,
-        missing_in_test_feature_cols=missing_in_test_feature_cols,
-        dropped_test_rows=dropped_test_rows,
-        overlap_metadata=overlap_metadata,
     )
 
 
@@ -470,6 +493,7 @@ def prepare_evaluation_context(
             train_frame=train_frame,
             valid_frame=valid_frame,
             test_frame=test_frame,
+            evaluation_mode=loaded.evaluation_mode,
             target_contract=target_contract,
             model_backend=model_backend,
         )
@@ -499,15 +523,16 @@ def prepare_evaluation_context(
         dropped_test_rows=dropped_test_rows,
         logger=logger,
     )
-    return _evaluation_context_payload(
+    return EvaluationPreparedContext(
         best_params=best_params,
         model_backend=model_backend,
-        loaded=loaded,
-        target_contract=target_contract,
+        evaluation_mode=loaded.evaluation_mode,
         train_frame=train_frame,
         valid_frame=valid_frame,
         test_frame=test_frame,
+        history_reference=loaded.history_reference,
         scored_reference_test=scored_reference_test,
+        target_contract=target_contract,
         feature_cols=feature_cols,
         constant_feature_cols=constant_feature_cols,
         identifier_feature_cols=identifier_feature_cols,

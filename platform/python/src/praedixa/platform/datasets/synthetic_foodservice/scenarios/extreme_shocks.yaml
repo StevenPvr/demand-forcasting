@@ -1,0 +1,149 @@
+# Extreme / stress scenarios: apply as time-bounded shock modules on top of a normal_scenario.
+# Each shock has windows, intensity, channel/product filters, optional recovery (halflife days).
+schema_version: "1.0.0"
+shocks:
+  - id: heatwave
+    category: weather
+    default_duration_days: [3, 14]
+    intensity: [0.6, 1.0]
+    affected_channels: [on_site, takeaway]
+    product_categories_lift: [cold_drinks, ice_cream, salad]
+    product_categories_drop: [hot_soup, roast_meat]
+    recovery_halflife_days: 2.0
+
+  - id: continuous_rain
+    category: weather
+    default_duration_days: [2, 7]
+    terrace_penalty: [0.35, 0.65]
+    delivery_lift: [0.05, 0.2]
+    recovery_halflife_days: 1.0
+
+  - id: cold_wave
+    category: weather
+    default_duration_days: [4, 12]
+    lift: [hot_drinks, winter_menu]
+    drop: [ice_cream, cold_drinks]
+
+  - id: transport_strike
+    category: societal
+    default_duration_days: [1, 5]
+    impact_direction: negative
+    train_station_multiplier: [0.4, 0.7]
+    office_district_midday_multiplier: [0.75, 0.9]
+    delivery_substitution: [0.05, 0.15]
+
+  - id: supplier_shutdown
+    category: supply
+    default_duration_days: [2, 21]
+    blocks_ingredient_family: placeholder_family_key
+    stockout_type: supplier
+
+  - id: key_ingredient_stockout
+    category: supply
+    default_duration_hours: [4, 72]
+    stockout_type: ingredient
+    substitution_pressure: high
+
+  - id: oven_failure
+    category: ops_equipment
+    default_duration_hours: [2, 48]
+    capacity_multiplier_kitchen: [0.3, 0.7]
+    product_families_affected: [baked, hot_line]
+
+  - id: pos_system_outage
+    category: ops_data
+    default_duration_hours: [0.5, 8]
+    export_gap: partial_day
+    lost_ticket_fraction: [0.02, 0.25]
+
+  - id: mass_staff_absence
+    category: ops_staff
+    default_duration_days: [1, 3]
+    service_capacity_multiplier: [0.5, 0.8]
+    kitchen_capacity_multiplier: [0.55, 0.85]
+
+  - id: local_positive_buzz
+    category: market_reputation
+    default_duration_days: [7, 45]
+    impact_direction: positive
+    intensity: [0.05, 0.25]
+    recovery_halflife_days: 14.0
+
+  - id: google_rating_shock_negative
+    category: market_reputation
+    default_duration_days: [14, 90]
+    impact_direction: negative
+    intensity: [0.05, 0.35]
+
+  - id: competitor_major_open
+    category: market_competition
+    impact_direction: negative
+    intensity: [0.05, 0.2]
+    decay_halflife_days: 30.0
+
+  - id: competitor_major_close
+    category: market_competition
+    impact_direction: positive
+    intensity: [0.05, 0.25]
+    decay_halflife_days: 45.0
+
+  - id: construction_frontage
+    category: market_local
+    impact_direction: negative
+    intensity: [0.1, 0.4]
+    default_duration_days: [30, 180]
+
+  - id: chef_change
+    category: offer_reset
+    simplex_shift_strength: [0.1, 0.35]
+    menu_rotation_days: [1, 14]
+
+  - id: brutal_menu_reset
+    category: offer_reset
+    sku_churn_fraction: [0.25, 0.65]
+    latent_confusion_weeks: [2, 6]
+
+  - id: inflation_shock_then_price_pass_through
+    category: economics
+    price_step_pct: [0.05, 0.15]
+    volume_elasticity: [-0.3, -0.1]
+
+  - id: aggressive_platform_promo
+    category: promo
+    channel: delivery_platform
+    discount_rate: [0.25, 0.5]
+    duration_days: [3, 14]
+    cannibalization_on_core_menu: high
+
+  - id: major_sporting_event
+    category: event_sport
+    impact_direction: positive
+    channels: [delivery, late_night]
+    intensity: [0.15, 0.55]
+    duration_hours: [3, 6]
+
+  - id: local_festival
+    category: event_culture
+    expected_attendance_range: [5000, 200000]
+    radius_km: [1, 15]
+
+  - id: extended_forced_closure
+    category: regulatory_health
+    default_duration_days: [3, 60]
+    sales_observed: zero_or_missing_export
+
+  - id: pos_migration_cutover
+    category: data_system
+    product_id_mapping_burst: true
+    cross_file_inconsistency_spike: [0.15, 0.4]
+    duration_days: [2, 21]
+
+  - id: partial_data_loss
+    category: data_system
+    missing_block_pattern: random_intervals
+    severity: [0.05, 0.3]
+
+  - id: massive_inventory_miscount
+    category: inventory
+    stock_snapshot_error_level: [0.2, 0.6]
+    duration_until_next_full_count_days: [1, 7]

@@ -114,12 +114,11 @@ def _assert_stale_schema_loaded(local_db_path: Path) -> None:
 class LoadBronzeDuckDBTests(unittest.TestCase):
     def _build_bronze_fixture_root(self, root: Path) -> None:
         bakery_root = root / "bakery_sales"
-        global_dataset_root = root / "global_dataset"
+        commercial_raw_root = root / "commercial_datasets" / "raw"
         bakery_root.mkdir(parents=True)
-        global_dataset_root.mkdir(parents=True)
-        self._write_freshretail_parquets(bakery_root)
+        commercial_raw_root.mkdir(parents=True)
         self._write_bakery_csv(bakery_root)
-        self._write_supplemental_corpus_parquet(global_dataset_root)
+        self._write_synthetic_foodservice_csv(commercial_raw_root)
 
     def _write_freshretail_parquets(self, bakery_root: Path) -> None:
         pd.DataFrame(
@@ -197,11 +196,11 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             ]
         ).to_csv(bakery_root / "Bakery sales.csv", index=False)
 
-    def _write_supplemental_corpus_parquet(self, root: Path) -> None:
+    def _write_synthetic_foodservice_csv(self, root: Path) -> None:
         pd.DataFrame(
             [
                 {
-                    "dataset_source": "freshretail_lt",
+                    "dataset_source": "synthetic_foodservice_qsr",
                     "source_partition": "historical",
                     "source_run_id": "manual",
                     "series_id": "84__SKU_1",
@@ -214,6 +213,11 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "category_level_2": None,
                     "category_level_3": None,
                     "observed_demand_qty": 2.0,
+                    "target_semantics": "observed_sales",
+                    "censor_flag": False,
+                    "target_source": "observed_sales",
+                    "label_quality_score": 1.0,
+                    "usable_for_training_flag": True,
                     "observed_revenue_net": 7.0,
                     "observed_discount_amount": None,
                     "promo_flag": None,
@@ -239,13 +243,13 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
                     "silver_run_id": "manual",
                 }
             ]
-        ).to_parquet(root / "supplemental_corpus_daily.parquet", index=False)
+        ).to_csv(root / "synthetic_foodservice_daily.csv", index=False)
 
     def _assert_local_duckdb_counts(self, local_db_path: Path) -> None:
         connection = duckdb.connect(str(local_db_path))
         try:
-            freshretail_row = connection.execute(
-                "SELECT COUNT(*) FROM bronze.bronze_freshretail_daily"
+            synthetic_row = connection.execute(
+                "SELECT COUNT(*) FROM bronze.bronze_synthetic_foodservice_daily"
             ).fetchone()
             bakery_row = connection.execute(
                 "SELECT COUNT(*) FROM bronze.bronze_bakery_order_lines"
@@ -253,11 +257,11 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         finally:
             connection.close()
 
-        self.assertIsNotNone(freshretail_row)
+        self.assertIsNotNone(synthetic_row)
         self.assertIsNotNone(bakery_row)
-        freshretail_count = cast(tuple[int], freshretail_row)[0]
+        synthetic_count = cast(tuple[int], synthetic_row)[0]
         bakery_count = cast(tuple[int], bakery_row)[0]
-        self.assertEqual(freshretail_count, 2)
+        self.assertEqual(synthetic_count, 1)
         self.assertEqual(bakery_count, 1)
 
     def test_build_local_duckdb_config_from_env_reads_expected_settings(self) -> None:
@@ -298,10 +302,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         specs = default_bronze_specs("data", schema_name="bronze")
         table_names = {spec.table_name for spec in specs}
 
-        self.assertIn("bronze_freshretail_daily", table_names)
+        self.assertIn("bronze_synthetic_foodservice_daily", table_names)
         self.assertIn("bronze_bakery_order_lines", table_names)
         self.assertIn("bronze_open_weather_daily", table_names)
-        self.assertNotIn("bronze_synthetic_foodservice_daily", table_names)
 
     def test_default_active_bronze_specs_declares_commercial_and_exogenous_sources(
         self,
@@ -311,13 +314,12 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
         table_names = {spec.table_name for spec in specs}
         policy_by_source = {spec.source_name: spec.source_policy_id for spec in specs}
 
-        self.assertIn("freshretail_train", source_names)
-        self.assertIn("freshretail_val", source_names)
+        self.assertIn("synthetic_foodservice", source_names)
         self.assertIn("bakery", source_names)
-        self.assertNotIn("synthetic_foodservice_daily", source_names)
         self.assertIn("open_location_catchment", source_names)
         self.assertIn("bronze_open_location_catchment", table_names)
-        self.assertNotIn("bronze_synthetic_foodservice_daily", table_names)
+        self.assertIn("bronze_synthetic_foodservice_daily", table_names)
+        self.assertEqual(policy_by_source["synthetic_foodservice"], "synthetic_foodservice")
         self.assertEqual(policy_by_source["bakery"], "bakery")
         self.assertEqual(policy_by_source["open_weather_daily"], "open_meteo_api")
 
@@ -504,9 +506,9 @@ class LoadBronzeDuckDBTests(unittest.TestCase):
             self.assertFalse(result["cloud_warehouse_enabled"])
             local_backup = cast(dict[str, object], result["local_backup"])
             local_counts = cast(dict[str, int], result["local_warehouse_row_counts"])
-            self.assertEqual(local_backup["source_count"], 3)
-            self.assertEqual(local_counts["freshretail_train"], 1)
-            self.assertEqual(local_counts["freshretail_val"], 1)
+            self.assertEqual(local_backup["source_count"], 2)
+            self.assertEqual(local_counts["synthetic_foodservice"], 1)
+            self.assertEqual(local_counts["bakery"], 1)
             self.assertTrue(local_db_path.exists())
             self._assert_local_duckdb_counts(local_db_path)
 

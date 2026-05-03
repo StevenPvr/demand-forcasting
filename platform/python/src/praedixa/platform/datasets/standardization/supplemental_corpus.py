@@ -9,8 +9,6 @@ import polars as pl
 from praedixa.platform.datasets.standardization.supplemental_corpus_standardizers import (
     DEFAULT_SILVER_RUN_ID,
     DEFAULT_SOURCE_RUN_ID,
-    freshretail_promo_flag_expr,
-    standardize_freshretail_lt_lazy_frame,
     standardize_m5_sales_lazy_frame,
 )
 from praedixa.platform.governance.source_registry import (
@@ -23,14 +21,11 @@ from praedixa.platform.runtime.paths import SOURCES_DIR
 DEFAULT_RAW_DIR = SOURCES_DIR / "commercial_datasets" / "raw"
 DEFAULT_OUTPUT_PATH = GLOBAL_DATASET_DIR / "supplemental_corpus_daily.parquet"
 
-DEFAULT_FRESHRETAIL_LT_TRAIN_PATH = DEFAULT_RAW_DIR / "freshretail_lt_train.parquet"
-DEFAULT_FRESHRETAIL_LT_EVAL_PATH = DEFAULT_RAW_DIR / "freshretail_lt_eval.parquet"
 DEFAULT_M5_DIR = DEFAULT_RAW_DIR / "m5_forecasting_accuracy_zenodo"
 DEFAULT_M5_ZIP_PATH = DEFAULT_RAW_DIR / "m5_forecasting_accuracy_zenodo.zip"
 
 SUPPORTED_SUPPLEMENTAL_CORPUS_SOURCES = frozenset(
     {
-        "freshretail_lt",
         "m5_forecasting_accuracy",
     }
 )
@@ -39,7 +34,6 @@ __all__ = [
     "SupplementalCorpusCompatibility",
     "build_supplemental_corpus_frame",
     "build_supplemental_corpus_standardized_dataset",
-    "freshretail_promo_flag_expr",
     "supplemental_corpus_compatibility_matrix",
 ]
 
@@ -47,13 +41,6 @@ SUPPLEMENTAL_CORPUS_COMPATIBILITY_ROWS: tuple[
     tuple[str, str, bool, bool, str],
     ...,
 ] = (
-    (
-        "freshretail_lt",
-        "daily normalized product sales by store x product",
-        True,
-        True,
-        "FreshRetailNet-LT exposes sale_amount at daily store-product grain under CC BY 4.0.",
-    ),
     (
         "m5_forecasting_accuracy",
         "daily retail unit sales by store x product",
@@ -107,56 +94,6 @@ def _resolve_existing_path(*candidates: Path) -> Path | None:
     return None
 
 
-def _standardize_freshretail_lt_files(
-    *,
-    train_path: Path | None,
-    eval_path: Path | None,
-    source_run_id: str,
-    silver_run_id: str,
-) -> list[pl.LazyFrame]:
-    frames: list[pl.LazyFrame] = []
-    if train_path is not None:
-        frames.append(
-            standardize_freshretail_lt_lazy_frame(
-                pl.scan_parquet(train_path),
-                source_partition="historical_train",
-                source_run_id=source_run_id,
-                silver_run_id=silver_run_id,
-            )
-        )
-    if eval_path is not None:
-        frames.append(
-            standardize_freshretail_lt_lazy_frame(
-                pl.scan_parquet(eval_path),
-                source_partition="historical_eval",
-                source_run_id=source_run_id,
-                silver_run_id=silver_run_id,
-            )
-        )
-    return frames
-
-
-def _load_freshretail_lt_frames(
-    *,
-    root: Path,
-    allowed_sources: set[str],
-    source_run_id: str,
-    silver_run_id: str,
-) -> list[pl.LazyFrame]:
-    if "freshretail_lt" not in allowed_sources:
-        return []
-    freshretail_lt_train = _resolve_existing_path(
-        root / DEFAULT_FRESHRETAIL_LT_TRAIN_PATH.name
-    )
-    freshretail_lt_eval = _resolve_existing_path(
-        root / DEFAULT_FRESHRETAIL_LT_EVAL_PATH.name
-    )
-    return _standardize_freshretail_lt_files(
-        train_path=freshretail_lt_train,
-        eval_path=freshretail_lt_eval,
-        source_run_id=source_run_id,
-        silver_run_id=silver_run_id,
-    )
 
 
 def _ensure_m5_files(root: Path) -> Path | None:
@@ -211,7 +148,6 @@ def _supplemental_corpus_frames(
 ) -> list[pl.LazyFrame]:
     frames: list[pl.LazyFrame] = []
     for loader in (
-        _load_freshretail_lt_frames,
         _load_m5_frames,
     ):
         frames.extend(

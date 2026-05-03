@@ -62,6 +62,7 @@ base_panel as (
         source_review_status,
         source_legal_status_snapshot,
         source_role,
+        is_synthetic_source,
         gold_run_id
     from base
 ),
@@ -525,6 +526,11 @@ eligible as (
             then ln(1.0 + target_demand_qty_d_plus_1) - ln(1.0 + target_lag_7)
             else null
         end as target_delta_log_wow_d_plus_1,
+        case
+            when target_lag_1 is not null and target_lag_7 is not null
+            then 0.5 * target_lag_1 + 0.5 * target_lag_7
+            else coalesce(target_lag_1, target_lag_7)
+        end as field_baseline_blend_lag_1_lag_7_d_plus_1,
         cast(strftime(target_dt, '%u') as integer) - 1 as target_day_of_week,
         cast(strftime(target_dt, '%d') as integer) as target_day_of_month,
         cast(strftime(target_dt, '%V') as integer) as target_week_of_year,
@@ -642,6 +648,10 @@ final_panel as (
         base_panel.current_day_demand_qty,
         split_labeled.target_demand_qty_d_plus_1,
         split_labeled.target_delta_log_wow_d_plus_1,
+        split_labeled.field_baseline_blend_lag_1_lag_7_d_plus_1,
+        split_labeled.target_demand_qty_d_plus_1
+            - split_labeled.field_baseline_blend_lag_1_lag_7_d_plus_1
+            as target_residual_field_blend_lag_1_lag_7_d_plus_1,
         base_panel.true_zero_demand_flag,
         split_labeled.target_semantics_d_plus_1 as target_semantics,
         split_labeled.censor_flag_d_plus_1 as censor_flag,
@@ -681,6 +691,7 @@ final_panel as (
         base_panel.source_review_status,
         base_panel.source_legal_status_snapshot,
         base_panel.source_role,
+        base_panel.is_synthetic_source,
         base_panel.gold_run_id,
         split_labeled.lag_1,
         split_labeled.lag_2,

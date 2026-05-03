@@ -22,6 +22,9 @@ def _bootstrap_import_paths() -> None:
         project_root / "platform" / "python" / "src",
         project_root / "products" / "demand_forecast" / "src",
     )
+    script_dir = str(current_file.parent)
+    while script_dir in sys.path:
+        sys.path.remove(script_dir)
     for path in reversed(search_paths):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))

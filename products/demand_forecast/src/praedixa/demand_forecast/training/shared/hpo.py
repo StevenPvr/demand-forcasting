@@ -143,6 +143,39 @@ def build_hpo_runtime_metadata(
         else None,
         "best_mean_wape": float(resolved_best_trial.user_attrs["mean_wape"]),
         "best_mean_abs_bias": resolved_best_trial.user_attrs.get("mean_abs_bias"),
+        "best_decision_loss": resolved_best_trial.user_attrs.get(
+            "mean_decision_loss"
+        ),
+        "best_normalized_economic_loss": resolved_best_trial.user_attrs.get(
+            "mean_normalized_economic_loss"
+        ),
+        "best_normalized_bias": resolved_best_trial.user_attrs.get(
+            "mean_normalized_bias"
+        ),
+        "best_positive_bias_penalty": resolved_best_trial.user_attrs.get(
+            "mean_positive_bias_penalty"
+        ),
+        "best_severe_negative_bias_penalty": resolved_best_trial.user_attrs.get(
+            "mean_severe_negative_bias_penalty"
+        ),
+        "validation_monitor_metric": resolved_best_trial.user_attrs.get(
+            "validation_monitor_metric"
+        ),
+        "economic_objective_config": resolved_best_trial.user_attrs.get(
+            "economic_objective_config"
+        ),
+        "segmented_economic_objective_config": resolved_best_trial.user_attrs.get(
+            "segmented_economic_objective_config",
+            resolved_best_trial.user_attrs.get("economic_objective_config"),
+        ),
+        "segment_decision_loss": resolved_best_trial.user_attrs.get(
+            "segment_decision_loss"
+        ),
+        "segment_bias": resolved_best_trial.user_attrs.get("segment_bias"),
+        "product_decision_loss": resolved_best_trial.user_attrs.get(
+            "product_decision_loss"
+        ),
+        "product_bias": resolved_best_trial.user_attrs.get("product_bias"),
         "best_coverage_80": resolved_best_trial.user_attrs.get("mean_coverage_80"),
         "best_coverage_95": resolved_best_trial.user_attrs.get("mean_coverage_95"),
     }

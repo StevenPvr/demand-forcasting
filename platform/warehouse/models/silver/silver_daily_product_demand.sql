@@ -8,12 +8,12 @@ unioned as (
     select
         10 as source_priority,
         *
-    from {{ ref("silver_freshretail_daily_product_demand") }}
-    union all by name
-    select
-        10 as source_priority,
-        *
     from {{ ref("silver_bakery_daily_product_demand") }}
+    union all
+    select
+        20 as source_priority,
+        *
+    from {{ ref("silver_synthetic_foodservice_daily_product_demand") }}
 ),
 normalized as (
 select
@@ -29,7 +29,7 @@ select
     cast(unioned.category_level_1 as varchar) as category_level_1,
     cast(unioned.category_level_2 as varchar) as category_level_2,
     cast(unioned.category_level_3 as varchar) as category_level_3,
-    try_cast(unioned.observed_demand_qty as double) as observed_demand_qty,
+    coalesce(try_cast(unioned.observed_demand_qty as double), 0.0) as observed_demand_qty,
     case
         when lower(trim(cast(unioned.target_semantics as varchar))) in ('observed_sales', 'latent_demand_estimated')
         then lower(trim(cast(unioned.target_semantics as varchar)))
@@ -69,7 +69,7 @@ select
 from unioned
 inner join allowed_training_sources
   on unioned.dataset_source = allowed_training_sources.dataset_source
-where unioned.dataset_source in ('freshretail_lt', 'bakery')
+where unioned.dataset_source in ('bakery') or unioned.dataset_source like 'synthetic_foodservice%'
 ),
 ranked as (
     select

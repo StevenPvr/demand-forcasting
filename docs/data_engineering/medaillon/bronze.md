@@ -46,8 +46,8 @@ Le manifest persistant `bronze_source_manifest` contient:
   conservées si un remplacement tardif échoue.
 - Les sources open exogenous peuvent être absentes, mais elles créent des tables
   vides contractuelles pour garder dbt stable.
-- `source_policy_id` est la vérité légale aval. Exemple: les fichiers
-  FreshRetail-LT doivent rester `freshretail_lt`.
+- `source_policy_id` est la vérité légale aval: il doit rester stable et
+  explicite pour chaque source autorisée.
 
 ## Frontière
 

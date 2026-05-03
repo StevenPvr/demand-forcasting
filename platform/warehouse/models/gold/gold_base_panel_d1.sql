@@ -200,30 +200,21 @@ dense_panel as (
             try_cast(open_weather.weather_wind_speed_mean as double)
         ) as weather_wind_level,
         try_cast(macro_country.lending_interest_rate_latest as double) as lending_interest_rate_latest,
-        case
-            when dense.dataset_source = 'bakery' then 'bakery'
-            else 'retail'
-        end as vertical_level_1,
-        case
-            when dense.dataset_source = 'freshretail_lt' then 'grocery_delivery'
-            when dense.dataset_source = 'bakery' then 'bakery_pastry'
-            else null
-        end as vertical_level_2,
-        coalesce(
-            metadata.country_code,
-            case
-                when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source = 'bakery' then 'FR'
-                else null
-            end
-        ) as country_code,
+        'bakery' as vertical_level_1,
+        'bakery_pastry' as vertical_level_2,
+        coalesce(metadata.country_code, 'FR') as country_code,
         coalesce(bounds.region_id, metadata.region_code) as region_code,
         metadata.city_name as city_name,
         coalesce(source_policy.source_legal_basis, 'unknown') as source_legal_basis,
         coalesce(source_policy.source_license_type, 'unknown') as source_license_type,
         coalesce(source_policy.source_review_status, 'unknown') as source_review_status,
         coalesce(source_policy.source_review_status, 'unknown') as source_legal_status_snapshot,
-        'benchmark' as source_role,
+        case
+            when dense.dataset_source like 'synthetic_foodservice%' then 'synthetic'
+            when dense.dataset_source = 'bakery' then 'benchmark'
+            else 'supplemental'
+        end as source_role,
+        dense.dataset_source like 'synthetic_foodservice%' as is_synthetic_source,
         '{{ env_var("PRAEDIXA_GOLD_RUN_ID", "manual") }}' as gold_run_id
     from dense_dates as dense
     inner join series_bounds as bounds
@@ -255,28 +246,14 @@ dense_panel as (
     left join source_policy
       on dense.dataset_source = source_policy.dataset_source
     left join country_calendar
-      on coalesce(
-            metadata.country_code,
-            case
-                when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source = 'bakery' then 'FR'
-                else null
-            end
-         ) = country_calendar.country_code
+      on coalesce(metadata.country_code, 'FR') = country_calendar.country_code
      and dense.dt = country_calendar.dt
     left join open_weather
       on dense.dataset_source = open_weather.dataset_source
      and dense.location_id = open_weather.location_id
      and dense.dt = open_weather.dt
     left join macro_country
-      on coalesce(
-            metadata.country_code,
-            case
-                when dense.dataset_source = 'freshretail_lt' then 'CN'
-                when dense.dataset_source = 'bakery' then 'FR'
-                else null
-            end
-         ) = macro_country.country_code
+      on coalesce(metadata.country_code, 'FR') = macro_country.country_code
      and dense.dt = macro_country.dt
 ),
 imputation_windows as (
@@ -387,6 +364,7 @@ imputed_panel as (
         source_review_status,
         source_legal_status_snapshot,
         source_role,
+        is_synthetic_source,
         gold_run_id
     from imputation_windows
 )

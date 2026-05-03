@@ -1,0 +1,238 @@
+# Catalog of twelve reference normal scenarios (calibration starting points).
+schema_version: "1.0.0"
+scenarios:
+  - id: bakery_village_tiny
+    label: "Petite boulangerie de village"
+    sites: 1
+    business_type: bakery
+    activity_size: tiny
+    city_type: village
+    location_type: residential
+    mu_tickets_daily: [10, 50]
+    mu_basket_eur_ttc: [5.5, 9.0]
+    sku_count: [40, 70]
+    opening: "partial_week_one_full_closure_day"
+    intraday: bakery_classic
+    seasonality:
+      weekly: strong
+      annual: school_holidays_driven
+    weather_sensitivity: medium
+    events: rare_high_impact
+    promos_per_month: [0, 2]
+    stockouts_per_week: [2, 8]
+    waste_pct_of_daily_production: [0.08, 0.18]
+    noise_level: high
+    data_quality_level: medium_low
+
+  - id: bakery_small_town
+    label: "Boulangerie petite ville (config détaillée alignée)"
+    sites: 1
+    business_type: bakery
+    activity_size: small
+    city_type: small_town
+    location_type: residential
+    mu_tickets_daily: [80, 180]
+    mu_basket_eur_ttc: [7.0, 11.0]
+    sku_count: [40, 80]
+    opening: "closed_one_weekday_plus_vacation_closures"
+    intraday: bakery_classic
+    morning_share_of_daily_intensity: 0.45
+    seasonality:
+      weekly: strong
+      annual: galettes_buches_chocolat_windows
+    weather_sensitivity: medium
+    events: occasional_local_market
+    promos_per_month: [2, 4]
+    end_of_day_anti_waste_promo_days_per_week: [2, 3]
+    stockouts_per_week: [4, 12]
+    waste_pct_of_daily_production: [0.08, 0.15]
+    noise_level: medium_high
+    data_quality_level: medium_low
+
+  - id: bakery_premium_large_city
+    label: "Boulangerie premium grande ville"
+    sites: 1
+    business_type: bakery
+    activity_size: medium
+    city_type: large_city
+    location_type: premium_quarter
+    mu_tickets_daily: [280, 520]
+    mu_basket_eur_ttc: [11.0, 18.0]
+    sku_count: [70, 120]
+    positioning: [premium, takeaway, short_menu]
+    opening: open_7d_possible
+    intraday: bakery_classic_plus_afternoon_treat
+    seasonality:
+      annual: strong_on_patisserie_peaks
+    weather_sensitivity: medium_high
+    events: urban_dense
+    promos_per_month: [2, 6]
+    stockouts_per_week: [3, 10]
+    waste_pct_of_daily_production: [0.06, 0.11]
+    noise_level: medium
+    data_quality_level: medium
+
+  - id: fast_food_medium_city
+    label: "Fast-food moyen ville moyenne"
+    sites: [1, 3]
+    business_type: fast_food
+    activity_size: medium
+    city_type: medium_city
+    location_type: transit
+    mu_tickets_daily: [250, 700]
+    mu_basket_eur_ttc: [10.0, 14.0]
+    sku_count: [50, 120]
+    channels: [on_site, takeaway, delivery_own, uber_eats]
+    delivery_share: [0.25, 0.40]
+    intraday: dual_peak_fs
+    events_sport_uplift_days_pct: [10, 15]
+    competition_negative_shocks_per_year: [3, 8]
+    competition_shock_severity: [-0.15, -0.05]
+    kitchen_saturation_peak_days_pct: [5, 10]
+    delivery_cancel_rate: [0.02, 0.06]
+    promos_per_month: [4, 10]
+    stockouts_per_week: [5, 15]
+    waste_pct: [0.02, 0.05]
+    noise_level: medium
+    data_quality_level: medium
+
+  - id: fast_food_high_volume_metro
+    label: "Fast-food très fréquenté grande ville"
+    sites: [1, 5]
+    business_type: fast_food
+    activity_size: large
+    city_type: large_city
+    location_type: hypercenter
+    mu_tickets_daily: [1000, 2500]
+    mu_basket_eur_ttc: [9.5, 13.5]
+    sku_count: [80, 140]
+    delivery_share: [0.35, 0.50]
+    intraday: dual_peak_fs_extended
+    platform_promos: frequent
+    bestseller_stockouts: frequent
+    noise_level: medium_high
+    data_quality_level: medium_low
+
+  - id: traditional_medium_city
+    label: "Restaurant traditionnel ville moyenne"
+    sites: 1
+    business_type: traditional_restaurant
+    activity_size: medium
+    city_type: medium_city
+    location_type: residential
+    mu_tickets_daily: [90, 180]
+    mu_basket_eur_ttc: [28.0, 55.0]
+    sku_count: [25, 55]
+    intraday: lunch_dinner_gap
+    reservations: optional_enabled
+    plats_du_jour: rotating_short
+    event_sensitivity: high
+    stockouts_per_week: [1, 4]
+    waste_pct: [0.01, 0.03]
+    noise_level: medium
+    data_quality_level: medium
+
+  - id: brasserie_city_center
+    label: "Brasserie centre-ville"
+    sites: 1
+    business_type: brasserie
+    activity_size: medium
+    city_type: medium_city
+    location_type: office_district
+    mu_tickets_daily: [180, 380]
+    mu_basket_eur_ttc: [18.0, 35.0]
+    sku_count: [45, 90]
+    intraday: long_day_apero
+    terrace: true
+    weather_terrace_coupling: high
+    promos_per_month: [1, 4]
+    stockouts_per_week: [2, 8]
+    noise_level: medium
+    data_quality_level: medium
+
+  - id: snack_student_zone
+    label: "Snack zone étudiante"
+    sites: [1, 2]
+    business_type: snack
+    activity_size: small
+    city_type: medium_city
+    location_type: student_zone
+    mu_tickets_daily: [120, 280]
+    mu_basket_eur_ttc: [6.5, 11.0]
+    sku_count: [35, 80]
+    intraday: evening_student_peak
+    academic_calendar_amplitude: high
+    promo_effectiveness: high
+    stockouts_per_week: [4, 12]
+    noise_level: medium_high
+    data_quality_level: medium_low
+
+  - id: coffee_shop_office_district
+    label: "Coffee shop zone bureaux"
+    sites: 1
+    business_type: coffee_shop
+    activity_size: medium
+    city_type: large_city
+    location_type: office_district
+    mu_tickets_daily: [350, 650]
+    mu_basket_eur_ttc: [5.5, 9.5]
+    sku_count: [30, 70]
+    intraday: morning_lunch_continuous
+    wfh_shock_sensitivity: high
+    weekend_trough: deep
+    promos_per_month: [2, 6]
+    stockouts_per_week: [2, 6]
+    noise_level: low_medium
+    data_quality_level: medium
+
+  - id: dark_kitchen_metro
+    label: "Dark kitchen grande ville"
+    sites: [1, 3]
+    business_type: dark_kitchen
+    activity_size: medium
+    city_type: large_city
+    location_type: residential
+    mu_tickets_daily: [280, 520]
+    mu_basket_eur_ttc: [11.0, 18.0]
+    sku_count: [40, 90]
+    virtual_brands_per_kitchen: [2, 5]
+    channel: delivery_dominant
+    platform_outage_scenarios: enabled
+    evening_peak: strong
+    cancel_rate: [0.03, 0.08]
+    noise_level: medium_high
+    data_quality_level: medium_low
+
+  - id: seasonal_tourist_venue
+    label: "Restaurant touristique saisonnier"
+    sites: 1
+    business_type: seasonal_tourist
+    activity_size: large
+    city_type: small_town
+    location_type: touristic
+    mu_tickets_daily_low: [40, 90]
+    mu_tickets_daily_high: [600, 1200]
+    mu_basket_eur_ttc: [20.0, 45.0]
+    sku_count: [35, 70]
+    annual_seasonality_amplitude: very_high
+    weather_sensitivity: very_high
+    school_holiday_coupling: high
+    stockouts_per_week_high_season: [8, 20]
+    noise_level: high
+    data_quality_level: medium_low
+
+  - id: franchise_multi_site_network
+    label: "Franchise multi-sites"
+    sites: [5, 50]
+    business_type: fast_food
+    activity_size: medium
+    structure: franchise_multi
+    city_type: mixed_by_site
+    mu_tickets_daily_per_site: [200, 600]
+    mu_basket_eur_ttc: [10.0, 13.0]
+    sku_count: [60, 110]
+    central_price_waves: true
+    promo_campaigns_synchronized: true
+    inter_site_heterogeneity: moderate
+    noise_level: medium
+    data_quality_level: medium

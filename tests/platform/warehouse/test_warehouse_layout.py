@@ -178,15 +178,33 @@ class WarehouseLayoutTests(unittest.TestCase):
         )
         sql = model_path.read_text(encoding="utf-8")
 
-        self.assertIn("silver_freshretail_daily_product_demand", sql)
+        self.assertIn("silver_synthetic_foodservice_daily_product_demand", sql)
         self.assertIn("silver_bakery_daily_product_demand", sql)
         self.assertNotIn("silver_supplemental_corpus_daily_product_demand", sql)
-        self.assertNotIn("silver_synthetic_foodservice_daily_product_demand", sql)
-        self.assertIn("where unioned.dataset_source in ('freshretail_lt', 'bakery')", sql)
+        self.assertNotIn("silver_freshretail_daily_product_demand", sql)
+        self.assertIn(
+            "where unioned.dataset_source in ('bakery') "
+            "or unioned.dataset_source like 'synthetic_foodservice%'",
+            sql,
+        )
         self.assertIn("silver_allowed_training_dataset_sources", sql)
         self.assertIn("source_priority", sql)
         self.assertIn("partition by dataset_source, dt, location_id, product_id", sql)
         self.assertIn("where source_rank = 1", sql)
+
+    def test_gold_feature_panel_unions_bakery_and_synthetic_slices(self) -> None:
+        panel_path = (
+            PROJECT_ROOT
+            / "platform"
+            / "warehouse"
+            / "models"
+            / "gold"
+            / "gold_feature_panel_d1.sql"
+        )
+        sql = panel_path.read_text(encoding="utf-8")
+        self.assertIn("gold_feature_bakery_d1", sql)
+        self.assertIn("gold_feature_synthetic_foodservice_d1", sql)
+        self.assertIn("union all", sql.lower())
 
     def test_gold_model_references_feature_panel(self) -> None:
         model_path = (
@@ -297,13 +315,13 @@ class WarehouseLayoutTests(unittest.TestCase):
         )
 
     def test_gold_source_split_contract_is_explicit(self) -> None:
-        freshretail_path = (
+        synthetic_slice_path = (
             PROJECT_ROOT
             / "platform"
             / "warehouse"
             / "models"
             / "gold"
-            / "gold_feature_freshretail_d1.sql"
+            / "gold_feature_synthetic_foodservice_d1.sql"
         )
         split_test_path = (
             PROJECT_ROOT
@@ -312,18 +330,16 @@ class WarehouseLayoutTests(unittest.TestCase):
             / "tests"
             / "gold_pilot_ready_split_by_source.sql"
         )
-        freshretail_sql = freshretail_path.read_text(encoding="utf-8")
+        synthetic_slice_sql = synthetic_slice_path.read_text(encoding="utf-8")
         split_test_sql = split_test_path.read_text(encoding="utf-8")
 
-        self.assertIn("dataset_source = 'freshretail_lt'", freshretail_sql)
-        self.assertIn('"chrono_60_40"', freshretail_sql)
-        self.assertIn("freshretail_lt_train_val_contract", split_test_sql)
+        self.assertIn("dataset_source like 'synthetic_foodservice%'", synthetic_slice_sql)
+        self.assertIn('"pilot_ready_chrono_60_20_20"', synthetic_slice_sql)
+        self.assertIn("synthetic_foodservice_pilot_ready_contract", split_test_sql)
         self.assertIn("bakery_test_holdout_contract", split_test_sql)
         self.assertIn("unexpected_dataset_source", split_test_sql)
-        self.assertIn("where dataset_source not in ('freshretail_lt', 'bakery')", split_test_sql)
         self.assertNotIn("supplemental_corpus_train_val_contract", split_test_sql)
-        self.assertNotIn("synthetic_foodservice_train_only_contract", split_test_sql)
-        self.assertIn("or test_rows <> 0", split_test_sql)
+        self.assertIn("or test_rows = 0", split_test_sql)
         self.assertIn("PRAEDIXA_GOLD_BAKERY_TEST_MONTHS", split_test_sql)
 
     def test_gold_feature_slice_aligns_label_metadata_with_d_plus_1_target(

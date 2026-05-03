@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 from typing import Any, cast
 
 import numpy as np
@@ -70,7 +70,9 @@ def _rolling_median_forecaster(window: int) -> HistoryForecaster:
 def _ewm_forecaster(span: int) -> HistoryForecaster:
     def forecast(history: list[float], _: pd.Timestamp) -> float:
         history_series = pd.Series(history, dtype=float)
-        return float(history_series.ewm(span=max(1, span), adjust=False).mean().iloc[-1])
+        return float(
+            history_series.ewm(span=max(1, span), adjust=False).mean().iloc[-1]
+        )
 
     return forecast
 
@@ -83,10 +85,15 @@ def _expanding_median_forecaster(history: list[float], _: pd.Timestamp) -> float
     return float(np.median(history))
 
 
-def _same_weekday_history(history_df: pd.DataFrame, forecast_date: pd.Timestamp) -> list[float]:
+def _same_weekday_history(
+    history_df: pd.DataFrame, forecast_date: pd.Timestamp
+) -> list[float]:
     date_series = history_df[REFERENCE_DATE_COL]
     mask = date_series.dt.dayofweek == forecast_date.dayofweek
-    return [float(value) for value in history_df.loc[mask, REFERENCE_TARGET_COL].astype(float).tolist()]
+    return [
+        float(value)
+        for value in history_df.loc[mask, REFERENCE_TARGET_COL].astype(float).tolist()
+    ]
 
 
 def _trimmed_mean_forecaster(window: int, trim_ratio: float = 0.2) -> HistoryForecaster:
@@ -104,7 +111,9 @@ def _trimmed_mean_forecaster(window: int, trim_ratio: float = 0.2) -> HistoryFor
 
 def _blend_forecaster(weights: dict[str, float]) -> BlendForecaster:
     def forecast(predictions: dict[str, float]) -> float:
-        return float(sum(predictions[name] * weight for name, weight in weights.items()))
+        return float(
+            sum(predictions[name] * weight for name, weight in weights.items())
+        )
 
     return forecast
 
@@ -117,19 +126,40 @@ def _year_ago_date_candidates(forecast_date: pd.Timestamp) -> list[pd.Timestamp]
     ]
 
 
-def _same_day_last_year_value(history_df: pd.DataFrame, forecast_date: pd.Timestamp) -> float | None:
+def _same_day_last_year_value(
+    history_df: pd.DataFrame, forecast_date: pd.Timestamp
+) -> float | None:
     indexed_history = history_df.set_index(REFERENCE_DATE_COL)
     for candidate_date in _year_ago_date_candidates(forecast_date):
         if candidate_date in indexed_history.index:
-            return float(cast(float, indexed_history.at[candidate_date, REFERENCE_TARGET_COL]))
+            return float(
+                cast(float, indexed_history.at[candidate_date, REFERENCE_TARGET_COL])
+            )
     return None
 
 
-def _append_future_row(row: dict[Hashable, Any]) -> pd.DataFrame:
-    normalized_row = {str(key): value for key, value in row.items()}
-    appended_row = pd.DataFrame([normalized_row])
-    appended_row[REFERENCE_DATE_COL] = pd.to_datetime(appended_row[REFERENCE_DATE_COL])
-    return appended_row
+def _append_future_target_row_inplace(
+    history: pd.DataFrame,
+    row: dict[str, Any],
+) -> None:
+    history.loc[len(history), [REFERENCE_DATE_COL, REFERENCE_TARGET_COL]] = [
+        _coerce_timestamp(row[REFERENCE_DATE_COL]),
+        float(row[REFERENCE_TARGET_COL]),
+    ]
+
+
+def _records_with_string_keys(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    return [
+        {str(key): value for key, value in row.items()}
+        for row in frame.to_dict(orient="records")
+    ]
+
+
+def _observed_target_history(frame: pd.DataFrame) -> pd.DataFrame:
+    history = frame.loc[:, [REFERENCE_DATE_COL, REFERENCE_TARGET_COL]].copy()
+    history[REFERENCE_DATE_COL] = pd.to_datetime(history[REFERENCE_DATE_COL])
+    history[REFERENCE_TARGET_COL] = history[REFERENCE_TARGET_COL].astype(float)
+    return history
 
 
 def predict_baseline_series(
@@ -140,10 +170,10 @@ def predict_baseline_series(
     precomputed_names: list[str] | None = None,
     prediction_cache: dict[str, list[float]] | None = None,
 ) -> pd.Series:
-    observed_history_df = history_df.copy()
+    observed_history_df = _observed_target_history(history_df)
     observed_values = observed_history_df[REFERENCE_TARGET_COL].astype(float).tolist()
     predictions: list[float] = []
-    future_records = test_df.to_dict(orient="records")
+    future_records = _records_with_string_keys(test_df)
     for row in future_records:
         forecast_date = _coerce_timestamp(row[REFERENCE_DATE_COL])
         if precomputed_names is None:
@@ -152,11 +182,13 @@ def predict_baseline_series(
         else:
             if prediction_cache is None:
                 raise RuntimeError("prediction_cache is required for blended baselines")
-            component_predictions = {name: prediction_cache[name][len(predictions)] for name in precomputed_names}
+            component_predictions = {
+                name: prediction_cache[name][len(predictions)]
+                for name in precomputed_names
+            }
             blended_predictor = cast(BlendForecaster, predictor)
             predicted_value = float(blended_predictor(component_predictions))
         predictions.append(predicted_value)
-        observed_history_df = pd.concat([observed_history_df, _append_future_row(row)], ignore_index=True)
         observed_values.append(float(row[REFERENCE_TARGET_COL]))
     return pd.Series(predictions, dtype=float)
 
@@ -167,17 +199,21 @@ def _same_weekday_predictor(
     reducer: Callable[[np.ndarray[Any, np.dtype[np.float64]]], float],
     window: int | None,
 ) -> pd.Series:
-    observed_history_df = history_df.copy()
+    observed_history_df = _observed_target_history(history_df)
     predictions: list[float] = []
-    future_records = test_df.to_dict(orient="records")
+    future_records = _records_with_string_keys(test_df)
     for row in future_records:
         forecast_date = _coerce_timestamp(row[REFERENCE_DATE_COL])
         weekday_history = _same_weekday_history(observed_history_df, forecast_date)
         if not weekday_history:
-            predictions.append(float(observed_history_df[REFERENCE_TARGET_COL].astype(float).iloc[-1]))
+            predictions.append(
+                float(observed_history_df[REFERENCE_TARGET_COL].astype(float).iloc[-1])
+            )
         else:
-            predictions.append(_reduced_weekday_prediction(weekday_history, reducer, window))
-        observed_history_df = pd.concat([observed_history_df, _append_future_row(row)], ignore_index=True)
+            predictions.append(
+                _reduced_weekday_prediction(weekday_history, reducer, window)
+            )
+        _append_future_target_row_inplace(observed_history_df, row)
     return pd.Series(predictions, dtype=float)
 
 
@@ -190,16 +226,20 @@ def _reduced_weekday_prediction(
     return float(reducer(np.asarray(resolved_history, dtype=float)))
 
 
-def _same_day_last_year_predictions(history_df: pd.DataFrame, test_df: pd.DataFrame) -> pd.Series:
-    observed_history_df = history_df.copy()
+def _same_day_last_year_predictions(
+    history_df: pd.DataFrame, test_df: pd.DataFrame
+) -> pd.Series:
+    observed_history_df = _observed_target_history(history_df)
     predictions: list[float] = []
-    future_records = test_df.to_dict(orient="records")
+    future_records = _records_with_string_keys(test_df)
     for row in future_records:
         forecast_date = _coerce_timestamp(row[REFERENCE_DATE_COL])
         year_ago_value = _same_day_last_year_value(observed_history_df, forecast_date)
-        fallback_value = float(observed_history_df[REFERENCE_TARGET_COL].astype(float).iloc[-1])
+        fallback_value = float(
+            observed_history_df[REFERENCE_TARGET_COL].astype(float).iloc[-1]
+        )
         predictions.append(fallback_value if year_ago_value is None else year_ago_value)
-        observed_history_df = pd.concat([observed_history_df, _append_future_row(row)], ignore_index=True)
+        _append_future_target_row_inplace(observed_history_df, row)
     return pd.Series(predictions, dtype=float)
 
 
@@ -209,7 +249,9 @@ def baseline_metrics(
     y_pred: pd.Series,
     insample_series: pd.Series,
 ) -> dict[str, float | str]:
-    errors = y_true.astype(float).reset_index(drop=True) - y_pred.astype(float).reset_index(drop=True)
+    errors = y_true.astype(float).reset_index(drop=True) - y_pred.astype(
+        float
+    ).reset_index(drop=True)
     return {
         "name": name,
         "mae": mae_score(y_true, y_pred),
@@ -231,13 +273,17 @@ def prediction_rows_payload(
     payload_df = pd.DataFrame(
         {
             "product": test_df[REFERENCE_PRODUCT_COL].astype(str),
-            "origin_date": (pd.to_datetime(test_df[REFERENCE_DATE_COL]) - pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d"),
+            "origin_date": (
+                pd.to_datetime(test_df[REFERENCE_DATE_COL]) - pd.Timedelta(days=1)
+            ).dt.strftime("%Y-%m-%d"),
             "target_date": target_dates,
             "actual": y_true.astype(float),
             "prediction": y_pred.astype(float),
         }
     )
-    payload_df["absolute_error"] = (payload_df["actual"] - payload_df["prediction"]).abs()
+    payload_df["absolute_error"] = (
+        payload_df["actual"] - payload_df["prediction"]
+    ).abs()
     return [
         {
             "product": str(row["product"]),
@@ -284,18 +330,33 @@ def baseline_definitions() -> tuple[
     return direct_baselines, blended_baselines
 
 
-def same_weekday_baselines(history_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, pd.Series]:
+def same_weekday_baselines(
+    history_df: pd.DataFrame, test_df: pd.DataFrame
+) -> dict[str, pd.Series]:
     return {
-        "same_weekday_mean_4": _same_weekday_predictor(history_df, test_df, _array_mean, 4),
-        "same_weekday_median_4": _same_weekday_predictor(history_df, test_df, _array_median, 4),
-        "same_weekday_mean_expanding": _same_weekday_predictor(history_df, test_df, _array_mean, None),
-        "same_weekday_median_expanding": _same_weekday_predictor(history_df, test_df, _array_median, None),
+        "same_weekday_mean_4": _same_weekday_predictor(
+            history_df, test_df, _array_mean, 4
+        ),
+        "same_weekday_median_4": _same_weekday_predictor(
+            history_df, test_df, _array_median, 4
+        ),
+        "same_weekday_mean_expanding": _same_weekday_predictor(
+            history_df, test_df, _array_mean, None
+        ),
+        "same_weekday_median_expanding": _same_weekday_predictor(
+            history_df, test_df, _array_median, None
+        ),
         "same_day_last_year": _same_day_last_year_predictions(history_df, test_df),
     }
 
 
-def ranked_rows(metrics_rows: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
-    ranked = sorted(metrics_rows, key=lambda row: (float(row["mae"]), float(row["rmse"]), str(row["name"])))
+def ranked_rows(
+    metrics_rows: list[dict[str, float | str]],
+) -> list[dict[str, float | str]]:
+    ranked = sorted(
+        metrics_rows,
+        key=lambda row: (float(row["mae"]), float(row["rmse"]), str(row["name"])),
+    )
     for rank, row in enumerate(ranked, start=1):
         row["rank_mae"] = rank
     return ranked

@@ -34,8 +34,6 @@ COMPETITOR_TAGS_BY_SEGMENT = {
 }
 DATASET_SOURCE_COMPETITOR_SEGMENT = {
     "bakery": "bakery",
-    "freshretail": "grocery",
-    "freshretail_lt": "grocery",
 }
 
 

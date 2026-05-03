@@ -814,6 +814,7 @@ def _bundle_projection_columns(
 ) -> list[str]:
     ordered: list[str] = [DEFAULT_DATE_COL]
     for column in [
+        DEFAULT_DATASET_SOURCE_COL,
         *group_id_cols,
         absolute_target_col,
         learning_target_col,
@@ -1182,6 +1183,7 @@ def _resolve_bundle_features(
             DEFAULT_DATE_COL,
             target_contract.learning_target_col,
             target_contract.absolute_target_col,
+            *BASELINE_SUPPORT_COLUMNS,
             *DEFAULT_IDENTIFIER_FEATURE_COLS,
             *DEFAULT_EXCLUDED_RISKY_FEATURE_COLS,
             *DEFAULT_REMOVED_MODEL_INPUT_COLS,

@@ -453,7 +453,7 @@ def _runtime_metadata(
 ) -> dict[str, object]:
     return {
         "backend": "chronos2_finetune",
-        "protocol": "chronos2_lora_finetune_freshretail_10pct",
+        "protocol": "chronos2_lora_finetune_bakery",
         "trial_count": trial_count,
         "random_seed": random_seed,
         "model_params": model_params,

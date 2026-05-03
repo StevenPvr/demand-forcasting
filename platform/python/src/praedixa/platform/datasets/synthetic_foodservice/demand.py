@@ -6,10 +6,12 @@ from typing import Any, Protocol, cast
 import numpy as np
 import pandas as pd
 
+from praedixa.platform.datasets.synthetic_foodservice.shocks import (
+    ShockEvent,
+    apply_shocks_to_mu,
+)
 from praedixa.platform.datasets.synthetic_foodservice.simulation_math import (
     active_matrix,
-    available_quantity,
-    capacity_factor,
     closed_day_mask,
     day_complete_mask,
     dow_lift,
@@ -19,7 +21,6 @@ from praedixa.platform.datasets.synthetic_foodservice.simulation_math import (
     scaled_product_base,
     seasonal_lift,
     staffing_hours,
-    waste_multiplier,
     weather_lift,
     zero_inflation_mask,
 )
@@ -106,6 +107,7 @@ class DemandLocationRecord(Protocol):
     city_id: str
     region_id: str
     org_group_id: str
+    school_zone: str
 
 
 def generate_location_batch(
@@ -116,6 +118,8 @@ def generate_location_batch(
     city_weather: pd.DataFrame,
     seed: int,
     source_run_id: str,
+    site_shocks_by_location_id: dict[str, list[ShockEvent]] | None = None,
+    allow_data_gaps: bool = False,
 ) -> BatchSimulationResult:
     """Generate observed source rows for a batch of sites."""
 
@@ -130,6 +134,9 @@ def generate_location_batch(
             assortments["location_id"].eq(str(location.location_id))
         ]
         weather = city_weather.loc[city_weather["city_id"].eq(str(location.city_id))]
+        site_shocks = (site_shocks_by_location_id or {}).get(
+            str(location.location_id), []
+        )
         result = _generate_location_frame(
             location=location,
             assortment=location_assortment,
@@ -137,6 +144,8 @@ def generate_location_batch(
             weather=weather,
             rng=rng,
             source_run_id=source_run_id,
+            site_shocks=site_shocks,
+            allow_data_gaps=allow_data_gaps,
         )
         daily_frames.append(result.daily)
         oracle_frames.append(result.oracle)
@@ -162,13 +171,23 @@ def _generate_location_frame(
     weather: pd.DataFrame,
     rng: np.random.Generator,
     source_run_id: str,
+    site_shocks: list[ShockEvent],
+    allow_data_gaps: bool,
 ) -> BatchSimulationResult:
     if assortment.empty:
         return BatchSimulationResult(
             pd.DataFrame(columns=MODEL_FACING_COLUMNS),
             pd.DataFrame(columns=ORACLE_COLUMNS),
         )
-    matrices = _build_location_matrices(location, assortment, calendar, weather, rng)
+    matrices = _build_location_matrices(
+        location,
+        assortment,
+        calendar,
+        weather,
+        rng,
+        site_shocks=site_shocks,
+        allow_data_gaps=allow_data_gaps,
+    )
     selected = _selected_model_rows(matrices, rng)
     daily = _model_frame(
         location, assortment, calendar, weather, matrices, selected, source_run_id
@@ -183,25 +202,33 @@ def _build_location_matrices(
     calendar: SyntheticCalendar,
     weather: pd.DataFrame,
     rng: np.random.Generator,
+    site_shocks: list[ShockEvent] | None = None,
+    allow_data_gaps: bool = False,
 ) -> dict[str, np.ndarray]:
+    shocks = site_shocks or []
     date_count = len(calendar.dates)
     product_count = len(assortment)
-    mu = _latent_mean_matrix(location, assortment, calendar, weather, rng)
-    latent = negative_binomial(mu=mu, rng=rng)
     active = active_matrix(assortment, calendar)
     closed = closed_day_mask(str(location.dataset_source), calendar, rng)
+    closed = _apply_forced_closure_shocks(closed, shocks)
     promo = promo_matrix(str(location.dataset_source), product_count, date_count, rng)
+    mu = _latent_mean_matrix(location, assortment, calendar, weather, rng)
+    mu, discount_rate = _apply_promo_volume_effects(
+        mu, promo, assortment, str(location.dataset_source), rng
+    )
+    demand_shocks = _shocks_for_demand(shocks)
+    if demand_shocks:
+        mu = apply_shocks_to_mu(mu, demand_shocks, date_count)
+    latent = negative_binomial(mu=mu, rng=rng)
     latent = np.where(active & ~closed[None, :], latent, 0)
     latent = np.where(
         zero_inflation_mask(str(location.dataset_source), mu.shape, rng), 0, latent
     )
-    available = available_quantity(str(location.dataset_source), mu, latent, rng)
-    capacity = capacity_factor(str(location.dataset_source), date_count, rng)
-    observed = np.floor(np.minimum(latent * capacity[None, :], available)).astype(float)
-    lost = np.maximum(latent - observed, 0.0)
-    waste = np.maximum(available - latent, 0.0) * waste_multiplier(
-        str(location.dataset_source)
-    )
+    available = latent.copy()
+    capacity = np.ones(date_count, dtype=float)
+    observed = latent.astype(float)
+    lost = np.zeros_like(latent, dtype=float)
+    waste = np.zeros_like(latent, dtype=float)
     return {
         "active": active,
         "closed": closed,
@@ -212,7 +239,8 @@ def _build_location_matrices(
         "waste": waste,
         "available": available,
         "capacity": capacity,
-        "day_complete": day_complete_mask(date_count, rng),
+        "day_complete": _day_complete_matrix(date_count, rng, shocks, allow_data_gaps),
+        "discount_rate": discount_rate,
     }
 
 
@@ -234,14 +262,20 @@ def _latent_mean_matrix(
         calendar.event_type.astype(str) == "tourism_weekend", 1.08, 1.0
     )
     holiday_effect = np.where(calendar.holiday_flag, holiday_lift(source), 1.0)
+    school_holiday_effect = _school_holiday_lift(location, calendar)
+    bridge_effect = np.where(calendar.bridge_day_flag, _bridge_day_lift(source), 1.0)
+    price_effect = _price_elasticity_lift(source, assortment)
     site_noise = rng.lognormal(mean=0.0, sigma=0.06, size=len(calendar.dates))
     return (
         base[:, None]
+        * price_effect[:, None]
         * dow[None, :]
         * seasonal[None, :]
         * weather_effect[None, :]
         * event_lift[None, :]
         * holiday_effect[None, :]
+        * school_holiday_effect[None, :]
+        * bridge_effect[None, :]
         * site_noise[None, :]
     )
 
@@ -250,24 +284,8 @@ def _selected_model_rows(
     matrices: dict[str, np.ndarray],
     rng: np.random.Generator,
 ) -> np.ndarray:
-    observed = matrices["observed"]
-    promo = matrices["promo"]
     active = matrices["active"]
-    closed = matrices["closed"]
-    censored = matrices["lost"] > 0
-    sampled_zero = rng.random(observed.shape) < 0.018
-    selected = (
-        active & ~closed[None, :] & ((observed > 0) | censored | promo | sampled_zero)
-    )
-    return selected | _closure_sentinel_mask(active, closed)
-
-
-def _closure_sentinel_mask(active: np.ndarray, closed: np.ndarray) -> np.ndarray:
-    sentinel = np.zeros_like(active, dtype=bool)
-    if active.shape[0] == 0:
-        return sentinel
-    sentinel[0, :] = closed
-    return sentinel
+    return active
 
 
 def _model_frame(
@@ -284,7 +302,7 @@ def _model_frame(
         location, assortment, calendar, product_index, date_index, source_run_id
     )
     _assign_observed_fields(frame, assortment, matrices, product_index, date_index)
-    _assign_calendar_weather_fields(frame, calendar, weather, date_index)
+    _assign_calendar_weather_fields(frame, location, calendar, weather, date_index)
     return frame.loc[:, list(MODEL_FACING_COLUMNS)]
 
 
@@ -330,7 +348,7 @@ def _assign_observed_fields(
     price = assortment.iloc[product_index]["base_price"].to_numpy(dtype=float)
     observed = matrices["observed"][product_index, date_index]
     lost = matrices["lost"][product_index, date_index]
-    discount_rate = np.where(matrices["promo"][product_index, date_index], 0.12, 0.0)
+    discount_rate = matrices["discount_rate"][product_index, date_index]
     closed = matrices["closed"][date_index]
     complete = matrices["day_complete"][date_index] & ~closed
     frame["observed_demand_qty"] = observed.round(3)
@@ -355,6 +373,7 @@ def _assign_observed_fields(
 
 def _assign_calendar_weather_fields(
     frame: pd.DataFrame,
+    location: DemandLocationRecord,
     calendar: SyntheticCalendar,
     weather: pd.DataFrame,
     date_index: np.ndarray,
@@ -371,10 +390,15 @@ def _assign_calendar_weather_fields(
     frame["calendar_week_key"] = calendar.frame["calendar_week_key"].to_numpy()[
         date_index
     ]
-    frame["event_name_1"] = _nullable_array(calendar.event_name[date_index])
-    frame["event_type_1"] = _nullable_array(calendar.event_type[date_index])
-    frame["event_name_2"] = None
-    frame["event_type_2"] = None
+    frame["event_name_1"] = _clean_string_array(calendar.event_name[date_index])
+    frame["event_type_1"] = _clean_string_array(calendar.event_type[date_index])
+    school_holiday = _school_holiday_mask_for_location(location, calendar)[date_index]
+    frame["event_name_2"] = np.where(
+        school_holiday,
+        "school_holiday_zone_" + str(location.school_zone).lower(),
+        "nothing",
+    )
+    frame["event_type_2"] = np.where(school_holiday, "school_holiday", "nothing")
     for column in (
         "weather_precipitation",
         "weather_temperature",
@@ -384,8 +408,189 @@ def _assign_calendar_weather_fields(
         frame[column] = weather[column].to_numpy(dtype=float)[date_index]
 
 
-def _nullable_array(values: np.ndarray) -> list[str | None]:
-    return [str(value) if str(value) else None for value in values]
+def _clean_string_array(values: np.ndarray) -> list[str]:
+    return [
+        str(value) if str(value) and str(value) != "None" else "nothing"
+        for value in values
+    ]
+
+
+def _price_elasticity_lift(source: str, assortment: pd.DataFrame) -> np.ndarray:
+    prices = assortment["base_price"].to_numpy(dtype=float)
+    medians = assortment.groupby("category_level_1")["base_price"].transform("median")
+    reference = np.maximum(medians.to_numpy(dtype=float), 0.01)
+    elasticity = _price_elasticity(source)
+    return np.clip((prices / reference) ** elasticity, 0.62, 1.42)
+
+
+def _price_elasticity(source: str) -> float:
+    elasticities: dict[str, float] = {
+        "synthetic_foodservice_qsr": -0.95,
+        "synthetic_foodservice_bakery": -0.65,
+        "synthetic_foodservice_restaurant": -0.55,
+        "synthetic_foodservice_brasserie": -0.60,
+        "synthetic_foodservice_coffee_shop": -0.70,
+        "synthetic_foodservice_snack": -0.85,
+        "synthetic_foodservice_dark_kitchen": -1.10,
+        "synthetic_foodservice_sandwich_shop": -0.80,
+        "synthetic_foodservice_seasonal_tourist": -0.50,
+    }
+    return elasticities.get(source, -0.75)
+
+
+def _apply_promo_volume_effects(
+    mu: np.ndarray,
+    promo: np.ndarray,
+    assortment: pd.DataFrame,
+    source: str,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    discount_rate = np.where(
+        promo,
+        rng.uniform(0.08, 0.24, size=promo.shape),
+        0.0,
+    )
+    sensitivity = _promo_sensitivity(source)
+    adjusted = mu * (1.0 + sensitivity * discount_rate)
+    _apply_category_cannibalization(adjusted, promo, assortment, source)
+    return np.clip(adjusted, 0.01, None), discount_rate
+
+
+def _promo_sensitivity(source: str) -> float:
+    sensitivities: dict[str, float] = {
+        "synthetic_foodservice_qsr": 2.2,
+        "synthetic_foodservice_bakery": 1.4,
+        "synthetic_foodservice_restaurant": 1.1,
+        "synthetic_foodservice_brasserie": 1.2,
+        "synthetic_foodservice_coffee_shop": 1.5,
+        "synthetic_foodservice_snack": 1.9,
+        "synthetic_foodservice_dark_kitchen": 2.4,
+        "synthetic_foodservice_sandwich_shop": 1.8,
+        "synthetic_foodservice_seasonal_tourist": 1.3,
+    }
+    return sensitivities.get(source, 1.5)
+
+
+def _apply_category_cannibalization(
+    adjusted: np.ndarray,
+    promo: np.ndarray,
+    assortment: pd.DataFrame,
+    source: str,
+) -> None:
+    categories = assortment["category_level_1"].astype(str).to_numpy()
+    rate = _cannibalization_rate(source)
+    for category in sorted(set(categories.tolist())):
+        category_mask = categories == category
+        promo_share = promo[category_mask, :].mean(axis=0)
+        if not np.any(promo_share > 0):
+            continue
+        daily_factor = np.clip(1.0 - rate * promo_share, 0.82, 1.0)
+        non_promo = category_mask[:, None] & ~promo
+        adjusted[non_promo] *= np.broadcast_to(daily_factor, adjusted.shape)[non_promo]
+
+
+def _cannibalization_rate(source: str) -> float:
+    rates: dict[str, float] = {
+        "synthetic_foodservice_qsr": 0.16,
+        "synthetic_foodservice_bakery": 0.10,
+        "synthetic_foodservice_restaurant": 0.08,
+        "synthetic_foodservice_brasserie": 0.09,
+        "synthetic_foodservice_coffee_shop": 0.11,
+        "synthetic_foodservice_snack": 0.14,
+        "synthetic_foodservice_dark_kitchen": 0.18,
+        "synthetic_foodservice_sandwich_shop": 0.15,
+        "synthetic_foodservice_seasonal_tourist": 0.08,
+    }
+    return rates.get(source, 0.10)
+
+
+def _school_holiday_lift(
+    location: DemandLocationRecord,
+    calendar: SyntheticCalendar,
+) -> np.ndarray:
+    holiday = _school_holiday_mask_for_location(location, calendar)
+    source = str(location.dataset_source)
+    lift_by_source: dict[str, float] = {
+        "synthetic_foodservice_qsr": 1.06,
+        "synthetic_foodservice_bakery": 0.96,
+        "synthetic_foodservice_restaurant": 1.04,
+        "synthetic_foodservice_brasserie": 1.03,
+        "synthetic_foodservice_coffee_shop": 0.88,
+        "synthetic_foodservice_snack": 1.08,
+        "synthetic_foodservice_dark_kitchen": 1.10,
+        "synthetic_foodservice_sandwich_shop": 0.86,
+        "synthetic_foodservice_seasonal_tourist": 1.18,
+    }
+    return np.where(holiday, lift_by_source.get(source, 1.0), 1.0)
+
+
+def _school_holiday_mask_for_location(
+    location: DemandLocationRecord,
+    calendar: SyntheticCalendar,
+) -> np.ndarray:
+    zone = str(location.school_zone).upper()
+    if zone == "A":
+        return calendar.school_holiday_zone_a
+    if zone == "B":
+        return calendar.school_holiday_zone_b
+    return calendar.school_holiday_zone_c
+
+
+def _bridge_day_lift(source: str) -> float:
+    lifts: dict[str, float] = {
+        "synthetic_foodservice_qsr": 0.96,
+        "synthetic_foodservice_bakery": 0.92,
+        "synthetic_foodservice_restaurant": 1.08,
+        "synthetic_foodservice_brasserie": 1.10,
+        "synthetic_foodservice_coffee_shop": 0.88,
+        "synthetic_foodservice_snack": 0.98,
+        "synthetic_foodservice_dark_kitchen": 1.06,
+        "synthetic_foodservice_sandwich_shop": 0.84,
+        "synthetic_foodservice_seasonal_tourist": 1.14,
+    }
+    return lifts.get(source, 1.0)
+
+
+def _shocks_for_demand(site_shocks: list[ShockEvent]) -> list[ShockEvent]:
+    excluded = {"data", "supply", "ops", "regulatory"}
+    return [shock for shock in site_shocks if shock.category not in excluded]
+
+
+def _apply_forced_closure_shocks(
+    closed: np.ndarray,
+    site_shocks: list[ShockEvent],
+) -> np.ndarray:
+    adjusted = closed.copy()
+    for shock in site_shocks:
+        if shock.category != "regulatory" and not shock.shock_id.startswith(
+            "forced_closure"
+        ):
+            continue
+        adjusted[shock.start_day_index : shock.end_day_index] = True
+    return adjusted
+
+
+def _apply_data_shocks(
+    day_complete: np.ndarray,
+    site_shocks: list[ShockEvent],
+) -> np.ndarray:
+    adjusted = day_complete.copy()
+    for shock in site_shocks:
+        if shock.category != "data":
+            continue
+        adjusted[shock.start_day_index : shock.end_day_index] = False
+    return adjusted
+
+
+def _day_complete_matrix(
+    date_count: int,
+    rng: np.random.Generator,
+    site_shocks: list[ShockEvent],
+    allow_data_gaps: bool,
+) -> np.ndarray:
+    if not allow_data_gaps:
+        return np.ones(date_count, dtype=bool)
+    return _apply_data_shocks(day_complete_mask(date_count, rng), site_shocks)
 
 
 def _oracle_frame(

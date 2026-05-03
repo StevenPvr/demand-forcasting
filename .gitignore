@@ -10,6 +10,7 @@ __pycache__/
 .ruff_cache/
 .tmp/
 .coverage
+.env
 .python-version
 .vscode/
 *.egg-info/

@@ -8,6 +8,12 @@ import pandas as pd
 
 from praedixa.demand_forecast.evaluation.bakery_baselines import FIELD_BASELINE_NAME
 from praedixa.demand_forecast.evaluation.bakery_metrics import REFERENCE_PRODUCT_COL
+from praedixa.demand_forecast.evaluation.bakery_substitution import (
+    DEFAULT_SUBSTITUTION_RECOVERY_RATE,
+    SUBSTITUTION_RECOVERY_RATE_BY_FAMILY,
+    substitution_family,
+    substitution_recovery_rate,
+)
 
 
 DEFAULT_UNIT_SALE_PRICE_EUR = 1.0
@@ -58,6 +64,9 @@ def build_simple_economic_gain_payload(
         "product_count": int(len(per_product_gain)),
         "default_unit_sale_price_eur": float(DEFAULT_UNIT_SALE_PRICE_EUR),
         "production_cost_ratio": float(production_cost_ratio),
+        "underproduction_loss_model": "gross_margin_after_product_family_substitution",
+        "default_substitution_recovery_rate": float(DEFAULT_SUBSTITUTION_RECOVERY_RATE),
+        "substitution_recovery_rate_by_family": dict(SUBSTITUTION_RECOVERY_RATE_BY_FAMILY),
         "field_baseline_name": FIELD_BASELINE_NAME,
         "per_product_gain": per_product_gain,
         **_economic_gain_totals(per_product_gain),
@@ -116,6 +125,9 @@ def _empty_economic_gain_payload(
         "product_count": 0,
         "default_unit_sale_price_eur": float(DEFAULT_UNIT_SALE_PRICE_EUR),
         "production_cost_ratio": float(production_cost_ratio),
+        "underproduction_loss_model": "gross_margin_after_product_family_substitution",
+        "default_substitution_recovery_rate": float(DEFAULT_SUBSTITUTION_RECOVERY_RATE),
+        "substitution_recovery_rate_by_family": dict(SUBSTITUTION_RECOVERY_RATE_BY_FAMILY),
         "field_baseline_name": FIELD_BASELINE_NAME,
         "per_product_gain": {},
         "total_model_loss_eur": 0.0,
@@ -372,6 +384,19 @@ def _apply_loss_model(
     priced_df["unit_production_cost_eur"] = (
         priced_df["unit_sale_price_eur"].astype(float) * float(production_cost_ratio)
     )
+    priced_df["unit_margin_eur"] = (
+        priced_df["unit_sale_price_eur"].astype(float)
+        - priced_df["unit_production_cost_eur"].astype(float)
+    ).clip(lower=0.0)
+    priced_df["substitution_family"] = [
+        substitution_family(str(product_name))
+        for product_name in priced_df[REFERENCE_PRODUCT_COL].astype(str)
+    ]
+    priced_df["substitution_recovery_rate"] = [
+        substitution_recovery_rate(str(product_name))
+        for product_name in priced_df[REFERENCE_PRODUCT_COL].astype(str)
+    ]
+    priced_df["net_lost_sale_rate"] = 1.0 - priced_df["substitution_recovery_rate"].astype(float)
     for prefix in ("model", "baseline"):
         predicted_units = priced_df[f"{prefix}_prediction_units"].astype(int)
         actual_units = priced_df["actual_units"].astype(int)
@@ -383,7 +408,8 @@ def _apply_loss_model(
         )
         priced_df[f"{prefix}_underproduction_loss_eur"] = (
             priced_df[f"{prefix}_underproduction_units"].astype(float)
-            * priced_df["unit_sale_price_eur"].astype(float)
+            * priced_df["unit_margin_eur"].astype(float)
+            * priced_df["net_lost_sale_rate"].astype(float)
         )
         priced_df[f"{prefix}_total_loss_eur"] = (
             priced_df[f"{prefix}_overproduction_loss_eur"].astype(float)
@@ -400,6 +426,10 @@ def _product_gain_payload(
     best_baseline_name = str(product_df["baseline_name"].iloc[0])
     unit_sale_price = float(product_df["unit_sale_price_eur"].astype(float).iloc[0])
     unit_production_cost = float(product_df["unit_production_cost_eur"].astype(float).iloc[0])
+    unit_margin = float(product_df["unit_margin_eur"].astype(float).iloc[0])
+    substitution_family = str(product_df["substitution_family"].iloc[0])
+    substitution_recovery_rate = float(product_df["substitution_recovery_rate"].astype(float).iloc[0])
+    net_lost_sale_rate = float(product_df["net_lost_sale_rate"].astype(float).iloc[0])
     model_mae = float(product_metrics["mae"])
     baseline_mae = float(product_df["best_baseline_mae"].astype(float).iloc[0])
     model_total_loss = float(product_df["model_total_loss_eur"].astype(float).sum())
@@ -416,10 +446,18 @@ def _product_gain_payload(
         "test_day_count": int(product_metrics["test_rows"]),
         "unit_sale_price_eur": unit_sale_price,
         "unit_production_cost_eur": unit_production_cost,
+        "unit_margin_eur": unit_margin,
+        "substitution_family": substitution_family,
+        "substitution_recovery_rate": substitution_recovery_rate,
+        "net_lost_sale_rate": net_lost_sale_rate,
         "model_overproduction_units": float(product_df["model_overproduction_units"].astype(float).sum()),
         "model_underproduction_units": float(product_df["model_underproduction_units"].astype(float).sum()),
         "baseline_overproduction_units": float(product_df["baseline_overproduction_units"].astype(float).sum()),
         "baseline_underproduction_units": float(product_df["baseline_underproduction_units"].astype(float).sum()),
+        "model_overproduction_loss_eur": float(product_df["model_overproduction_loss_eur"].astype(float).sum()),
+        "model_underproduction_loss_eur": float(product_df["model_underproduction_loss_eur"].astype(float).sum()),
+        "baseline_overproduction_loss_eur": float(product_df["baseline_overproduction_loss_eur"].astype(float).sum()),
+        "baseline_underproduction_loss_eur": float(product_df["baseline_underproduction_loss_eur"].astype(float).sum()),
         "model_total_loss_eur": model_total_loss,
         "baseline_total_loss_eur": baseline_total_loss,
         "estimated_realistic_savings_eur_vs_best_baseline": estimated_savings_eur,

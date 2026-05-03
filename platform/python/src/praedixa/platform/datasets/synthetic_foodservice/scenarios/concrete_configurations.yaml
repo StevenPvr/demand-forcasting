@@ -1,0 +1,91 @@
+# Three fully-detailed reference configurations (from simulator spec).
+schema_version: "1.0.0"
+configurations:
+  - id: cfg_bakery_small_town_001
+    label: "Petite boulangerie, petite ville"
+    global:
+      simulation_horizon_months: [3, 12]
+      country: FR
+      vacation_zone: C
+    sites:
+      count: 1
+      business_type: bakery
+      activity_size: small
+      city_type: small_town
+      location_type: residential
+      positioning: [takeaway, partial_week]
+      delivery_share_target: [0.05, 0.10]
+      seating_capacity: [0, 12]
+    demand:
+      tickets_per_day: [80, 180]
+      negative_binomial_phi: 0.18
+      rare_sku_zip_pi: [0.35, 0.65]
+      intraday:
+        morning_cumulative_share_by_9h: 0.45
+        lunch_sandwich_peak: true
+        afternoon_snack_moderate: true
+    catalog:
+      sku_count: [40, 80]
+      seasonal_galette_buche_windows: true
+    operations:
+      weekly_closure_days: 1
+      vacation_closures: sporadic
+      waste_pct_production_evening_categories: [0.08, 0.15]
+      end_of_day_stockout_risk: high
+      promotions_anti_waste_per_week: [2, 3]
+    weather:
+      sensitivity_level: 2
+      rain_effect: increase_classic_bread_salt_savory_profile
+    data_quality_level: medium_low
+    export_defect_budget_pct: [5, 10]
+
+  - id: cfg_fast_food_medium_city_001
+    label: "Fast-food moyen, ville moyenne"
+    global:
+      country: FR
+      simulation_horizon_months: [6, 24]
+    sites:
+      count: [1, 3]
+      business_type: fast_food
+      activity_size: medium
+      city_type: medium_city
+      location_type: transit
+      channels: [on_site, takeaway, uber_eats, deliveroo]
+      delivery_share_target: [0.25, 0.40]
+    demand:
+      tickets_per_day: [250, 700]
+      menus_and_bundles: true
+      intraday: dual_peak
+    competition:
+      negative_shocks_per_year: [3, 8]
+      shock_impact_on_lambda: [-0.15, -0.05]
+    operations:
+      kitchen_saturation_peak_fraction_of_days: [0.05, 0.10]
+      delivery_cancellation_rate: [0.02, 0.06]
+      sport_event_days_fraction: [0.10, 0.15]
+      stockouts_per_week: [5, 15]
+    data_quality_level: medium
+
+  - id: cfg_metro_qsr_network_001
+    label: "Gros fast-food / QSR grande ville multi-sites"
+    global:
+      country: FR
+      simulation_horizon_months: [12, 60]
+    sites:
+      count: [5, 20]
+      business_type: fast_food
+      activity_size: large
+      city_type: large_city
+      location_type: hypercenter
+      delivery_share_target: [0.35, 0.55]
+      late_night_extension: true
+    demand:
+      tickets_per_day_per_site: [800, 2500]
+      volatility: high
+    operations:
+      frequent_platform_promos: true
+      bestseller_stockouts: recurrent
+      catalog_churn_per_month: [3, 12]
+      event_density: high
+    data_quality_level: medium_low
+    notes: "High absolute POS defect counts despite enterprise stack (integration noise)."

@@ -29,7 +29,7 @@ group by 1, 2
 order by 1, 2;
 
 -- Contrat attendu:
--- freshretail / freshretail_lt: train + val uniquement, split chronologique 60/40.
+-- sources d'entraînement autorisées: train + val uniquement, split chronologique 60/40.
 -- bakery: test uniquement, fenêtre des 3 derniers mois.
 -- Dans le bundle, gold.val devient tuning.parquet et gold.test devient valid.parquet.
 

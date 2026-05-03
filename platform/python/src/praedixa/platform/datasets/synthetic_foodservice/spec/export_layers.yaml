@@ -1,0 +1,126 @@
+# Export layer corruption: three logical bundles and rates by data_quality_level.
+# Rates are **targets** for the export_corrupt module; MCAR/MAR split guides implementation.
+#
+# Layers:
+# - internal_clean: latent_demand_internal + theoretical stocks + exact timestamps (audit).
+# - ops_realistic: movements, snapshots with count noise, ruptures partially visible.
+# - pos_synth_export: customer-facing "what we got from the client" — duplicates, holes, ID drift.
+
+schema_version: "1.0.0"
+
+layers:
+  internal_clean:
+    description: "Ground truth for simulator QA; no intentional POS defects; S latente only in separate bundle."
+    includes_tables:
+      - sales_tickets
+      - sales_lines
+      - sites
+      - products
+      - product_categories
+      - prices
+      - promotions
+      - opening_hours
+      - closures
+      - weather
+      - local_events
+      - holidays
+      - inventory_movements
+      - stock_snapshots
+      - stockouts
+      - production_batches
+      - waste
+      - staff_schedules
+      - latent_demand_internal
+      - simulation_parameters
+      - locations
+    corruption: none
+
+  ops_realistic:
+    description: "Back-office plausible: inventory drift, some missing promos, stockouts sometimes undetected."
+    includes_tables:
+      - internal_clean  # same set minus latent strip optional
+    corruption: light
+
+  pos_synth_export:
+    description: "Messy export: timezone mistakes, partial days, promotion_id sparse, ticket-line total mismatch allowed with correction_flag."
+    includes_tables:
+      - sales_tickets
+      - sales_lines
+      - products
+      - prices
+      - promotions
+      - stock_snapshots
+      - inventory_movements
+    corruption: configurable_by_site_quality
+
+# Maps sites.data_quality_level -> baseline defect rates (annualized probability per row unless noted).
+# MCAR: missing independent of value; MAR: missing depends on observables (quality_level, weekend, low_volume_sku).
+quality_profiles:
+  high:
+    missing_rate_cell:
+      mcar: 0.001
+      mar_weight: 0.002
+    duplicate_ticket_rate: 0.0002
+    timestamp_error_rate: 0.002
+    price_inconsistency_rate: 0.001
+    promotion_tag_missing_rate: 0.02
+    id_churn_cross_file_mismatch_rate: 0.01
+    partial_export_day_rate: 0.005
+    cancelled_ticket_lines_remain_rate: 0.005
+    line_total_mismatch_rate: 0.003
+    notes: "Enterprise POS + good integration; residual errors from human cashier."
+
+  medium:
+    missing_rate_cell:
+      mcar: 0.008
+      mar_weight: 0.012
+    duplicate_ticket_rate: 0.002
+    timestamp_error_rate: 0.015
+    price_inconsistency_rate: 0.008
+    promotion_tag_missing_rate: 0.08
+    id_churn_cross_file_mismatch_rate: 0.04
+    partial_export_day_rate: 0.02
+    cancelled_ticket_lines_remain_rate: 0.02
+    line_total_mismatch_rate: 0.015
+    notes: "Mid-market: weekly exports, some manual promos."
+
+  medium_low:
+    missing_rate_cell:
+      mcar: 0.02
+      mar_weight: 0.05
+    duplicate_ticket_rate: 0.006
+    timestamp_error_rate: 0.04
+    price_inconsistency_rate: 0.02
+    promotion_tag_missing_rate: 0.15
+    id_churn_cross_file_mismatch_rate: 0.12
+    partial_export_day_rate: 0.06
+    cancelled_ticket_lines_remain_rate: 0.05
+    line_total_mismatch_rate: 0.04
+    notes: "Small indé; Excel bridges; DST issues."
+
+  low:
+    missing_rate_cell:
+      mcar: 0.06
+      mar_weight: 0.12
+    duplicate_ticket_rate: 0.02
+    timestamp_error_rate: 0.12
+    price_inconsistency_rate: 0.08
+    promotion_tag_missing_rate: 0.35
+    id_churn_cross_file_mismatch_rate: 0.25
+    partial_export_day_rate: 0.18
+    cancelled_ticket_lines_remain_rate: 0.12
+    line_total_mismatch_rate: 0.12
+    notes: "Legacy POS, manual tickets, failed migrations."
+
+# MAR conditioning hooks (implementations should use these masks).
+mar_hooks:
+  weather_missing:
+    elevates_when:
+      - site.data_quality_level in [ medium_low, low ]
+      - site.city_type in [ village, small_town ]
+  promotion_missing:
+    elevates_when:
+      - promotion.planned_flag and not promotion.actually_applied_flag
+  export_gap_on_closure:
+    elevates_when:
+      - closure.visible_in_source_data_flag is false

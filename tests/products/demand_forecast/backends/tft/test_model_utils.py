@@ -38,6 +38,29 @@ from praedixa.demand_forecast.backends.tft.frame_utils import (  # noqa: E402
 import praedixa.demand_forecast.backends.tft.model_fit as model_fit_module  # noqa: E402
 
 
+def _with_suffixed_tft_features(frame: pd.DataFrame) -> pd.DataFrame:
+    suffixed = frame.copy()
+    suffix_pairs = {
+        "location_id": "location_id_static_cat",
+        "product_id": "product_id_static_cat",
+        "target_day_of_week": "target_day_of_week_known_cat",
+        "target_holiday_flag": "target_holiday_flag_known_cat",
+        "current_day_demand_qty": "current_day_demand_qty_known_real",
+        "rolling_mean_7": "rolling_mean_7_known_real",
+        "data_quality_pricing_promo_missing_count": (
+            "data_quality_pricing_promo_missing_count_known_real"
+        ),
+        "data_quality_history_unavailable_count": (
+            "data_quality_history_unavailable_count_known_real"
+        ),
+        "lag_1": "lag_1_unknown_real",
+    }
+    for source, target in suffix_pairs.items():
+        if source in suffixed.columns:
+            suffixed[target] = suffixed[source]
+    return suffixed
+
+
 class TFTModelUtilsTests(unittest.TestCase):
     def test_default_tft_model_params_enable_native_progress_bar(self) -> None:
         self.assertTrue(bool(DEFAULT_TFT_MODEL_PARAMS["enable_progress_bar"]))
@@ -249,6 +272,7 @@ class TFTModelUtilsTests(unittest.TestCase):
         frame = (
             pd.DataFrame(rows).sort_values(["client_id", "dt"]).reset_index(drop=True)
         )
+        frame = _with_suffixed_tft_features(frame)
         train_frame = frame[frame["dt"] < "2024-01-25"].copy().reset_index(drop=True)
         valid_frame = frame[frame["dt"] >= "2024-01-25"].copy().reset_index(drop=True)
         return train_frame, valid_frame
@@ -265,10 +289,19 @@ class TFTModelUtilsTests(unittest.TestCase):
                 "lag_1": [10.0, 11.0, 12.0],
             }
         )
+        frame = _with_suffixed_tft_features(frame)
 
         feature_cols = select_tft_feature_columns(frame, excluded_cols={"dt", "target"})
 
-        self.assertEqual(feature_cols, ["location_id", "product_id", "rolling_mean_7"])
+        self.assertEqual(
+            feature_cols,
+            [
+                "location_id_static_cat",
+                "product_id_static_cat",
+                "rolling_mean_7_known_real",
+                "lag_1_unknown_real",
+            ],
+        )
 
     def test_select_tft_feature_columns_rejects_unmapped_columns(self) -> None:
         frame = pd.DataFrame(
@@ -443,9 +476,9 @@ class TFTModelUtilsTests(unittest.TestCase):
 
         scalers = model.dataset_parameters.get("scalers", {})
 
-        self.assertIn("rolling_mean_7", scalers)
-        self.assertIn("current_day_demand_qty", scalers)
-        self.assertNotIn("location_id", scalers)
+        self.assertIn("rolling_mean_7_known_real", scalers)
+        self.assertIn("current_day_demand_qty_known_real", scalers)
+        self.assertNotIn("location_id_static_cat", scalers)
         self.assertIsNone(model.target_scaler)
         self.assertEqual(
             getattr(model.dataset_parameters.get("target_normalizer"), "method", None),
@@ -458,7 +491,7 @@ class TFTModelUtilsTests(unittest.TestCase):
     def test_fit_tft_model_handles_unknown_validation_categories(self) -> None:
         train_frame, valid_frame = self._build_training_frame()
         valid_frame = valid_frame.copy()
-        valid_frame.loc[valid_frame.index[0], "location_id"] = "store_99"
+        valid_frame.loc[valid_frame.index[0], "location_id_static_cat"] = "store_99"
         feature_cols = select_tft_feature_columns(
             train_frame, excluded_cols={"dt", "target"}
         )
@@ -539,26 +572,28 @@ class TFTModelUtilsTests(unittest.TestCase):
                 "lag_1": [1.0, 1.0, 2.0, 3.0],
             }
         )
+        frame = _with_suffixed_tft_features(frame)
         feature_cols = select_tft_feature_columns(frame, excluded_cols={"dt", "target"})
 
         prepared = attach_group_and_time_columns(frame, feature_cols)
         layout = resolve_layout(prepared, feature_cols)
 
         self.assertIn(
-            "data_quality_pricing_promo_missing_count",
+            "data_quality_pricing_promo_missing_count_known_real",
             layout["time_varying_known_reals"],
         )
         self.assertIn(
-            "data_quality_history_unavailable_count",
+            "data_quality_history_unavailable_count_known_real",
             layout["time_varying_known_reals"],
         )
         self.assertNotIn(
-            "data_quality_pricing_promo_missing_count",
+            "data_quality_pricing_promo_missing_count_known_real",
             layout["time_varying_known_categoricals"],
         )
         self.assertNotIn("lag_1", feature_cols)
+        self.assertIn("lag_1_unknown_real", feature_cols)
         self.assertEqual(layout["time_varying_unknown_categoricals"], [])
-        self.assertEqual(layout["time_varying_unknown_reals"], [])
+        self.assertEqual(layout["time_varying_unknown_reals"], ["lag_1_unknown_real"])
 
     def test_precomputed_time_idx_is_rebased_after_slicing_gaps(self) -> None:
         frame = pd.DataFrame(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import sys
+import warnings
 
 
 def _bootstrap_import_paths() -> None:
@@ -30,6 +31,15 @@ def _bootstrap_import_paths() -> None:
 _bootstrap_import_paths()
 
 
+def _configure_runtime_warnings() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message="The given NumPy array is not writable.*",
+        category=UserWarning,
+        module="chronos.chronos2.dataset",
+    )
+
+
 def main() -> None:
     from praedixa.demand_forecast.backends.chronos2.backend import (
         Chronos2BackendNotReadyError,
@@ -43,6 +53,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    _configure_runtime_warnings()
     try:
         build_evaluation_outputs(
             EvaluationBuildRequest(

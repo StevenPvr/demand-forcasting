@@ -88,13 +88,6 @@ class FetchOpenExogenousTests(unittest.TestCase):
                     "min_dt": "2024-03-28",
                     "max_dt": "2024-04-02",
                 },
-                {
-                    "dataset_source": "freshretail_lt",
-                    "location_id": "84",
-                    "region_code": None,
-                    "min_dt": "2024-02-10",
-                    "max_dt": "2024-02-14",
-                },
             ]
         )
 
@@ -120,7 +113,7 @@ class FetchOpenExogenousTests(unittest.TestCase):
 
         self.assertEqual(
             sorted(metadata["dataset_source"].tolist()),
-            ["bakery", "freshretail", "freshretail_lt"],
+            ["bakery"],
         )
 
         bakery_row = metadata.loc[metadata["dataset_source"].eq("bakery")].iloc[0]
@@ -129,23 +122,6 @@ class FetchOpenExogenousTests(unittest.TestCase):
         self.assertAlmostEqual(float(bakery_row["latitude"]), DEFAULT_BAKERY_LATITUDE)
         self.assertNotIn("site_format", metadata.columns)
         self.assertNotIn("service_model", metadata.columns)
-
-        freshretail_row = metadata.loc[
-            metadata["dataset_source"].eq("freshretail")
-        ].iloc[0]
-        self.assertEqual(freshretail_row["country_code"], "CN")
-        self.assertTrue(pd.isna(freshretail_row["latitude"]))
-        self.assertEqual(
-            freshretail_row["assumption_source"],
-            "freshretail_city_id_without_public_geocoding",
-        )
-
-        freshretail_lt_row = metadata.loc[
-            metadata["dataset_source"].eq("freshretail_lt")
-        ].iloc[0]
-        self.assertEqual(freshretail_lt_row["country_code"], "CN")
-        self.assertTrue(bool(freshretail_lt_row["delivery_flag"]))
-        self.assertTrue(bool(freshretail_lt_row["pickup_flag"]))
 
     def test_build_location_metadata_frame_returns_empty_contract_for_empty_input(
         self,
@@ -204,7 +180,6 @@ class FetchOpenExogenousTests(unittest.TestCase):
         )
 
         self.assertEqual(bounds["FR"], ("2023-11-30", "2024-01-03"))
-        self.assertEqual(bounds["CN"], ("2024-01-11", "2024-04-03"))
 
     def test_parse_school_holiday_ics_expands_each_event_into_daily_rows(self) -> None:
         frame = parse_school_holiday_ics(

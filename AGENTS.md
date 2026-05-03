@@ -34,7 +34,7 @@ sample = data.sample(frac=0.05)  # non reproductible
 
 **Versioning des donnees** -- Nommer les fichiers avec une convention lisible (`commercial_external_daily.parquet`, `train_selection_70_selected.parquet`, etc.). Ajouter un hash SHA-256 ou `manifest.json` pour detecter les corruptions. Ne jamais committer les donnees volumineuses dans git (utiliser DVC ou stockage externe).
 
-**Environnements** -- Verrouiller les dependances avec `uv.lock` (fait). Travailler dans `.venv/bin/python`. Epingler Python dans `.python-version` (fait : `3.13`).
+**Environnements** -- Verrouiller les dependances avec `uv.lock` (fait). Travailler dans `.venv/bin/python`. Epingler Python dans `.python-version` (fait : `3.12`).
 
 ### 1.1.b Reproductibilite Deep Learning
 

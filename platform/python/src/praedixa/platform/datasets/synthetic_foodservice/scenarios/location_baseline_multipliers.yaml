@@ -1,0 +1,26 @@
+# Multipliers on baseline lambda for lunch weekday (reference = 1.0).
+# Apply as product with other seasonality layers; calibrate per scenario.
+schema_version: "1.0.0"
+city_type:
+  village: 0.75
+  small_town: 0.85
+  medium_city: 1.0
+  large_city: 1.25
+  hypercenter: 1.35
+  suburb: 0.95
+location_type:
+  office_district: 1.35
+  residential: 0.85
+  student_zone: 1.1
+  touristic: 1.05
+  mall_shopping_center: 1.15
+  train_station: 1.2
+  airport: 1.05
+  industrial: 0.65
+  transit: 1.1
+  premium_quarter: 1.05
+  popular_quarter: 1.0
+delivery_share_when_rain_lift:
+  office_district: 0.08
+  residential: 0.03
+  touristic: 0.02

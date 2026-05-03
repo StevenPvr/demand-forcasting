@@ -28,11 +28,15 @@ for path in reversed(SEARCH_PATHS):
 
 
 def main() -> None:
-    from praedixa.demand_forecast.training.chronos2.main import (
-        main as chronos2_finetune_training_main,
+    from praedixa.demand_forecast.feature_selection.main import (
+        main as feature_selection_main,
     )
 
-    chronos2_finetune_training_main()
+    feature_selection_main()
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":

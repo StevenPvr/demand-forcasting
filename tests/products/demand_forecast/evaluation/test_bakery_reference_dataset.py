@@ -7,7 +7,11 @@ import unittest
 import pandas as pd
 
 
-PROJECT_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "AGENTS.md").exists())
+PROJECT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "AGENTS.md").exists()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 PLATFORM_SRC = PROJECT_ROOT / "platform" / "python" / "src"
@@ -22,7 +26,9 @@ from praedixa.demand_forecast.evaluation.bakery_reference_dataset import (  # no
 
 
 class BakeryReferenceDatasetTests(unittest.TestCase):
-    def test_build_reference_splits_matches_dense_filter_and_chronological_split(self) -> None:
+    def test_build_reference_splits_matches_dense_filter_and_chronological_split(
+        self,
+    ) -> None:
         source_frame = pd.DataFrame(
             {
                 "date": pd.to_datetime(
@@ -61,15 +67,31 @@ class BakeryReferenceDatasetTests(unittest.TestCase):
         self.assertEqual(len(bundle.val_df), 1)
         self.assertEqual(len(bundle.test_df), 2)
         self.assertEqual(bundle.train_df["product"].unique().tolist(), ["A"])
-        self.assertEqual(bundle.train_df["date"].min().strftime("%Y-%m-%d"), "2024-01-01")
-        self.assertEqual(bundle.train_df["date"].max().strftime("%Y-%m-%d"), "2024-01-07")
-        self.assertEqual(bundle.val_df["date"].tolist()[0].strftime("%Y-%m-%d"), "2024-01-08")
         self.assertEqual(
-            [timestamp.strftime("%Y-%m-%d") for timestamp in bundle.test_df["date"].tolist()],
+            bundle.train_df["date"].min().strftime("%Y-%m-%d"), "2024-01-01"
+        )
+        self.assertEqual(
+            bundle.train_df["date"].max().strftime("%Y-%m-%d"), "2024-01-07"
+        )
+        self.assertEqual(
+            bundle.val_df["date"].tolist()[0].strftime("%Y-%m-%d"), "2024-01-08"
+        )
+        self.assertEqual(
+            [
+                timestamp.strftime("%Y-%m-%d")
+                for timestamp in bundle.test_df["date"].tolist()
+            ],
             ["2024-01-09", "2024-01-10"],
         )
-        missing_day = bundle.train_df.loc[bundle.train_df["date"] == pd.Timestamp("2024-01-05"), "is_missing_day"]
+        missing_day = bundle.train_df.loc[
+            bundle.train_df["date"] == pd.Timestamp("2024-01-05"), "is_missing_day"
+        ]
         self.assertEqual(missing_day.tolist(), [1])
+        observed_day = bundle.train_df.loc[
+            bundle.train_df["date"] == pd.Timestamp("2024-01-05"),
+            "is_observed_row",
+        ]
+        self.assertEqual(observed_day.tolist(), [0])
 
 
 if __name__ == "__main__":

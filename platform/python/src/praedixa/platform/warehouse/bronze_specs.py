@@ -193,43 +193,6 @@ def _open_macro_timeseries_ddl(schema_name: str) -> str:
     """
 
 
-def _freshretail_hour_column_defs(prefix: str, sql_type: str) -> str:
-    return ",\n".join(f"        {prefix}_{hour:02d} {sql_type}" for hour in range(24))
-
-
-def _freshretail_ddl(schema_name: str) -> str:
-    hour_sale_columns = _freshretail_hour_column_defs("hours_sale", "DOUBLE")
-    hour_stock_columns = _freshretail_hour_column_defs("hours_stock_status", "SMALLINT")
-    return f"""
-    CREATE SCHEMA IF NOT EXISTS {schema_name};
-    CREATE TABLE IF NOT EXISTS {schema_name}.bronze_freshretail_daily (
-        source_partition VARCHAR,
-        city_id INTEGER,
-        store_id INTEGER,
-        management_group_id INTEGER,
-        first_category_id INTEGER,
-        second_category_id INTEGER,
-        third_category_id INTEGER,
-        product_id INTEGER,
-        dt DATE,
-        sale_amount DOUBLE,
-        stock_hour6_22_cnt SMALLINT,
-        discount DOUBLE,
-        holiday_flag BOOLEAN,
-        activity_flag BOOLEAN,
-        precpt DOUBLE,
-        avg_temperature DOUBLE,
-        avg_humidity DOUBLE,
-        avg_wind_level DOUBLE,
-        is_censored BOOLEAN,
-{hour_sale_columns},
-{hour_stock_columns},
-        source_name VARCHAR,
-        source_policy_id VARCHAR,
-        source_file_path VARCHAR,
-        loaded_at TIMESTAMP
-    );
-    """
 
 
 def _supplemental_corpus_daily_ddl(schema_name: str) -> str:
@@ -320,28 +283,6 @@ def _bakery_ddl(schema_name: str) -> str:
     """
 
 
-def _freshretail_expected_columns() -> tuple[str, ...]:
-    return (
-        "source_partition",
-        "city_id",
-        "store_id",
-        "management_group_id",
-        "first_category_id",
-        "second_category_id",
-        "third_category_id",
-        "product_id",
-        "dt",
-        "sale_amount",
-        "stock_hour6_22_cnt",
-        "discount",
-        "holiday_flag",
-        "activity_flag",
-        "precpt",
-        "avg_temperature",
-        "avg_humidity",
-        "avg_wind_level",
-        "is_censored",
-    )
 
 
 def _bakery_expected_columns() -> tuple[str, ...]:
@@ -501,26 +442,10 @@ def default_core_bronze_specs(
     data_dir: str | Path,
     schema_name: str,
 ) -> list[BronzeTableSpec]:
-    """Return active FreshRetail-LT train sources and bakery evaluation source."""
+    """Return active bakery evaluation source."""
 
     root = Path(data_dir)
     return [
-        BronzeTableSpec(
-            table_name="bronze_freshretail_daily",
-            source_path=root / "bakery_sales" / "data_train.parquet",
-            ddl=_freshretail_ddl(schema_name),
-            source_name="freshretail_train",
-            expected_columns=_freshretail_expected_columns(),
-            source_policy_id="freshretail_lt",
-        ),
-        BronzeTableSpec(
-            table_name="bronze_freshretail_daily",
-            source_path=root / "bakery_sales" / "data_val.parquet",
-            ddl=_freshretail_ddl(schema_name),
-            source_name="freshretail_val",
-            expected_columns=_freshretail_expected_columns(),
-            source_policy_id="freshretail_lt",
-        ),
         BronzeTableSpec(
             table_name="bronze_bakery_order_lines",
             source_path=root / "bakery_sales" / "Bakery sales.csv",
@@ -528,6 +453,14 @@ def default_core_bronze_specs(
             source_name="bakery",
             expected_columns=_bakery_expected_columns(),
             source_policy_id="bakery",
+        ),
+        BronzeTableSpec(
+            table_name="bronze_synthetic_foodservice_daily",
+            source_path=root / "commercial_datasets" / "raw" / "synthetic_foodservice_daily.csv",
+            ddl=synthetic_foodservice_daily_ddl(schema_name),
+            source_name="synthetic_foodservice",
+            expected_columns=_synthetic_foodservice_expected_columns(),
+            source_policy_id="synthetic_foodservice",
         ),
     ]
 

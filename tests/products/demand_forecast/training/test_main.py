@@ -34,7 +34,9 @@ from praedixa.demand_forecast.training.config.main_config import (  # noqa: E402
 from praedixa.demand_forecast.backends.xgboost.runtime import (  # noqa: E402
     XGBoostRuntimeResolution,
 )
-from praedixa.platform.runtime.paths import TRAINING_BUNDLE_DIR  # noqa: E402
+from praedixa.demand_forecast.feature_selection.paths import (  # noqa: E402
+    DEFAULT_FEATURE_SELECTION_DIR,
+)
 
 
 def _write_bundle_fixture(
@@ -108,7 +110,7 @@ class OptimisationMainTests(unittest.TestCase):
         self.assertEqual(config.stage_budget, rebuilt.stage_budget)
         self.assertEqual(config.train_sample_fraction, rebuilt.train_sample_fraction)
         self.assertEqual(config.tuning_sample_fraction, rebuilt.tuning_sample_fraction)
-        self.assertEqual(config.bundle_dir, TRAINING_BUNDLE_DIR)
+        self.assertEqual(config.bundle_dir, DEFAULT_FEATURE_SELECTION_DIR)
 
     def test_default_xgboost_config_uses_cuda_profile_when_preflight_passes(
         self,

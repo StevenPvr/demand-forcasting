@@ -1,0 +1,104 @@
+# Default statistical knobs by business_type x activity_size (ordinal keys).
+# Ticket mean uses Negative Binomial or NHPP for finer grain; basket log-normal.
+schema_version: "1.0.0"
+profiles:
+  bakery:
+    tiny:
+      mean_tickets_daily: 28
+      overdispersion_phi: 0.25
+      mean_basket_eur_ttc: 7.5
+      lines_per_ticket_lambda: 2.2
+      intraday_profile: bakery_classic
+      waste_rate_vs_production: 0.12
+      end_of_day_stockout_risk: 0.35
+    small:
+      mean_tickets_daily: 130
+      overdispersion_phi: 0.18
+      mean_basket_eur_ttc: 9.0
+      lines_per_ticket_lambda: 2.8
+      intraday_profile: bakery_classic
+      waste_rate_vs_production: 0.1
+      end_of_day_stockout_risk: 0.28
+    medium:
+      mean_tickets_daily: 320
+      overdispersion_phi: 0.12
+      mean_basket_eur_ttc: 9.5
+      lines_per_ticket_lambda: 3.0
+      intraday_profile: bakery_classic
+      waste_rate_vs_production: 0.08
+      end_of_day_stockout_risk: 0.22
+  fast_food:
+    medium:
+      mean_tickets_daily: 450
+      overdispersion_phi: 0.15
+      mean_basket_eur_ttc: 12.0
+      lines_per_ticket_lambda: 3.8
+      intraday_profile: dual_peak_fs
+      delivery_share: 0.32
+      platform_cancel_rate: 0.04
+    large:
+      mean_tickets_daily: 1100
+      overdispersion_phi: 0.12
+      mean_basket_eur_ttc: 11.5
+      lines_per_ticket_lambda: 4.2
+      intraday_profile: dual_peak_fs
+      delivery_share: 0.42
+      platform_cancel_rate: 0.045
+    xlarge:
+      mean_tickets_daily: 2200
+      overdispersion_phi: 0.1
+      mean_basket_eur_ttc: 11.0
+      lines_per_ticket_lambda: 4.5
+      intraday_profile: dual_peak_fs_extended
+      delivery_share: 0.48
+      platform_cancel_rate: 0.05
+  traditional_restaurant:
+    medium:
+      mean_tickets_daily: 120
+      overdispersion_phi: 0.2
+      mean_basket_eur_ttc: 32.0
+      lines_per_ticket_lambda: 4.5
+      intraday_profile: lunch_dinner_gap
+      terrace_weather_elasticity: 0.15
+      reservation_no_show_rate: 0.06
+  brasserie:
+    medium:
+      mean_tickets_daily: 220
+      overdispersion_phi: 0.16
+      mean_basket_eur_ttc: 22.0
+      lines_per_ticket_lambda: 4.0
+      intraday_profile: long_day_apero
+      terrace_weather_elasticity: 0.12
+  coffee_shop:
+    medium:
+      mean_tickets_daily: 380
+      overdispersion_phi: 0.14
+      mean_basket_eur_ttc: 6.5
+      lines_per_ticket_lambda: 2.4
+      intraday_profile: morning_lunch_continuous
+      weekend_reversal: moderate
+  snack:
+    medium:
+      mean_tickets_daily: 280
+      overdispersion_phi: 0.2
+      mean_basket_eur_ttc: 9.0
+      lines_per_ticket_lambda: 3.2
+      intraday_profile: evening_student_peak
+      promo_lift_gamma: 1.35
+  dark_kitchen:
+    medium:
+      mean_tickets_daily: 350
+      overdispersion_phi: 0.18
+      mean_basket_eur_ttc: 13.0
+      lines_per_ticket_lambda: 3.5
+      intraday_profile: evening_platform_peak
+      on_site_share_cap: 0.02
+      platform_visibility_noise_sigma_weekly: 0.08
+  seasonal_tourist:
+    large:
+      mean_tickets_daily_high_season: 800
+      mean_tickets_daily_low_season: 90
+      overdispersion_phi: 0.22
+      mean_basket_eur_ttc: 24.0
+      annual_amplitude: 0.85
+      weather_coupling: strong

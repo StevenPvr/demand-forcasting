@@ -36,7 +36,7 @@ class SamplingQueriesTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "dataset_source": "freshretail_lt",
+                    "dataset_source": "synthetic_foodservice_qsr",
                     "split_bucket": "train",
                     "dt": date,
                     "location_id": "loc_a",
@@ -131,7 +131,7 @@ class SamplingQueriesTests(unittest.TestCase):
         frame = pd.DataFrame(
             [
                 {
-                    "dataset_source": "freshretail_lt",
+                    "dataset_source": "synthetic_foodservice_qsr",
                     "dt": date,
                     "location_id": "store_a",
                     "product_id": product_id,
@@ -212,10 +212,10 @@ class SamplingQueriesTests(unittest.TestCase):
             sample_store_col="location_id",
             sample_fraction=0.1,
             selected_columns=["dataset_source", "dt", "location_id", "client_id"],
-            included_dataset_sources=("freshretail_lt",),
+            included_dataset_sources=("synthetic_foodservice_qsr",),
         )
 
-        self.assertIn("dataset_source in ('freshretail_lt')", query)
+        self.assertIn("dataset_source in ('synthetic_foodservice_qsr')", query)
         self.assertIn("dataset_source not in ('bakery')", query)
 
     def test_gold_val_sampling_requires_training_eligible_rows(self) -> None:

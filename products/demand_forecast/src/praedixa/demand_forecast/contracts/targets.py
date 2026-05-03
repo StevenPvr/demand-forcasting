@@ -8,6 +8,10 @@ import pandas as pd
 
 DEFAULT_ABSOLUTE_TARGET_COL = "target_demand_qty_d_plus_1"
 DEFAULT_VARIATION_TARGET_COL = "target_delta_log_wow_d_plus_1"
+DEFAULT_FIELD_BASELINE_COL = "field_baseline_blend_lag_1_lag_7_d_plus_1"
+DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL = (
+    "target_residual_field_blend_lag_1_lag_7_d_plus_1"
+)
 DEFAULT_ABSOLUTE_TARGET_CANDIDATES = (
     DEFAULT_ABSOLUTE_TARGET_COL,
     "target",
@@ -22,6 +26,10 @@ DEFAULT_WOW_ANCHOR_CANDIDATES = (
 DEFAULT_WOW_MEAN_BASELINE_CANDIDATES = (
     "target_same_dow_mean_4w",
     "same_dow_mean_4w",
+)
+DEFAULT_FIELD_BASELINE_CANDIDATES = (
+    DEFAULT_FIELD_BASELINE_COL,
+    "field_baseline_prediction_d_plus_1",
 )
 
 
@@ -68,8 +76,16 @@ def _learning_target_column(
     requested_target_col: str,
     absolute_target_col: str,
 ) -> str:
-    if requested_target_col in train_frame.columns and requested_target_col in tuning_frame.columns:
+    if (
+        requested_target_col in train_frame.columns
+        and requested_target_col in tuning_frame.columns
+    ):
         return requested_target_col
+    if requested_target_col != absolute_target_col:
+        raise ValueError(
+            "Requested learning target is unavailable across evaluation frames: "
+            f"`{requested_target_col}`."
+        )
     return absolute_target_col
 
 
@@ -87,6 +103,11 @@ def resolve_target_contract(
         tuning_frame,
         DEFAULT_WOW_ANCHOR_CANDIDATES,
     )
+    field_baseline_col = _resolve_common_column(
+        train_frame,
+        tuning_frame,
+        DEFAULT_FIELD_BASELINE_CANDIDATES,
+    )
     learning_target_col = _learning_target_column(
         train_frame=train_frame,
         tuning_frame=tuning_frame,
@@ -102,6 +123,22 @@ def resolve_target_contract(
             absolute_target_col=absolute_target_col,
             target_mode="delta_log_wow",
             reconstruction_anchor_col=wow_anchor_col,
+        )
+    if learning_target_col == DEFAULT_VARIATION_TARGET_COL:
+        raise ValueError("WoW delta target requires a reconstruction anchor column.")
+    if (
+        learning_target_col == DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL
+        and field_baseline_col is not None
+    ):
+        return TargetContract(
+            learning_target_col=DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL,
+            absolute_target_col=absolute_target_col,
+            target_mode="additive_residual",
+            reconstruction_anchor_col=field_baseline_col,
+        )
+    if learning_target_col == DEFAULT_FIELD_BASELINE_RESIDUAL_TARGET_COL:
+        raise ValueError(
+            "Baseline residual target requires a field baseline reconstruction column."
         )
     return TargetContract(
         learning_target_col=absolute_target_col,
@@ -135,9 +172,21 @@ def reconstruct_absolute_predictions(
     if target_contract.target_mode == "delta_log_wow":
         anchor_col = target_contract.reconstruction_anchor_col
         if anchor_col is None or anchor_col not in frame.columns:
-            raise ValueError("WoW delta reconstruction requires an anchor column in the scoring frame.")
+            raise ValueError(
+                "WoW delta reconstruction requires an anchor column in the scoring frame."
+            )
         anchor = frame[anchor_col].to_numpy(dtype=float)
-        absolute_predictions = np.expm1(raw_predictions + np.log1p(np.clip(anchor, 0.0, None)))
+        absolute_predictions = np.expm1(
+            raw_predictions + np.log1p(np.clip(anchor, 0.0, None))
+        )
+    elif target_contract.target_mode == "additive_residual":
+        anchor_col = target_contract.reconstruction_anchor_col
+        if anchor_col is None or anchor_col not in frame.columns:
+            raise ValueError(
+                "Baseline residual reconstruction requires an anchor column in the scoring frame."
+            )
+        anchor = frame[anchor_col].to_numpy(dtype=float)
+        absolute_predictions = anchor + raw_predictions
     elif target_contract.target_mode == "log1p":
         absolute_predictions = np.expm1(raw_predictions)
     else:
@@ -145,7 +194,9 @@ def reconstruct_absolute_predictions(
     return np.asarray(np.clip(absolute_predictions, 0.0, None), dtype=float)
 
 
-def build_target_contract_metadata(target_contract: TargetContract) -> dict[str, str | None]:
+def build_target_contract_metadata(
+    target_contract: TargetContract,
+) -> dict[str, str | None]:
     """Serialize the target contract into JSON-friendly metadata fields."""
 
     return {

@@ -6,9 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
-import datasets
 from praedixa.platform.runtime.paths import SOURCES_DIR
 
 
@@ -17,7 +15,6 @@ DEFAULT_RAW_DIR = SOURCES_DIR / "commercial_datasets" / "raw"
 DEFAULT_DOWNLOAD_MANIFEST_PATH = (
     DEFAULT_RAW_DIR / "commercial_dataset_download_manifest.json"
 )
-DATASETS_API: Any = datasets
 
 
 @dataclass(frozen=True)
@@ -31,76 +28,15 @@ class DownloadPlanEntry:
     download_fn: Callable[[], Path]
 
 
-def _download_hugging_face_split(
-    *,
-    dataset_name: str,
-    split_name: str,
-    output_path: Path,
-    cache_dir: Path,
-) -> Path:
-    dataset_split = DATASETS_API.load_dataset(
-        dataset_name, split=split_name, cache_dir=str(cache_dir)
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    dataset_split.to_parquet(str(output_path))
-    logger.info(
-        "Downloaded Hugging Face split %s/%s to %s",
-        dataset_name,
-        split_name,
-        output_path,
-    )
-    return output_path
-
-
-def _plan_entry(
-    *,
-    name: str,
-    target_path: Path,
-    source_url: str,
-    license_type: str,
-    download_fn: Callable[[], Path],
-) -> DownloadPlanEntry:
-    return DownloadPlanEntry(
-        name=name,
-        target_path=target_path,
-        source_url=source_url,
-        license_type=license_type,
-        download_fn=download_fn,
-    )
-
-
-def _hugging_face_plan_entries(
-    root: Path, hf_cache_dir: Path
-) -> list[DownloadPlanEntry]:
-    dataset_name = "Dingdong-Inc/FreshRetailNet-LT"
-    split_specs = [
-        ("freshretail_lt_train", "train"),
-        ("freshretail_lt_eval", "eval"),
-    ]
-    entries: list[DownloadPlanEntry] = []
-    for artifact_name, split_name in split_specs:
-        target_path = root / f"{artifact_name}.parquet"
-        entries.append(
-            _plan_entry(
-                name=artifact_name,
-                target_path=target_path,
-                source_url="https://huggingface.co/datasets/Dingdong-Inc/FreshRetailNet-LT",
-                license_type="CC BY 4.0",
-                download_fn=lambda split_name=split_name, target_path=target_path: (
-                    _download_hugging_face_split(
-                        dataset_name=dataset_name,
-                        split_name=split_name,
-                        output_path=target_path,
-                        cache_dir=hf_cache_dir,
-                    )
-                ),
-            )
-        )
-    return entries
-
-
 def _download_plan(root: Path, hf_cache_dir: Path) -> list[DownloadPlanEntry]:
-    return _hugging_face_plan_entries(root, hf_cache_dir)
+    """Return approved automatic downloads.
+
+    The active corpus no longer includes FreshRetail-LT or other automatic
+    commercial downloads. M5 is expected as a governed local/Zenodo artifact.
+    """
+
+    _ = (root, hf_cache_dir)
+    return []
 
 
 def _manifest_row(entry: DownloadPlanEntry, output_path: Path) -> dict[str, object]:
@@ -134,7 +70,7 @@ def _write_download_manifest(
 def download_commercial_datasets(
     raw_dir: str | Path = DEFAULT_RAW_DIR,
 ) -> dict[str, str]:
-    """Download approved commercial-training artifacts from their source-of-truth hosts."""
+    """Download approved commercial-training artifacts from their source hosts."""
 
     root = Path(raw_dir)
     hf_cache_dir = root / ".hf_cache"

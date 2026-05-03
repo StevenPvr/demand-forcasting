@@ -10,6 +10,10 @@ import pandas as pd
 import polars as pl
 
 from praedixa.platform.utils.memory import downcast_pandas_frame
+from praedixa.demand_forecast.training.shared.economic_objective import (
+    decision_scores_by_group,
+    score_segmented_asymmetric_forecast_decision,
+)
 
 
 REFERENCE_DATE_COL = "date"
@@ -230,7 +234,46 @@ def compute_metrics_payload(
         "overall_metrics": overall_metrics,
         "per_product_metrics": per_product_metrics,
         "segment_metrics": _segment_metrics_payload(predictions_df),
+        "economic_decision_metrics": _economic_decision_metrics_payload(
+            predictions_df
+        ),
     }
+
+
+def _economic_decision_metrics_payload(predictions_df: pd.DataFrame) -> dict[str, object]:
+    actual = predictions_df["actual"].astype(float)
+    predicted = predictions_df["prediction_raw"].astype(float)
+    overall = score_segmented_asymmetric_forecast_decision(
+        actual,
+        predicted,
+        frame=predictions_df,
+    )
+    return {
+        "overall": _compact_economic_decision_score(overall),
+        "by_family": overall["segment_decision_loss"],
+        "by_product": decision_scores_by_group(
+            predictions_df,
+            actual,
+            predicted,
+            group_col="product",
+        ),
+    }
+
+
+def _compact_economic_decision_score(score: dict[str, object]) -> dict[str, float]:
+    keys = (
+        "economic_loss",
+        "normalized_economic_loss",
+        "overproduction_units",
+        "mild_underproduction_units",
+        "severe_underproduction_units",
+        "normalized_bias",
+        "positive_bias_penalty",
+        "severe_negative_bias_penalty",
+        "wape_guardrail_penalty",
+        "decision_loss",
+    )
+    return {key: float(cast(Any, score[key])) for key in keys}
 
 
 def _basic_error_metrics(frame: pd.DataFrame) -> dict[str, float | int]:

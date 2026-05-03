@@ -24,6 +24,11 @@ from praedixa.demand_forecast.evaluation.chronos2_runtime import (
     fit_final_chronos2_model,
     save_chronos2_model,
 )
+from praedixa.demand_forecast.evaluation.moirai_runtime import (
+    evaluate_moirai_daily_refit_predictions,
+    fit_final_moirai_model,
+    save_moirai_model,
+)
 from praedixa.demand_forecast.evaluation.orchestrator_context import (
     ensure_evaluation_target_dir,
 )
@@ -36,6 +41,11 @@ from praedixa.demand_forecast.evaluation.refit import (
 from praedixa.demand_forecast.evaluation.xgboost_runtime import (
     evaluate_xgboost_daily_refit_predictions,
     save_xgboost_model,
+)
+from praedixa.demand_forecast.evaluation.timesfm_runtime import (
+    evaluate_timesfm_daily_refit_predictions,
+    fit_final_timesfm_model,
+    save_timesfm_model,
 )
 from praedixa.demand_forecast.evaluation.reporting import (
     plot_actual_vs_predicted,
@@ -55,6 +65,12 @@ from praedixa.demand_forecast.backends.xgboost.backend import (
 from praedixa.demand_forecast.backends.chronos2.backend import (
     raise_if_chronos2_backend_required,
 )
+from praedixa.demand_forecast.backends.moirai.backend import (
+    raise_if_moirai_backend_required,
+)
+from praedixa.demand_forecast.backends.timesfm.backend import (
+    raise_if_timesfm_backend_required,
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +87,8 @@ class EvaluationBuildRequest:
     tuning_sample_fraction: float = DEFAULT_EVALUATION_TUNING_SAMPLE_FRACTION
     model_backend: str = DEFAULT_EVALUATION_MODEL_BACKEND
     evaluation_dataset_source: str | None = None
+    daily_refit_bakery_weight_multipliers: tuple[float, ...] | None = None
+    daily_refit_parallel_workers: int = 1
 
 
 def build_evaluation_outputs(
@@ -105,6 +123,34 @@ def build_evaluation_outputs(
             fit_final_model_fn=fit_final_chronos2_model,
             save_model_fn=save_chronos2_model,
             require_backend_available_fn=raise_if_chronos2_backend_required,
+            plot_actual_vs_predicted_fn=plot_actual_vs_predicted,
+            plot_residuals_fn=plot_residuals,
+            plot_residuals_qq_fn=plot_residuals_qq,
+            plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf,
+        )
+    if backend == "moirai":
+        return run_evaluation_pipeline(
+            request=resolved_request,
+            target_dir=target_dir,
+            logger=resolved_logger,
+            evaluate_daily_refit_fn=evaluate_moirai_daily_refit_predictions,
+            fit_final_model_fn=fit_final_moirai_model,
+            save_model_fn=save_moirai_model,
+            require_backend_available_fn=raise_if_moirai_backend_required,
+            plot_actual_vs_predicted_fn=plot_actual_vs_predicted,
+            plot_residuals_fn=plot_residuals,
+            plot_residuals_qq_fn=plot_residuals_qq,
+            plot_residuals_acf_pacf_fn=plot_residuals_acf_pacf,
+        )
+    if backend == "timesfm":
+        return run_evaluation_pipeline(
+            request=resolved_request,
+            target_dir=target_dir,
+            logger=resolved_logger,
+            evaluate_daily_refit_fn=evaluate_timesfm_daily_refit_predictions,
+            fit_final_model_fn=fit_final_timesfm_model,
+            save_model_fn=save_timesfm_model,
+            require_backend_available_fn=raise_if_timesfm_backend_required,
             plot_actual_vs_predicted_fn=plot_actual_vs_predicted,
             plot_residuals_fn=plot_residuals,
             plot_residuals_qq_fn=plot_residuals_qq,

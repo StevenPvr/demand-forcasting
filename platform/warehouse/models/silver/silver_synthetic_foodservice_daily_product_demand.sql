@@ -1,4 +1,4 @@
-{{ config(enabled=false, tags=["silver", "synthetic_foodservice"], materialized="table") }}
+{{ config(tags=["silver", "synthetic_foodservice"], materialized="table") }}
 
 select
     cast(coalesce(dataset_source, source_policy_id) as varchar) as dataset_source,
@@ -13,7 +13,7 @@ select
     cast(category_level_1 as varchar) as category_level_1,
     cast(category_level_2 as varchar) as category_level_2,
     cast(category_level_3 as varchar) as category_level_3,
-    try_cast(observed_demand_qty as double) as observed_demand_qty,
+    coalesce(try_cast(observed_demand_qty as double), 0.0) as observed_demand_qty,
     coalesce(target_semantics, 'observed_sales') as target_semantics,
     coalesce(try_cast(censor_flag as boolean), false) as censor_flag,
     coalesce(target_source, 'observed_sales') as target_source,

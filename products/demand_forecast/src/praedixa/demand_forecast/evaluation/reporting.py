@@ -34,6 +34,9 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from scipy.special import ndtri  # noqa: E402
 
+from praedixa.demand_forecast.evaluation.forecast_shape_diagnostics import (  # noqa: E402
+    build_forecast_shape_diagnostics,
+)
 
 matplotlib.use("Agg")
 PLOT_API: Any = plt
@@ -181,6 +184,7 @@ def build_diagnostics_payload(
         "residual_min": float(residuals.min()),
         "residual_max": float(residuals.max()),
         "per_product_residuals": _per_product_residuals(predictions_df),
+        "forecast_shape_diagnostics": build_forecast_shape_diagnostics(predictions_df),
         "quantile_calibration_error": _quantile_calibration(predictions_df),
         "probabilistic_summary": build_probabilistic_summary(
             predictions_df,

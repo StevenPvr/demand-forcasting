@@ -13,6 +13,7 @@ from praedixa.platform.datasets.synthetic_foodservice.config import (
 from praedixa.platform.datasets.synthetic_foodservice.taxonomy import (
     FRENCH_REGION_CODES,
     PRODUCT_FAMILIES_BY_SOURCE,
+    SYNTHETIC_BAKERY_SOURCE,
     VERTICAL_SPEC_BY_SOURCE,
     VERTICAL_SPECS,
 )
@@ -57,11 +58,17 @@ def build_synthetic_foodservice_entities(
     rng = np.random.default_rng(config.seed)
     cities = _build_city_frame(config=config, rng=rng)
     locations = _build_location_frame(config=config, cities=cities, rng=rng)
-    products = _build_product_frame(rng=rng)
+    required_bakery_product_ids = _load_required_bakery_product_ids(config)
+    products = _build_product_frame(
+        config=config,
+        required_bakery_product_ids=required_bakery_product_ids,
+        rng=rng,
+    )
     assortments = _build_assortment_frame(
         config=config,
         locations=locations,
         products=products,
+        required_bakery_product_ids=required_bakery_product_ids,
         rng=rng,
     )
     metadata = _build_location_metadata_frame(locations=locations)
@@ -241,15 +248,79 @@ def _location_row(
     }
 
 
-def _build_product_frame(rng: np.random.Generator) -> pd.DataFrame:
+def _load_required_bakery_product_ids(
+    config: SyntheticFoodserviceConfig,
+) -> tuple[str, ...]:
+    path = config.bakery_product_names_csv_path
+    if path is None or not path.exists():
+        return ()
+    header = pd.read_csv(path, nrows=0).columns.tolist()
+    product_col = _bakery_product_source_column(header)
+    if product_col is None:
+        return ()
+    products = pd.read_csv(path, usecols=[product_col])[product_col]
+    normalized = products.astype(str).str.strip().str.upper()
+    return tuple(
+        product_id
+        for product_id in normalized.drop_duplicates().tolist()
+        if product_id and product_id != "NAN"
+    )
+
+
+def _bakery_product_source_column(columns: list[str]) -> str | None:
+    for candidate in ("article", "article_raw", "product_id"):
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def _build_product_frame(
+    *,
+    config: SyntheticFoodserviceConfig,
+    required_bakery_product_ids: tuple[str, ...],
+    rng: np.random.Generator,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for spec in VERTICAL_SPECS:
         families = PRODUCT_FAMILIES_BY_SOURCE[spec.dataset_source]
         family_probabilities = _family_probabilities(families)
-        for index in range(spec.product_count):
+        product_count = _product_count_for_source(
+            spec.dataset_source,
+            base_count=spec.product_count,
+            required_bakery_product_ids=required_bakery_product_ids,
+        )
+        for index in range(product_count):
             family = str(rng.choice(families, p=family_probabilities))
-            rows.append(_product_row(spec.dataset_source, family, index, rng))
+            product_id = _product_id_for_source(
+                spec.dataset_source,
+                index=index,
+                required_bakery_product_ids=required_bakery_product_ids,
+            )
+            rows.append(
+                _product_row(spec.dataset_source, product_id, family, index, rng)
+            )
     return pd.DataFrame(rows)
+
+
+def _product_count_for_source(
+    dataset_source: str,
+    *,
+    base_count: int,
+    required_bakery_product_ids: tuple[str, ...],
+) -> int:
+    if dataset_source != SYNTHETIC_BAKERY_SOURCE:
+        return base_count
+    return max(base_count, len(required_bakery_product_ids))
+
+
+def _product_id_for_source(
+    dataset_source: str,
+    *,
+    index: int,
+    required_bakery_product_ids: tuple[str, ...],
+) -> str:
+    _ = required_bakery_product_ids
+    return f"{dataset_source.replace('synthetic_foodservice_', 'syn_')}_sku_{index + 1:04d}"
 
 
 def _family_probabilities(families: tuple[str, ...]) -> np.ndarray:
@@ -259,6 +330,7 @@ def _family_probabilities(families: tuple[str, ...]) -> np.ndarray:
 
 def _product_row(
     dataset_source: str,
+    product_id: str,
     family: str,
     index: int,
     rng: np.random.Generator,
@@ -266,7 +338,7 @@ def _product_row(
     price = float(rng.lognormal(mean=2.0, sigma=0.38))
     return {
         "dataset_source": dataset_source,
-        "product_id": f"{dataset_source.replace('synthetic_foodservice_', 'syn_')}_sku_{index + 1:04d}",
+        "product_id": product_id,
         "category_level_1": family,
         "category_level_2": f"{family}_sub_{index % 7}",
         "category_level_3": f"{family}_item_{index % 19}",
@@ -282,6 +354,7 @@ def _build_assortment_frame(
     config: SyntheticFoodserviceConfig,
     locations: pd.DataFrame,
     products: pd.DataFrame,
+    required_bakery_product_ids: tuple[str, ...],
     rng: np.random.Generator,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
@@ -294,7 +367,80 @@ def _build_assortment_frame(
             rng.integers(spec.min_site_products, spec.max_site_products + 1)
         )
         rows.extend(_assortment_rows(config, location, source_products, menu_size, rng))
+    rows = _with_required_bakery_assortment_coverage(
+        config=config,
+        rows=rows,
+        locations=locations,
+        products=products,
+        required_bakery_product_ids=required_bakery_product_ids,
+        rng=rng,
+    )
     return pd.DataFrame(rows)
+
+
+def _with_required_bakery_assortment_coverage(
+    *,
+    config: SyntheticFoodserviceConfig,
+    rows: list[dict[str, object]],
+    locations: pd.DataFrame,
+    products: pd.DataFrame,
+    required_bakery_product_ids: tuple[str, ...],
+    rng: np.random.Generator,
+) -> list[dict[str, object]]:
+    if not required_bakery_product_ids:
+        return rows
+    present = {
+        str(row["product_id"])
+        for row in rows
+        if row["dataset_source"] == SYNTHETIC_BAKERY_SOURCE
+    }
+    missing = [
+        product_id
+        for product_id in required_bakery_product_ids
+        if product_id not in present
+    ]
+    if not missing:
+        return rows
+    bakery_locations = locations.loc[
+        locations["dataset_source"].eq(SYNTHETIC_BAKERY_SOURCE)
+    ]
+    bakery_products = products.loc[
+        products["dataset_source"].eq(SYNTHETIC_BAKERY_SOURCE)
+    ]
+    if bakery_locations.empty or bakery_products.empty:
+        return rows
+    rows.extend(
+        _required_bakery_assortment_rows(
+            config=config,
+            missing_product_ids=missing,
+            bakery_locations=bakery_locations,
+            bakery_products=bakery_products,
+            rng=rng,
+        )
+    )
+    return rows
+
+
+def _required_bakery_assortment_rows(
+    *,
+    config: SyntheticFoodserviceConfig,
+    missing_product_ids: list[str],
+    bakery_locations: pd.DataFrame,
+    bakery_products: pd.DataFrame,
+    rng: np.random.Generator,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, product_id in enumerate(missing_product_ids):
+        location = cast(
+            LocationEntityRecord,
+            bakery_locations.iloc[index % len(bakery_locations)],
+        )
+        product_row = bakery_products.loc[bakery_products["product_id"].eq(product_id)]
+        if product_row.empty:
+            continue
+        product = cast(ProductEntityRecord, product_row.iloc[0])
+        rows.append(_site_product_row(config, location, product, rng))
+    return rows
 
 
 def _assortment_rows(
