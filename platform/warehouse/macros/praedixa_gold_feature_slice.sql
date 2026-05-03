@@ -575,7 +575,7 @@ date_ranks as (
 bakery_dataset_bounds as (
     select
         max(dt) as max_dt
-    from {{ ref("silver_bakery_daily_product_demand") }}
+    from {{ ref('silver_bakery_daily_product_demand') }}
 )
 {% endif %}
 ,
@@ -584,7 +584,7 @@ split_labeled as (
         eligible.*,
         {% if split_strategy == "bakery_test_only" %}
         case
-            when eligible.dt > bakery_dataset_bounds.max_dt - interval {{ env_var("PRAEDIXA_GOLD_BAKERY_TEST_MONTHS", "3") | int }} month then 'test'
+            when eligible.dt > bakery_dataset_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month then 'test'
             else null
         end as split_bucket
         {% elif split_strategy == "pilot_ready_chrono_60_20_20" %}

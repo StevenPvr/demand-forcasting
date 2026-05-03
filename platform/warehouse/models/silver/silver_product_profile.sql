@@ -7,7 +7,7 @@ with product_rollup as (
         max(category_level_1) as category_level_1,
         max(category_level_2) as category_level_2,
         max(category_level_3) as category_level_3
-    from {{ ref("silver_daily_product_demand_all") }}
+    from {{ ref('silver_daily_product_demand_all') }}
     group by
         dataset_source,
         product_id

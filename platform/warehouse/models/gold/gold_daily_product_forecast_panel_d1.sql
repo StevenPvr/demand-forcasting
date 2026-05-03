@@ -1,4 +1,4 @@
-{{ config(tags=["gold", "d1"], materialized="table", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1"], materialized="table", schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
 
 {% set data_quality_metadata_bases = [
     "country_code",
@@ -343,7 +343,7 @@
 
 with raw_features as (
     select *
-    from {{ ref("gold_feature_panel_d1") }}
+    from {{ ref('gold_feature_panel_d1') }}
 ),
 features as (
     select
@@ -358,7 +358,7 @@ features as (
 ),
 source_weights as (
     select *
-    from {{ ref("gold_source_weights_d1") }}
+    from {{ ref('gold_source_weights_d1') }}
 ),
 dataset_applicability as (
     select

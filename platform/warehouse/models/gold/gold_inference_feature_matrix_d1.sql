@@ -1,4 +1,4 @@
-{{ config(tags=["gold", "d1", "inference"], materialized="table", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1", "inference"], materialized="table", schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
 
 select
     * exclude (
@@ -16,5 +16,5 @@ select
     'inference' as split_bucket,
     cast(null as varchar) as target_semantics,
     false as usable_for_training_flag
-from {{ ref("gold_model_training_panel_d1") }}
+from {{ ref('gold_model_training_panel_d1') }}
 where false

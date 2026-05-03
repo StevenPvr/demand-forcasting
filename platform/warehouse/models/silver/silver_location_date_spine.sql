@@ -5,8 +5,8 @@ with location_bounds as (
         demand.dataset_source,
         demand.location_id,
         min(demand.dt) as min_dt,
-        max(demand.dt) + interval {{ env_var("PRAEDIXA_DATE_SPINE_FUTURE_DAYS", "35") | int }} day as max_dt
-    from {{ ref("silver_daily_product_demand_training_candidates") }} as demand
+        max(demand.dt) + interval {{ env_var('PRAEDIXA_DATE_SPINE_FUTURE_DAYS', '35') | int }} day as max_dt
+    from {{ ref('silver_daily_product_demand_training_candidates') }} as demand
     group by
         demand.dataset_source,
         demand.location_id
@@ -29,6 +29,6 @@ select
     metadata.region_code,
     metadata.school_zone
 from dense_location_dates as dense
-left join {{ ref("silver_open_location_metadata") }} as metadata
+left join {{ ref('silver_open_location_metadata') }} as metadata
   on dense.dataset_source = metadata.dataset_source
  and dense.location_id = metadata.location_id

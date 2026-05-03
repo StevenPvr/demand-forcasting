@@ -5,6 +5,6 @@ select
     provider_name,
     review_status,
     notes
-from {{ ref("silver_source_registry") }}
+from {{ ref('silver_source_registry') }}
 where source_kind = 'provider'
   and coalesce(review_status, 'unreviewed') <> 'allowed'

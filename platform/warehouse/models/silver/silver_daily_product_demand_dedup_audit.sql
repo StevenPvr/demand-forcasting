@@ -14,7 +14,7 @@ with unioned as (
         source_file_path,
         source_loaded_at,
         data_origin
-    from {{ ref("silver_bakery_daily_product_demand") }}
+    from {{ ref('silver_bakery_daily_product_demand') }}
 
     union all
 
@@ -31,7 +31,7 @@ with unioned as (
         source_file_path,
         source_loaded_at,
         data_origin
-    from {{ ref("silver_synthetic_foodservice_daily_product_demand") }}
+    from {{ ref('silver_synthetic_foodservice_daily_product_demand') }}
 ),
 ranked as (
     select

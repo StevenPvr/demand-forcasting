@@ -11,7 +11,7 @@ select
     caching_allowed,
     attribution_required,
     attribution_text
-from {{ ref("silver_source_registry") }}
+from {{ ref('silver_source_registry') }}
 where source_kind = 'provider'
   and review_status = 'allowed'
   and coalesce(commercial_use_allowed, false)

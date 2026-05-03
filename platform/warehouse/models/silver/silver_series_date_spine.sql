@@ -7,8 +7,8 @@ with series_bounds as (
         product_id,
         max(series_id) as series_id,
         min(dt) as min_dt,
-        max(dt) + interval {{ env_var("PRAEDIXA_DATE_SPINE_FUTURE_DAYS", "35") | int }} day as max_dt
-    from {{ ref("silver_daily_product_demand_training_candidates") }}
+        max(dt) + interval {{ env_var('PRAEDIXA_DATE_SPINE_FUTURE_DAYS', '35') | int }} day as max_dt
+    from {{ ref('silver_daily_product_demand_training_candidates') }}
     group by
         dataset_source,
         location_id,

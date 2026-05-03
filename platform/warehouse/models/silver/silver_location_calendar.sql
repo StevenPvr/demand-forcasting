@@ -6,7 +6,7 @@ with location_dates as (
         location_id,
         dt,
         country_code
-    from {{ ref("silver_location_date_spine") }}
+    from {{ ref('silver_location_date_spine') }}
 ),
 country_calendar as (
     select
@@ -17,7 +17,7 @@ country_calendar as (
         pre_holiday_flag,
         post_holiday_flag,
         bridge_day_flag
-    from {{ ref("silver_open_public_holiday_calendar_daily") }}
+    from {{ ref('silver_open_public_holiday_calendar_daily') }}
 ),
 school_calendar as (
     select
@@ -26,7 +26,7 @@ school_calendar as (
         dt,
         school_holiday_flag,
         school_holiday_available_flag
-    from {{ ref("silver_open_school_holidays_daily") }}
+    from {{ ref('silver_open_school_holidays_daily') }}
 )
 select
     dates.dataset_source,

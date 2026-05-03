@@ -74,4 +74,4 @@ select
     cast(source_file_path as varchar) as source_file_path,
     cast(loaded_at as timestamp) as source_loaded_at,
     'synthetic' as data_origin
-from {{ ref("stg_synthetic_foodservice_daily") }}
+from {{ ref('stg_synthetic_foodservice_daily') }}

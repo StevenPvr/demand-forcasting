@@ -1,7 +1,8 @@
-{{ config(tags=["gold", "d1"], materialized="view", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1"], materialized="view", schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
+{% set gold_run_id = env_var('PRAEDIXA_GOLD_RUN_ID', 'manual') %}
 
 select
-    '{{ env_var("PRAEDIXA_GOLD_RUN_ID", "manual") }}' as gold_run_id,
+    '{{ gold_run_id }}' as gold_run_id,
     current_timestamp as generated_at,
     dataset_source,
     split_bucket,
@@ -11,7 +12,7 @@ select
     sum(case when target_demand_qty_d_plus_1 is null then 1 else 0 end) as null_target_rows,
     avg(sample_weight_source) as avg_sample_weight_source,
     avg(sample_weight_business) as avg_sample_weight_business
-from {{ ref("gold_model_training_panel_d1") }}
+from {{ ref('gold_model_training_panel_d1') }}
 group by
     dataset_source,
     split_bucket

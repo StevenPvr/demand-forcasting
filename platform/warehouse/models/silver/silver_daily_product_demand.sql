@@ -42,6 +42,6 @@ select
     weather_humidity,
     weather_wind_level,
     silver_run_id
-from {{ ref("silver_daily_product_demand_training_candidates") }}
+from {{ ref('silver_daily_product_demand_training_candidates') }}
 where observed_demand_qty is not null
   and target_semantics is not null

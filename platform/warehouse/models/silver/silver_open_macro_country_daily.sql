@@ -4,7 +4,7 @@ with demand_dates as (
     select distinct
         country_code,
         dt
-    from {{ ref("silver_location_date_spine") }}
+    from {{ ref('silver_location_date_spine') }}
     where country_code is not null
 ),
 country_bounds as (
@@ -32,9 +32,9 @@ macro_series as (
         available_from_assumption_flag,
         metric_value,
         2 as source_priority
-    from {{ ref("stg_open_macro_annual") }} as annual
-    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on {{ praedixa_canonical_source_id("annual.source_policy_id", "annual.source_name") }} = allowed.source_id
+    from {{ ref('stg_open_macro_annual') }} as annual
+    inner join {{ ref('silver_allowed_provider_sources') }} as allowed
+      on {{ praedixa_canonical_source_id('annual.source_policy_id', 'annual.source_name') }} = allowed.source_id
 
     union all
 
@@ -46,9 +46,9 @@ macro_series as (
         available_from_assumption_flag,
         metric_value,
         1 as source_priority
-    from {{ ref("stg_open_macro_timeseries") }} as timeseries
-    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on {{ praedixa_canonical_source_id("timeseries.source_policy_id", "timeseries.source_name") }} = allowed.source_id
+    from {{ ref('stg_open_macro_timeseries') }} as timeseries
+    inner join {{ ref('silver_allowed_provider_sources') }} as allowed
+      on {{ praedixa_canonical_source_id('timeseries.source_policy_id', 'timeseries.source_name') }} = allowed.source_id
 ),
 candidate_values as (
     select

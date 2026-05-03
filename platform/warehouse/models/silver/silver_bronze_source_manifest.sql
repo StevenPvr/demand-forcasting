@@ -13,4 +13,4 @@ select
     sha256,
     loaded_rows,
     loaded_at
-from {{ ref("stg_bronze_source_manifest") }}
+from {{ ref('stg_bronze_source_manifest') }}

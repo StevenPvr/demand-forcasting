@@ -1,7 +1,7 @@
-{{ config(enabled=false, tags=["gold", "d1"], materialized="table", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(enabled=false, tags=["gold", "d1"], materialized="table", schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
 
 {{ praedixa_gold_feature_slice(
-    ref("gold_base_panel_d1"),
+    ref('gold_base_panel_d1'),
     "dataset_source = 'm5_forecasting_accuracy'",
     "dataset_source = 'm5_forecasting_accuracy'",
     "chrono_60_40"

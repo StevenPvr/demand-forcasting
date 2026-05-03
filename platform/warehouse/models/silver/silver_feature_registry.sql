@@ -11,4 +11,4 @@ select
     cast(include_in_training as boolean) as include_in_training,
     cast(allow_constant as boolean) as allow_constant,
     cast(notes as varchar) as notes
-from {{ ref("feature_registry") }}
+from {{ ref('feature_registry') }}

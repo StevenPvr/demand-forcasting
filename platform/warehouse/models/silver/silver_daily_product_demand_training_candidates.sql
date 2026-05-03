@@ -2,12 +2,12 @@
 
 with allowed_training_sources as (
     select dataset_source
-    from {{ ref("silver_allowed_training_dataset_sources") }}
+    from {{ ref('silver_allowed_training_dataset_sources') }}
 ),
 candidate_rows as (
     select
         demand.*
-    from {{ ref("silver_daily_product_demand_all") }} as demand
+    from {{ ref('silver_daily_product_demand_all') }} as demand
     inner join allowed_training_sources
       on demand.dataset_source = allowed_training_sources.dataset_source
     where demand.dataset_source in ('bakery')

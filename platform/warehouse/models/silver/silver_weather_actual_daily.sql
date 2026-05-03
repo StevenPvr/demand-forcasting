@@ -18,4 +18,4 @@ select
     provider_count,
     weather_available_flag,
     'actual' as weather_observation_type
-from {{ ref("silver_open_weather_daily") }}
+from {{ ref('silver_open_weather_daily') }}

@@ -56,7 +56,7 @@ select
     false as censor_flag_missing_flag,
     false as observed_stockout_available_missing_flag,
     'real' as data_origin
-from {{ ref("silver_bakery_order_lines") }}
+from {{ ref('silver_bakery_order_lines') }}
 group by
     dataset_source,
     source_partition,

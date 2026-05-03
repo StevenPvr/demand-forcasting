@@ -7,4 +7,4 @@ select
     drive_through_flag,
     delivery_flag,
     pickup_flag
-from {{ ref("silver_open_location_metadata") }}
+from {{ ref('silver_open_location_metadata') }}

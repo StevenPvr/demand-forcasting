@@ -4,7 +4,7 @@ with demand_dates as (
     select distinct
         country_code,
         dt
-    from {{ ref("silver_location_date_spine") }}
+    from {{ ref('silver_location_date_spine') }}
     where country_code is not null
 ),
 holiday_rows as (
@@ -14,9 +14,9 @@ holiday_rows as (
         true as holiday_flag,
         string_agg(holiday_name, ' | ' order by holiday_name) as holiday_name,
         bool_or(global_flag) as holiday_global_flag
-    from {{ ref("stg_open_public_holidays") }} as holidays
-    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on {{ praedixa_canonical_source_id("holidays.source_policy_id", "holidays.source_name") }} = allowed.source_id
+    from {{ ref('stg_open_public_holidays') }} as holidays
+    inner join {{ ref('silver_allowed_provider_sources') }} as allowed
+      on {{ praedixa_canonical_source_id('holidays.source_policy_id', 'holidays.source_name') }} = allowed.source_id
     group by
         country_code,
         dt

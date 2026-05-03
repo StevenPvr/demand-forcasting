@@ -3,10 +3,10 @@
 with source_rows as (
     select
         stg.*,
-        {{ praedixa_canonical_source_id("stg.source_policy_id", "stg.source_name") }} as canonical_source_id
-    from {{ ref("stg_open_school_holidays") }} as stg
-    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on {{ praedixa_canonical_source_id("stg.source_policy_id", "stg.source_name") }} = allowed.source_id
+        {{ praedixa_canonical_source_id('stg.source_policy_id', 'stg.source_name') }} as canonical_source_id
+    from {{ ref('stg_open_school_holidays') }} as stg
+    inner join {{ ref('silver_allowed_provider_sources') }} as allowed
+      on {{ praedixa_canonical_source_id('stg.source_policy_id', 'stg.source_name') }} = allowed.source_id
 ),
 positive_holidays as (
     select
@@ -35,7 +35,7 @@ select
     positive.source_name,
     positive.source_policy_id,
     positive.school_holiday_available_flag is not null as school_holiday_available_flag
-from {{ ref("silver_location_date_spine") }} as spine
+from {{ ref('silver_location_date_spine') }} as spine
 left join positive_holidays as positive
   on spine.dataset_source = positive.dataset_source
  and spine.location_id = positive.location_id

@@ -1,26 +1,27 @@
-{{ config(tags=["gold", "d1"], schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1"], schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
+{% set gold_run_id = env_var('PRAEDIXA_GOLD_RUN_ID', 'manual') %}
 
 with source_rows as (
     select *
-    from {{ ref("silver_daily_product_demand_training_candidates") }}
+    from {{ ref('silver_daily_product_demand_training_candidates') }}
     where observed_demand_qty is not null
       and target_semantics is not null
 ),
 location_metadata as (
     select *
-    from {{ ref("silver_open_location_metadata") }}
+    from {{ ref('silver_open_location_metadata') }}
 ),
 location_profile as (
     select *
-    from {{ ref("silver_location_profile") }}
+    from {{ ref('silver_location_profile') }}
 ),
 product_profile as (
     select *
-    from {{ ref("silver_product_profile") }}
+    from {{ ref('silver_product_profile') }}
 ),
 location_calendar as (
     select *
-    from {{ ref("silver_location_calendar") }}
+    from {{ ref('silver_location_calendar') }}
 ),
 source_policy as (
     select
@@ -28,22 +29,22 @@ source_policy as (
         max(legal_basis) as source_legal_basis,
         max(license_type) as source_license_type,
         max(review_status) as source_review_status
-    from {{ ref("silver_source_registry") }}
+    from {{ ref('silver_source_registry') }}
     where source_kind = 'dataset'
       and dataset_source is not null
     group by dataset_source
 ),
 country_calendar as (
     select *
-    from {{ ref("silver_open_public_holiday_calendar_daily") }}
+    from {{ ref('silver_open_public_holiday_calendar_daily') }}
 ),
 open_weather as (
     select *
-    from {{ ref("silver_open_weather_daily") }}
+    from {{ ref('silver_open_weather_daily') }}
 ),
 macro_country as (
     select *
-    from {{ ref("silver_open_macro_country_daily") }}
+    from {{ ref('silver_open_macro_country_daily') }}
 ),
 series_bounds as (
     select
@@ -217,7 +218,7 @@ dense_panel as (
             else 'supplemental'
         end as source_role,
         dense.dataset_source like 'synthetic_foodservice%' as is_synthetic_source,
-        '{{ env_var("PRAEDIXA_GOLD_RUN_ID", "manual") }}' as gold_run_id
+        '{{ gold_run_id }}' as gold_run_id
     from dense_dates as dense
     inner join series_bounds as bounds
       on dense.dataset_source = bounds.dataset_source
@@ -322,21 +323,21 @@ imputed_panel as (
         case
             when weather_temperature is not null then weather_temperature
             when weather_temperature_ffill_value is not null
-             and date_diff('day', weather_temperature_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS", "2") | int }}
+             and date_diff('day', weather_temperature_ffill_dt, dt) between 1 and {{ env_var('PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS', '2') | int }}
             then weather_temperature_ffill_value
             else weather_temperature
         end as weather_temperature,
         case
             when weather_temperature_min is not null then weather_temperature_min
             when weather_temperature_min_ffill_value is not null
-             and date_diff('day', weather_temperature_min_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS", "2") | int }}
+             and date_diff('day', weather_temperature_min_ffill_dt, dt) between 1 and {{ env_var('PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS', '2') | int }}
             then weather_temperature_min_ffill_value
             else weather_temperature_min
         end as weather_temperature_min,
         case
             when weather_temperature_max is not null then weather_temperature_max
             when weather_temperature_max_ffill_value is not null
-             and date_diff('day', weather_temperature_max_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS", "2") | int }}
+             and date_diff('day', weather_temperature_max_ffill_dt, dt) between 1 and {{ env_var('PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS', '2') | int }}
             then weather_temperature_max_ffill_value
             else weather_temperature_max
         end as weather_temperature_max,
@@ -344,14 +345,14 @@ imputed_panel as (
         case
             when weather_humidity is not null then weather_humidity
             when weather_humidity_ffill_value is not null
-             and date_diff('day', weather_humidity_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS", "2") | int }}
+             and date_diff('day', weather_humidity_ffill_dt, dt) between 1 and {{ env_var('PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS', '2') | int }}
             then weather_humidity_ffill_value
             else weather_humidity
         end as weather_humidity,
         case
             when weather_wind_level is not null then weather_wind_level
             when weather_wind_level_ffill_value is not null
-             and date_diff('day', weather_wind_level_ffill_dt, dt) between 1 and {{ env_var("PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS", "2") | int }}
+             and date_diff('day', weather_wind_level_ffill_dt, dt) between 1 and {{ env_var('PRAEDIXA_WEATHER_FFILL_LIMIT_DAYS', '2') | int }}
             then weather_wind_level_ffill_value
             else weather_wind_level
         end as weather_wind_level,

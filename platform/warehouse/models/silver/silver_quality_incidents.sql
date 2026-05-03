@@ -2,7 +2,7 @@
 
 with demand as (
     select *
-    from {{ ref("silver_daily_product_demand_training_candidates") }}
+    from {{ ref('silver_daily_product_demand_training_candidates') }}
 ),
 base_incidents as (
     select

@@ -3,8 +3,8 @@
 with bounds as (
     select
         min(dt) as min_dt,
-        max(dt) + interval {{ env_var("PRAEDIXA_DATE_SPINE_FUTURE_DAYS", "35") | int }} day as max_dt
-    from {{ ref("silver_daily_product_demand_training_candidates") }}
+        max(dt) + interval {{ env_var('PRAEDIXA_DATE_SPINE_FUTURE_DAYS', '35') | int }} day as max_dt
+    from {{ ref('silver_daily_product_demand_training_candidates') }}
 )
 select
     cast(generated.dt as date) as dt

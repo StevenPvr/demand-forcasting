@@ -19,4 +19,4 @@ select
     cast(review_owner as varchar) as review_owner,
     cast(reviewed_at as date) as reviewed_at,
     cast(notes as varchar) as notes
-from {{ ref("source_registry") }}
+from {{ ref('source_registry') }}

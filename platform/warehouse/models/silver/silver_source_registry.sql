@@ -24,4 +24,4 @@ select
     nullif(trim(cast(review_owner as varchar)), '') as review_owner,
     try_cast(reviewed_at as date) as reviewed_at,
     nullif(trim(cast(notes as varchar)), '') as notes
-from {{ ref("stg_source_registry") }}
+from {{ ref('stg_source_registry') }}

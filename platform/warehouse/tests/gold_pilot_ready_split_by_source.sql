@@ -11,12 +11,12 @@ with source_splits as (
         max(case when split_bucket = 'train' then dt end) as train_max_dt,
         min(case when split_bucket = 'val' then dt end) as val_min_dt,
         min(case when split_bucket = 'test' then dt end) as test_min_dt
-    from {{ ref("gold_feature_panel_d1") }}
+    from {{ ref('gold_feature_panel_d1') }}
     group by dataset_source
 ),
 bakery_bounds as (
     select max(dt) as max_dt
-    from {{ ref("silver_bakery_daily_product_demand") }}
+    from {{ ref('silver_bakery_daily_product_demand') }}
 ),
 violations as (
     select
@@ -30,7 +30,7 @@ violations as (
         or train_rows <> 0
         or val_rows <> 0
         or test_rows = 0
-        or test_min_dt <= bakery_bounds.max_dt - interval {{ env_var("PRAEDIXA_GOLD_BAKERY_TEST_MONTHS", "3") | int }} month
+        or test_min_dt <= bakery_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month
       )
 
     union all

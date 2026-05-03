@@ -1,7 +1,7 @@
 {{ config(tags=["gold"]) }}
 
 select *
-from {{ ref("gold_model_training_panel_d1") }}
+from {{ ref('gold_model_training_panel_d1') }}
 where split_bucket in ('train', 'val')
   and coalesce(usable_for_training_flag, false)
   and (

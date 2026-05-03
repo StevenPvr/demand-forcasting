@@ -9,4 +9,4 @@ select
     false as capacity_available_flag,
     'default_assumption' as capacity_source,
     true as assumption_flag
-from {{ ref("silver_location_date_spine") }}
+from {{ ref('silver_location_date_spine') }}

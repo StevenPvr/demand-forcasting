@@ -46,4 +46,4 @@ select
     nullif(cast(source_policy_id as varchar), '') as source_policy_id,
     source_file_path,
     loaded_at
-from {{ source("bronze", "bronze_supplemental_corpus_daily") }}
+from {{ source('bronze', 'bronze_supplemental_corpus_daily') }}

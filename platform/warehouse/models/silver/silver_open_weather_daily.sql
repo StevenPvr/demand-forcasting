@@ -3,10 +3,10 @@
 with source_rows as (
     select
         stg.*,
-        {{ praedixa_canonical_source_id("stg.source_policy_id", "stg.source_name") }} as canonical_source_id
-    from {{ ref("stg_open_weather_daily") }} as stg
-    inner join {{ ref("silver_allowed_provider_sources") }} as allowed
-      on {{ praedixa_canonical_source_id("stg.source_policy_id", "stg.source_name") }} = allowed.source_id
+        {{ praedixa_canonical_source_id('stg.source_policy_id', 'stg.source_name') }} as canonical_source_id
+    from {{ ref('stg_open_weather_daily') }} as stg
+    inner join {{ ref('silver_allowed_provider_sources') }} as allowed
+      on {{ praedixa_canonical_source_id('stg.source_policy_id', 'stg.source_name') }} = allowed.source_id
 )
 select
     dataset_source,

@@ -13,4 +13,4 @@ select
     cast(sha256 as varchar) as sha256,
     cast(loaded_rows as bigint) as loaded_rows,
     cast(loaded_at as timestamp) as loaded_at
-from {{ source("bronze", "bronze_source_manifest") }}
+from {{ source('bronze', 'bronze_source_manifest') }}

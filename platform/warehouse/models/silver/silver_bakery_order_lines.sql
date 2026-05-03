@@ -1,4 +1,5 @@
 {{ config(tags=["silver", "bakery"], materialized="table", unique_key=["dataset_source", "source_partition", "row_index"]) }}
+{% set silver_run_id = env_var('PRAEDIXA_SILVER_RUN_ID', 'manual') %}
 
 select
     coalesce(source_policy_id, 'bakery') as dataset_source,
@@ -36,7 +37,7 @@ select
     cast(null as double) as weather_temperature,
     cast(null as double) as weather_humidity,
     cast(null as double) as weather_wind_level,
-    '{{ env_var("PRAEDIXA_SILVER_RUN_ID", "manual") }}' as silver_run_id,
+    '{{ silver_run_id }}' as silver_run_id,
     cast(source_name as varchar) as source_name,
     cast(coalesce(source_policy_id, 'bakery') as varchar) as source_policy_id,
     cast(source_file_path as varchar) as source_file_path,
@@ -44,4 +45,4 @@ select
     row_index,
     ticket_number_raw,
     sold_at_local_ts
-from {{ ref("stg_bakery_order_lines") }}
+from {{ ref('stg_bakery_order_lines') }}

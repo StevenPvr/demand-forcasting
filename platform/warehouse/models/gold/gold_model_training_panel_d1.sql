@@ -1,4 +1,4 @@
-{{ config(tags=["gold", "d1", "training"], materialized="table", schema=env_var("PRAEDIXA_DUCKDB_GOLD_SCHEMA", "gold")) }}
+{{ config(tags=["gold", "d1", "training"], materialized="table", schema=env_var('PRAEDIXA_DUCKDB_GOLD_SCHEMA', 'gold')) }}
 
 {% set training_feature_columns = [
     "vertical_level_1",
@@ -286,4 +286,4 @@ select
     {{ column }} as {{ column }}{{ role_suffix }}{{ "," if not loop.last }}
     {%- endif %}
 {% endfor %}
-from {{ ref("gold_daily_product_forecast_panel_d1") }}
+from {{ ref('gold_daily_product_forecast_panel_d1') }}
