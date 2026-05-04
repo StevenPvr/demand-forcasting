@@ -429,9 +429,9 @@ class XGBoostTuningTests(unittest.TestCase):
         baseline = SAMPLE_WEIGHTS(frame, bakery_sample_weight_multiplier=1.0)
         weighted = SAMPLE_WEIGHTS(frame, bakery_sample_weight_multiplier=16.0)
 
-        self.assertTrue(np.allclose(baseline, [0.25, 0.25, 0.25, 0.25]))
-        self.assertTrue(np.allclose(weighted[:2], [4.0, 4.0]))
-        self.assertTrue(np.allclose(weighted[2:], [0.25, 0.25]))
+        self.assertTrue(np.allclose(baseline, [1.0, 1.0, 1.0, 1.0]))
+        self.assertTrue(np.allclose(weighted[:2], [16.0, 16.0]))
+        self.assertTrue(np.allclose(weighted[2:], [1.0, 1.0]))
 
     def test_hpo_metadata_serializes_economic_objective(self) -> None:
         economic_config = {"version": "segmented_asymmetric_economic_objective_final"}

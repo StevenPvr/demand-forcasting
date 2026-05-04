@@ -1084,17 +1084,6 @@ def _product_group_col(frame: pd.DataFrame) -> str:
     return "economic_segment"
 
 
-def _dataset_weight_by_source(frame: pd.DataFrame) -> dict[str, float]:
-    counts = frame[DEFAULT_DATASET_SOURCE_COL].value_counts(sort=False)
-    if counts.empty:
-        raise ValueError("Cannot train XGBoost without dataset source weights.")
-    dataset_total_weight = 1.0 / float(len(counts))
-    return {
-        str(dataset_source): dataset_total_weight / float(row_count)
-        for dataset_source, row_count in counts.items()
-    }
-
-
 def _bakery_sample_weight_multiplier(resolved_params: dict[str, object]) -> float:
     value = resolved_params.get("bakery_sample_weight_multiplier", 1.0)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -1107,14 +1096,7 @@ def _sample_weights(
     *,
     bakery_sample_weight_multiplier: float = 1.0,
 ) -> np.ndarray:
-    weight_by_source = _dataset_weight_by_source(frame)
-    weights = (
-        pd.Series(frame[DEFAULT_DATASET_SOURCE_COL], copy=False)
-        .astype("string")
-        .map(weight_by_source)
-        .fillna(0.0)
-        .to_numpy(dtype=np.float64, copy=True)
-    )
+    weights = np.ones(len(frame), dtype=np.float64)
     if bakery_sample_weight_multiplier != 1.0:
         bakery_mask = (
             pd.Series(frame[DEFAULT_DATASET_SOURCE_COL], copy=False)
