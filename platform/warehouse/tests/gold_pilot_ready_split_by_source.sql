@@ -20,16 +20,18 @@ bakery_bounds as (
 ),
 violations as (
     select
-        'bakery_test_holdout_contract' as violation,
+        'bakery_train_val_test_holdout_contract' as violation,
         source_splits.*
     from source_splits
     cross join bakery_bounds
     where dataset_source = 'bakery'
       and (
-        split_count <> 1
-        or train_rows <> 0
-        or val_rows <> 0
+        split_count <> 3
+        or train_rows = 0
+        or val_rows = 0
         or test_rows = 0
+        or train_max_dt >= val_min_dt
+        or val_min_dt >= test_min_dt
         or test_min_dt <= bakery_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month
       )
 

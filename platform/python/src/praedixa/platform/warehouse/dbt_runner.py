@@ -33,7 +33,7 @@ class DbtStageResult:
     run: bool
     test: bool
 
-    def as_dict(self) -> dict[str, bool]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "dbt_deps": self.deps,
             "dbt_seed": self.seed,

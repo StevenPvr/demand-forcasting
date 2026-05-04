@@ -49,7 +49,7 @@ from praedixa.demand_forecast.training.sampling.dataset_filters import (
 )
 from praedixa.demand_forecast.training.validation.eligibility import (
     DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE,
-    NON_TRAINABLE_TARGET_SOURCES,
+    GOLD_TRAINING_ELIGIBILITY,
     filter_training_eligible_rows,
     training_eligibility_mask,
 )
@@ -128,27 +128,8 @@ def _read_frame(path: Path) -> pd.DataFrame:
     return frame.sort_values(DEFAULT_DATE_COL).reset_index(drop=True)
 
 
-def _materialized_gold_split_path(cache_dir: Path, split_bucket: str) -> Path:
-    return cache_dir / f"{split_bucket}.parquet"
-
-
 def _quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
-
-
-def _gold_projection_sql(
-    connection: duckdb.DuckDBPyConnection,
-    *,
-    gold_table: str,
-    table_alias: str | None = None,
-) -> str:
-    schema_preview = connection.execute(f"select * from {gold_table} limit 0").fetchdf()
-    if schema_preview.empty and not list(schema_preview.columns):
-        raise ValueError(f"Gold table `{gold_table}` exposes no columns.")
-    prefix = "" if table_alias is None else f"{table_alias}."
-    return ", ".join(
-        f"{prefix}{_quote_identifier(column)}" for column in schema_preview.columns
-    )
 
 
 def _gold_schema_columns(
@@ -176,29 +157,6 @@ def _empty_schema_frame(columns: Sequence[str]) -> pd.DataFrame:
     return pd.DataFrame(columns=list(columns))
 
 
-def _gold_split_row_count(
-    connection: duckdb.DuckDBPyConnection,
-    *,
-    gold_table: str,
-    split_bucket: str,
-    excluded_dataset_sources: tuple[str, ...],
-) -> int:
-    dataset_scope_filter = dataset_source_not_in_filter(
-        DEFAULT_DATASET_SOURCE_COL,
-        excluded_dataset_sources,
-    )
-    query = (
-        f"select count(*) from {gold_table} "
-        f"where split_bucket = ? and {dataset_scope_filter}"
-    )
-    row = connection.execute(query, [split_bucket]).fetchone()
-    if row is None:
-        raise RuntimeError(
-            f"Unable to count rows for split bucket `{split_bucket}` in `{gold_table}`."
-        )
-    return int(cast(int, row[0]))
-
-
 def _gold_training_eligibility_filter(
     connection: duckdb.DuckDBPyConnection,
     *,
@@ -209,83 +167,14 @@ def _gold_training_eligibility_filter(
     if split_bucket not in {"train", "val"}:
         return "true"
     schema_preview = connection.execute(f"select * from {gold_table} limit 0").fetchdf()
-    available_columns = set(schema_preview.columns)
-    required_columns = {
-        "usable_for_training_flag",
-        "label_quality_score",
-    }
-    if not required_columns.issubset(available_columns):
-        return "true"
-    prefix = "" if table_alias is None else f"{table_alias}."
-    target_source_filter = ""
-    if "target_source" in available_columns:
-        target_source_filter = f"and coalesce({prefix}target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}"
-    return f"""
-(
-    coalesce({prefix}usable_for_training_flag, false)
-    and coalesce({prefix}label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
-    {target_source_filter}
-)""".strip()
-
-
-def _materialize_gold_split(
-    *,
-    cache_dir: Path,
-    duckdb_path: str | Path,
-    gold_table: str,
-    split_bucket: str,
-    excluded_dataset_sources: tuple[str, ...] = (),
-) -> Path | None:
-    output_path = _materialized_gold_split_path(cache_dir, split_bucket)
-    dataset_scope_filter = dataset_source_not_in_filter(
-        DEFAULT_DATASET_SOURCE_COL,
-        excluded_dataset_sources,
+    return GOLD_TRAINING_ELIGIBILITY.sql_filter(
+        available_columns=set(schema_preview.columns),
+        table_alias=table_alias,
     )
-    connection = duckdb.connect(str(duckdb_path), read_only=True)
-    try:
-        projection_sql = _gold_projection_sql(connection, gold_table=gold_table)
-        training_eligibility_filter = _gold_training_eligibility_filter(
-            connection,
-            gold_table=gold_table,
-            split_bucket=split_bucket,
-        )
-        if (
-            _gold_split_row_count(
-                connection,
-                gold_table=gold_table,
-                split_bucket=split_bucket,
-                excluded_dataset_sources=excluded_dataset_sources,
-            )
-            == 0
-        ):
-            return None
-        connection.execute(
-            f"""
-            copy (
-                select {projection_sql}
-                from {gold_table}
-                where split_bucket = '{split_bucket}'
-                  and {dataset_scope_filter}
-                  and {training_eligibility_filter}
-                order by {DEFAULT_DATE_COL}, {CANONICAL_GROUP_ID_COL}
-            ) to '{output_path.as_posix()}' (
-                format parquet,
-                compression zstd,
-                row_group_size 122880
-            )
-            """
-        )
-    finally:
-        connection.close()
-    return output_path
 
 
 def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
-
-
-def _sql_tuple(values: tuple[str, ...]) -> str:
-    return "(" + ", ".join(_sql_literal(value) for value in values) + ")"
 
 
 def _smoke_series_selection_query(
@@ -330,176 +219,6 @@ def _smoke_series_selection_query(
     order by train_rows desc, tuning_rows desc, dataset_source, {CANONICAL_GROUP_ID_COL}
     limit {int(series_limit)}
     """
-
-
-def _materialize_smoke_gold_split(
-    *,
-    cache_dir: Path,
-    duckdb_path: str | Path,
-    gold_table: str,
-    split_bucket: str,
-    series_limit: int,
-    dataset_source: str | None,
-    min_train_rows: int,
-    min_tuning_rows: int,
-    min_valid_rows: int,
-    excluded_dataset_sources: tuple[str, ...] = (),
-) -> Path | None:
-    output_path = _materialized_gold_split_path(cache_dir, split_bucket)
-    connection = duckdb.connect(str(duckdb_path), read_only=True)
-    try:
-        projection_sql = _gold_projection_sql(
-            connection,
-            gold_table=gold_table,
-            table_alias="gold",
-        )
-        train_eligibility_filter = _gold_training_eligibility_filter(
-            connection,
-            gold_table=gold_table,
-            split_bucket="train",
-        )
-        tuning_eligibility_filter = _gold_training_eligibility_filter(
-            connection,
-            gold_table=gold_table,
-            split_bucket="val",
-        )
-        selected_series_query = _smoke_series_selection_query(
-            gold_table=gold_table,
-            series_limit=series_limit,
-            dataset_source=dataset_source,
-            min_train_rows=min_train_rows,
-            min_tuning_rows=min_tuning_rows,
-            min_valid_rows=min_valid_rows,
-            excluded_dataset_sources=excluded_dataset_sources,
-            train_eligibility_filter=train_eligibility_filter,
-            tuning_eligibility_filter=tuning_eligibility_filter,
-        )
-        training_eligibility_filter = _gold_training_eligibility_filter(
-            connection,
-            gold_table=gold_table,
-            split_bucket=split_bucket,
-        )
-        row = connection.execute(
-            f"select count(*) from ({selected_series_query}) as selected_series"
-        ).fetchone()
-        selected_series_count = 0 if row is None else int(cast(int, row[0]))
-        if selected_series_count == 0:
-            return None
-        connection.execute(
-            f"""
-            copy (
-                with selected_series as (
-                    {selected_series_query}
-                )
-                select {projection_sql}
-                from {gold_table} as gold
-                inner join selected_series
-                    on gold.dataset_source = selected_series.dataset_source
-                   and gold.{CANONICAL_GROUP_ID_COL} = selected_series.{CANONICAL_GROUP_ID_COL}
-                where gold.split_bucket = '{split_bucket}'
-                  and {training_eligibility_filter}
-                order by gold.{DEFAULT_DATE_COL}, gold.{CANONICAL_GROUP_ID_COL}
-            ) to '{output_path.as_posix()}' (
-                format parquet,
-                compression zstd,
-                row_group_size 122880
-            )
-            """
-        )
-    finally:
-        connection.close()
-    return (
-        output_path if output_path.exists() and output_path.stat().st_size > 0 else None
-    )
-
-
-def _load_materialized_gold_frame(path: Path | None) -> pd.DataFrame | None:
-    if path is None:
-        return None
-    return _read_frame(path)
-
-
-def _load_frames_from_gold(
-    *,
-    output_dir: Path,
-    duckdb_path: str | Path,
-    gold_table: str,
-    smoke_series_limit: int | None,
-    smoke_dataset_source: str | None,
-    smoke_min_train_rows: int,
-    smoke_min_tuning_rows: int,
-    smoke_min_valid_rows: int,
-    excluded_optimisation_dataset_sources: tuple[str, ...],
-) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
-    cache_dir = output_dir / "_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    if smoke_series_limit is not None:
-        train_path = _materialize_smoke_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="train",
-            series_limit=smoke_series_limit,
-            dataset_source=smoke_dataset_source,
-            min_train_rows=smoke_min_train_rows,
-            min_tuning_rows=smoke_min_tuning_rows,
-            min_valid_rows=smoke_min_valid_rows,
-            excluded_dataset_sources=excluded_optimisation_dataset_sources,
-        )
-        tuning_path = _materialize_smoke_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="val",
-            series_limit=smoke_series_limit,
-            dataset_source=smoke_dataset_source,
-            min_train_rows=smoke_min_train_rows,
-            min_tuning_rows=smoke_min_tuning_rows,
-            min_valid_rows=smoke_min_valid_rows,
-            excluded_dataset_sources=excluded_optimisation_dataset_sources,
-        )
-        valid_path = _materialize_smoke_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="test",
-            series_limit=smoke_series_limit,
-            dataset_source=smoke_dataset_source,
-            min_train_rows=smoke_min_train_rows,
-            min_tuning_rows=smoke_min_tuning_rows,
-            min_valid_rows=smoke_min_valid_rows,
-            excluded_dataset_sources=(),
-        )
-    else:
-        train_path = _materialize_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="train",
-            excluded_dataset_sources=excluded_optimisation_dataset_sources,
-        )
-        tuning_path = _materialize_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="val",
-            excluded_dataset_sources=excluded_optimisation_dataset_sources,
-        )
-        valid_path = _materialize_gold_split(
-            cache_dir=cache_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            split_bucket="test",
-            excluded_dataset_sources=(),
-        )
-    if train_path is None or tuning_path is None:
-        raise FileNotFoundError(
-            f"Gold table `{gold_table}` must expose non-empty `train` and `val` split buckets."
-        )
-    train_frame = _read_frame(train_path)
-    tuning_frame = _read_frame(tuning_path)
-    valid_frame = _load_materialized_gold_frame(valid_path)
-    return train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame
 
 
 def _load_explicit_frames(
@@ -1119,31 +838,10 @@ def _feature_manifest_payload(
 
 def _load_bundle_frames(
     *,
-    output_dir: Path,
     train_input_path: str | Path | None,
     tuning_input_path: str | Path | None,
     valid_input_path: str | Path | None,
-    duckdb_path: str | Path,
-    gold_table: str,
-    smoke_series_limit: int | None,
-    smoke_dataset_source: str | None,
-    smoke_min_train_rows: int,
-    smoke_min_tuning_rows: int,
-    smoke_min_valid_rows: int,
-    excluded_optimisation_dataset_sources: tuple[str, ...],
 ) -> tuple[Path, Path, Path | None, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
-    if train_input_path is None and tuning_input_path is None:
-        return _load_frames_from_gold(
-            output_dir=output_dir,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            smoke_series_limit=smoke_series_limit,
-            smoke_dataset_source=smoke_dataset_source,
-            smoke_min_train_rows=smoke_min_train_rows,
-            smoke_min_tuning_rows=smoke_min_tuning_rows,
-            smoke_min_valid_rows=smoke_min_valid_rows,
-            excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
-        )
     if train_input_path is None or tuning_input_path is None:
         raise ValueError(
             "train_input_path and tuning_input_path must either both be provided or both be omitted."
@@ -1895,18 +1593,9 @@ def build_training_bundle(
         )
     train_path, tuning_path, valid_path, train_frame, tuning_frame, valid_frame = (
         _load_bundle_frames(
-            output_dir=resolved_output_dir,
             train_input_path=train_input_path,
             tuning_input_path=tuning_input_path,
             valid_input_path=valid_input_path,
-            duckdb_path=duckdb_path,
-            gold_table=gold_table,
-            smoke_series_limit=smoke_series_limit,
-            smoke_dataset_source=smoke_dataset_source,
-            smoke_min_train_rows=smoke_min_train_rows,
-            smoke_min_tuning_rows=smoke_min_tuning_rows,
-            smoke_min_valid_rows=smoke_min_valid_rows,
-            excluded_optimisation_dataset_sources=excluded_optimisation_dataset_sources,
         )
     )
     train_frame_before_holdout = train_frame

@@ -91,7 +91,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             root = Path(temp_dir)
             output_dir = root / "bundle"
             duckdb_path = root / "praedixa.duckdb"
-            gold_table = "gold_daily_product_forecast_panel_d1"
+            gold_table = "gold_training_matrix_d1"
             gold_frame = self._gold_frame()
             self._write_gold_table(duckdb_path, gold_table, gold_frame)
 
@@ -116,7 +116,7 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             root = Path(temp_dir)
             output_dir = root / "bundle"
             duckdb_path = root / "praedixa.duckdb"
-            gold_table = "gold_daily_product_forecast_panel_d1"
+            gold_table = "gold_training_matrix_d1"
             self._write_gold_table(duckdb_path, gold_table, self._gold_smoke_frame())
 
             artifacts = build_training_bundle(
@@ -210,8 +210,11 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             report = json.loads(
                 artifacts["training_exclusion_report"].read_text(encoding="utf-8")
             )
-            self.assertEqual(len(bundled_train), 2)
-            self.assertEqual(report["holdout_exclusions"][0]["excluded_rows"], 1)
+            self.assertEqual(len(bundled_train), 3)
+            self.assertEqual(
+                [row["excluded_rows"] for row in report["holdout_exclusions"]],
+                [0, 0],
+            )
             self.assertEqual(report["splits"][0]["closed_or_dense_zero_rows"], 1)
             self.assertEqual(report["splits"][0]["dropped_rows"], 1)
 
@@ -259,7 +262,15 @@ class TrainingBundleBuilderTests(unittest.TestCase):
             pd.DataFrame(
                 {
                     "dt": pd.date_range("2024-01-01", periods=7, freq="D"),
-                    "dataset_source": ["freshretail"] * 6 + ["bakery"],
+                    "dataset_source": [
+                        "freshretail",
+                        "freshretail",
+                        "bakery",
+                        "freshretail",
+                        "bakery",
+                        "freshretail",
+                        "bakery",
+                    ],
                     "split_bucket": [
                         "train",
                         "train",
@@ -573,8 +584,8 @@ class TrainingBundleBuilderTests(unittest.TestCase):
         bundled_tuning = pd.read_parquet(artifacts["tuning"])
         bundled_valid = pd.read_parquet(artifacts["valid"])
         optimisation_train = pd.read_parquet(artifacts["optimisation_train"])
-        self.assertEqual(set(bundled_train["dataset_source"]), {"freshretail"})
-        self.assertEqual(set(bundled_tuning["dataset_source"]), {"freshretail"})
+        self.assertIn("bakery", set(bundled_train["dataset_source"]))
+        self.assertIn("bakery", set(bundled_tuning["dataset_source"]))
         self.assertIn("bakery", set(bundled_valid["dataset_source"]))
         self.assertNotIn("split_bucket", bundled_train.columns)
         self.assertIn("lag_1", bundled_train.columns)

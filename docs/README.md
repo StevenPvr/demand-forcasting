@@ -15,7 +15,7 @@ Le repo doit se lire dans cet ordre:
 
 ## Etat Court
 
-- Source de verite data: `gold.gold_model_training_panel_d1` dans DuckDB.
+- Source de verite data: `gold.gold_training_matrix_d1` dans DuckDB.
 - Backend courant le plus exploitable: `xgboost`.
 - Backend cible long terme: TFT, encore en durcissement.
 - Cible actuelle: `target_demand_qty_d_plus_1`, avec apprentissage possible sur

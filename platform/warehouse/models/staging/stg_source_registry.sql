@@ -16,6 +16,11 @@ select
     cast(contract_required as boolean) as contract_required,
     cast(review_status as varchar) as review_status,
     cast(include_in_training as boolean) as include_in_training,
+    cast(medallion_enabled as boolean) as medallion_enabled,
+    cast(training_scope as varchar) as training_scope,
+    cast(split_strategy as varchar) as split_strategy,
+    cast(source_priority as integer) as source_priority,
+    cast(source_role as varchar) as source_role,
     cast(review_owner as varchar) as review_owner,
     cast(reviewed_at as date) as reviewed_at,
     cast(notes as varchar) as notes

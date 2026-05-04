@@ -421,6 +421,7 @@ def _assert_prepared_matrix_params_compatible(
     for key in (
         "enable_categorical",
         "enable_dataset_sample_weight",
+        "bakery_sample_weight_multiplier",
         "max_bin",
         "xgboost_matrix_type",
         "xgboost_gpu_input_backend",
@@ -439,6 +440,8 @@ def _matrix_param_value(params: dict[str, object], key: str) -> object:
     value = params.get(key)
     if key == "max_bin" and value is not None:
         return int(cast(Any, value))
+    if key == "bakery_sample_weight_multiplier" and value is not None:
+        return float(cast(Any, value))
     if key in {"enable_categorical", "enable_dataset_sample_weight"}:
         return bool(value)
     if key == "xgboost_matrix_type":

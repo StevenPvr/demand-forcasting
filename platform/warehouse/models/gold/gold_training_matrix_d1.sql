@@ -286,4 +286,4 @@ select
     {{ column }} as {{ column }}{{ role_suffix }}{{ "," if not loop.last }}
     {%- endif %}
 {% endfor %}
-from {{ ref('gold_daily_product_forecast_panel_d1') }}
+from {{ ref('gold_feature_quality_panel_d1') }}

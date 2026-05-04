@@ -2,7 +2,6 @@
 
 with unioned as (
     select
-        10 as source_priority,
         dataset_source,
         source_partition,
         source_run_id,
@@ -63,7 +62,6 @@ with unioned as (
     union all
 
     select
-        20 as source_priority,
         dataset_source,
         source_partition,
         source_run_id,
@@ -121,9 +119,18 @@ with unioned as (
         data_origin
     from {{ ref('silver_synthetic_foodservice_daily_product_demand') }}
 ),
+source_policy as (
+    select
+        dataset_source,
+        min(source_priority) as source_priority
+    from {{ ref('silver_source_registry') }}
+    where source_kind = 'dataset'
+      and dataset_source is not null
+    group by dataset_source
+),
 normalized as (
     select
-        cast(dataset_source as varchar) as dataset_source,
+        cast(unioned.dataset_source as varchar) as dataset_source,
         cast(source_partition as varchar) as source_partition,
         cast(source_run_id as varchar) as source_run_id,
         cast(series_id as varchar) as series_id,
@@ -178,8 +185,10 @@ normalized as (
         cast(source_file_path as varchar) as source_file_path,
         try_cast(source_loaded_at as timestamp) as source_loaded_at,
         cast(data_origin as varchar) as data_origin,
-        source_priority
+        coalesce(source_policy.source_priority, 999) as source_priority
     from unioned
+    left join source_policy
+      on unioned.dataset_source = source_policy.dataset_source
 ),
 ranked as (
     select

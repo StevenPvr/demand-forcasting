@@ -139,7 +139,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
                 overlap_metadata,
             ) = load_gold_reference_mode_frames(
                 duckdb_path="warehouse.duckdb",
-                gold_table="gold.gold_daily_product_forecast_panel_d1",
+                gold_table="gold.gold_training_matrix_d1",
                 train_sample_fraction=0.05,
                 tuning_sample_fraction=0.07,
                 model_backend="xgboost",
@@ -147,7 +147,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
 
         mocked_load_gold.assert_called_once_with(
             duckdb_path="warehouse.duckdb",
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             logger=ANY,
             date_col="dt",
             dataset_source_col="dataset_source",
@@ -163,7 +163,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             duckdb_path="warehouse.duckdb",
             reference_full_df=ANY,
             reference_test_df=scored_reference_test,
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             gold_feature_df=gold_feature_df,
         )
         mocked_materialize.assert_called_once()
@@ -309,7 +309,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
                 overlap_metadata,
             ) = load_gold_reference_mode_frames(
                 duckdb_path="warehouse.duckdb",
-                gold_table="gold.gold_daily_product_forecast_panel_d1",
+                gold_table="gold.gold_training_matrix_d1",
                 train_sample_fraction=0.05,
                 tuning_sample_fraction=0.07,
                 model_backend="timesfm",

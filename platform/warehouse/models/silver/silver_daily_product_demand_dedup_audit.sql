@@ -2,7 +2,6 @@
 
 with unioned as (
     select
-        10 as source_priority,
         dataset_source,
         dt,
         location_id,
@@ -19,7 +18,6 @@ with unioned as (
     union all
 
     select
-        20 as source_priority,
         dataset_source,
         dt,
         location_id,
@@ -33,6 +31,23 @@ with unioned as (
         data_origin
     from {{ ref('silver_synthetic_foodservice_daily_product_demand') }}
 ),
+source_policy as (
+    select
+        dataset_source,
+        min(source_priority) as source_priority
+    from {{ ref('silver_source_registry') }}
+    where source_kind = 'dataset'
+      and dataset_source is not null
+    group by dataset_source
+),
+normalized as (
+    select
+        unioned.*,
+        coalesce(source_policy.source_priority, 999) as source_priority
+    from unioned
+    left join source_policy
+      on unioned.dataset_source = source_policy.dataset_source
+),
 ranked as (
     select
         *,
@@ -43,7 +58,7 @@ ranked as (
         count(*) over (
             partition by dataset_source, dt, location_id, product_id
         ) as duplicate_count
-    from unioned
+    from normalized
 )
 select
     dataset_source,

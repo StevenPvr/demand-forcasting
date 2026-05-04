@@ -570,12 +570,28 @@ date_ranks as (
         count(*) over (partition by dataset_source) as date_count
     from split_scope_dates
 )
-{% if split_strategy == "bakery_test_only" %}
+{% if split_strategy in ["bakery_test_only", "bakery_chrono_75_25_test_3mo"] %}
 ,
 bakery_dataset_bounds as (
     select
         max(dt) as max_dt
     from {{ ref('silver_bakery_daily_product_demand') }}
+),
+bakery_pretest_dates as (
+    select distinct
+        split_scope_dates.dataset_source,
+        split_scope_dates.dt
+    from split_scope_dates
+    cross join bakery_dataset_bounds
+    where split_scope_dates.dt <= bakery_dataset_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month
+),
+bakery_pretest_date_ranks as (
+    select
+        dataset_source,
+        dt,
+        row_number() over (partition by dataset_source order by dt) as date_rank,
+        count(*) over (partition by dataset_source) as date_count
+    from bakery_pretest_dates
 )
 {% endif %}
 ,
@@ -586,6 +602,12 @@ split_labeled as (
         case
             when eligible.dt > bakery_dataset_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month then 'test'
             else null
+        end as split_bucket
+        {% elif split_strategy == "bakery_chrono_75_25_test_3mo" %}
+        case
+            when eligible.dt > bakery_dataset_bounds.max_dt - interval {{ env_var('PRAEDIXA_GOLD_BAKERY_TEST_MONTHS', '3') | int }} month then 'test'
+            when bakery_pretest_ranks.date_rank <= greatest(1, cast(floor(bakery_pretest_ranks.date_count * 0.75) as bigint)) then 'train'
+            else 'val'
         end as split_bucket
         {% elif split_strategy == "pilot_ready_chrono_60_20_20" %}
         case
@@ -609,7 +631,12 @@ split_labeled as (
       on eligible.dataset_source = ranks.dataset_source
      and eligible.dt = ranks.dt
     {% endif %}
-    {% if split_strategy == "bakery_test_only" %}
+    {% if split_strategy == "bakery_chrono_75_25_test_3mo" %}
+    left join bakery_pretest_date_ranks as bakery_pretest_ranks
+      on eligible.dataset_source = bakery_pretest_ranks.dataset_source
+     and eligible.dt = bakery_pretest_ranks.dt
+    {% endif %}
+    {% if split_strategy in ["bakery_test_only", "bakery_chrono_75_25_test_3mo"] %}
     cross join bakery_dataset_bounds
     {% endif %}
 ),

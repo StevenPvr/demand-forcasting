@@ -21,6 +21,19 @@ select
         else 'unreviewed'
     end as review_status,
     coalesce(try_cast(include_in_training as boolean), false) as include_in_training,
+    coalesce(try_cast(medallion_enabled as boolean), false) as medallion_enabled,
+    case
+        when lower(trim(cast(training_scope as varchar))) in ('train', 'reference_eval', 'supplemental', 'none')
+        then lower(trim(cast(training_scope as varchar)))
+        else 'none'
+    end as training_scope,
+    coalesce(nullif(trim(cast(split_strategy as varchar)), ''), 'none') as split_strategy,
+    coalesce(try_cast(source_priority as integer), 999) as source_priority,
+    case
+        when lower(trim(cast(source_role as varchar))) in ('benchmark', 'synthetic', 'supplemental', 'provider', 'excluded')
+        then lower(trim(cast(source_role as varchar)))
+        else 'excluded'
+    end as source_role,
     nullif(trim(cast(review_owner as varchar)), '') as review_owner,
     try_cast(reviewed_at as date) as reviewed_at,
     nullif(trim(cast(notes as varchar)), '') as notes

@@ -26,6 +26,7 @@ from praedixa.demand_forecast.training.validation.folds import (  # noqa: E402
     build_grouped_tuning_walk_forward_folds_by_dataset,
 )
 from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
+    DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
     DEFAULT_XGBOOST_MAX_CAT_THRESHOLD,
     DEFAULT_XGBOOST_MAX_CAT_TO_ONEHOT,
     DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE,
@@ -38,6 +39,7 @@ from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
     DEFAULT_XGBOOST_TUNING_SUBSAMPLE_RANGE,
 )
 import praedixa.demand_forecast.training.xgboost.tuning as xgboost_tuning  # noqa: E402
+import praedixa.demand_forecast.training.xgboost.scoring as xgboost_scoring  # noqa: E402
 from praedixa.demand_forecast.training.xgboost.tuning import (  # noqa: E402
     fit_and_score_xgboost_model_on_tuning,
     guardrail_failure_reason,
@@ -53,15 +55,25 @@ from praedixa.demand_forecast.training.shared.hpo import (  # noqa: E402
 
 
 ObjectiveScoreFn = Callable[[dict[str, object]], float]
+PartialObjectiveScoreFn = Callable[[list[dict[str, object]]], float]
 FinalBestParamsFn = Callable[..., dict[str, object]]
+SampleWeightsFn = Callable[..., np.ndarray]
 
 OBJECTIVE_SCORE = cast(
     ObjectiveScoreFn,
     getattr(xgboost_tuning, "_objective_score"),
 )
+PARTIAL_OBJECTIVE_SCORE = cast(
+    PartialObjectiveScoreFn,
+    getattr(xgboost_scoring, "_partial_objective_score"),
+)
 FINAL_BEST_PARAMS = cast(
     FinalBestParamsFn,
     getattr(xgboost_tuning, "_final_best_params"),
+)
+SAMPLE_WEIGHTS = cast(
+    SampleWeightsFn,
+    getattr(xgboost_scoring, "_sample_weights"),
 )
 
 
@@ -114,6 +126,7 @@ class XGBoostTuningTests(unittest.TestCase):
                 "max_bin": 256,
                 "max_cat_to_onehot": 16,
                 "max_cat_threshold": 128,
+                "bakery_sample_weight_multiplier": 16.0,
             }
         )
 
@@ -123,7 +136,9 @@ class XGBoostTuningTests(unittest.TestCase):
         self.assertEqual(params["max_depth"], 6)
         self.assertTrue(params["enable_early_stopping"])
         self.assertTrue(params["enable_categorical"])
+        self.assertTrue(params["enable_dataset_sample_weight"])
         self.assertEqual(params["early_stopping_rounds"], 100)
+        self.assertEqual(params["bakery_sample_weight_multiplier"], 16.0)
         self.assertEqual(params["max_bin"], 256)
         self.assertEqual(params["max_cat_to_onehot"], 16)
         self.assertEqual(params["max_cat_threshold"], 128)
@@ -135,6 +150,10 @@ class XGBoostTuningTests(unittest.TestCase):
         self.assertIn(14, DEFAULT_XGBOOST_TUNING_MAX_DEPTH_CHOICES)
         self.assertEqual(DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE, (0.005, 0.12))
         self.assertEqual(DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES, (256,))
+        self.assertEqual(
+            DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
+            (0.25, 128.0),
+        )
         self.assertEqual(DEFAULT_XGBOOST_TUNING_MIN_CHILD_WEIGHT_RANGE, (0.5, 64.0))
         self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_ALPHA_RANGE, (1e-8, 10.0))
         self.assertEqual(DEFAULT_XGBOOST_TUNING_REG_LAMBDA_RANGE, (0.1, 300.0))
@@ -326,6 +345,14 @@ class XGBoostTuningTests(unittest.TestCase):
             OBJECTIVE_SCORE(lower_wape_but_overproducing),
         )
 
+    def test_xgboost_objective_rejects_missing_decision_loss(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mean_decision_loss"):
+            OBJECTIVE_SCORE({"macro_mean_wape": 0.10})
+
+    def test_xgboost_partial_objective_rejects_missing_decision_loss(self) -> None:
+        with self.assertRaisesRegex(ValueError, "decision_loss"):
+            PARTIAL_OBJECTIVE_SCORE([{"dataset_source": "fixture", "wape": 0.10}])
+
     def test_final_best_params_keep_economic_objective_artifacts(self) -> None:
         economic_config = {"version": "segmented_asymmetric_economic_objective_final"}
         best_trial = optuna.trial.create_trial(
@@ -357,11 +384,31 @@ class XGBoostTuningTests(unittest.TestCase):
             params["validation_monitor_metric"],
             "segmented_asymmetric_decision_loss",
         )
+        self.assertTrue(params["enable_dataset_sample_weight"])
         self.assertEqual(params["economic_objective_config"], economic_config)
         self.assertEqual(params["segmented_economic_objective_config"], economic_config)
         self.assertEqual(params["mean_decision_loss"], 0.25)
         self.assertEqual(params["validation_bias"], -0.02)
         self.assertEqual(params["segment_decision_loss"], {"bread": 0.25})
+
+    def test_bakery_sample_weight_multiplier_only_changes_bakery_rows(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "dataset_source": [
+                    "bakery",
+                    "bakery",
+                    "synthetic_foodservice_qsr",
+                    "synthetic_foodservice_qsr",
+                ]
+            }
+        )
+
+        baseline = SAMPLE_WEIGHTS(frame, bakery_sample_weight_multiplier=1.0)
+        weighted = SAMPLE_WEIGHTS(frame, bakery_sample_weight_multiplier=16.0)
+
+        self.assertTrue(np.allclose(baseline, [0.25, 0.25, 0.25, 0.25]))
+        self.assertTrue(np.allclose(weighted[:2], [4.0, 4.0]))
+        self.assertTrue(np.allclose(weighted[2:], [0.25, 0.25]))
 
     def test_hpo_metadata_serializes_economic_objective(self) -> None:
         economic_config = {"version": "segmented_asymmetric_economic_objective_final"}

@@ -24,7 +24,7 @@ PYTHONPATH="$PWD:$PWD/platform/python/src:$PWD/products/demand_forecast/src" \
 
 ```sql
 select dataset_source, split_bucket, count(*)
-from gold.gold_model_training_panel_d1
+from gold.gold_training_matrix_d1
 group by 1, 2
 order by 1, 2;
 
@@ -41,7 +41,7 @@ select
     max(case when split_bucket = 'val' then dt end) as val_max_dt,
     min(case when split_bucket = 'test' then dt end) as test_min_dt,
     max(case when split_bucket = 'test' then dt end) as test_max_dt
-from gold.gold_model_training_panel_d1
+from gold.gold_training_matrix_d1
 group by 1
 order by 1;
 
@@ -50,7 +50,7 @@ from bronze.bronze_source_manifest
 order by loaded_at desc;
 
 select *
-from gold.gold_model_training_panel_d1
+from gold.gold_training_matrix_d1
 where decision_timestamp >= cast(target_dt as timestamp);
 ```
 

@@ -38,6 +38,7 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TUNING_PROGRESS_LOG_EVERY,
     DEFAULT_TUNING_RANDOM_SEED,
     DEFAULT_TUNING_TRIALS,
+    DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
     DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE,
     DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE,
@@ -60,7 +61,6 @@ from praedixa.demand_forecast.training.validation.eligibility import (
 )
 from praedixa.demand_forecast.training.xgboost.scoring import (
     XGBoostFoldMatrixCache,
-    build_xgboost_fold_matrix_cache,
     fit_and_score_xgboost_model_on_tuning,
     xgboost_execution_policy,
 )
@@ -105,8 +105,14 @@ def sample_xgboost_optuna_params(
             "max_cat_threshold",
             DEFAULT_XGBOOST_TUNING_MAX_CAT_THRESHOLD_CHOICES,
         ),
+        "bakery_sample_weight_multiplier": trial.suggest_float(
+            "bakery_sample_weight_multiplier",
+            *DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
+            log=True,
+        ),
         "enable_early_stopping": True,
         "enable_categorical": True,
+        "enable_dataset_sample_weight": True,
         "early_stopping_rounds": DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
         "random_state": int(random_seed + trial.number + 1),
     }
@@ -115,7 +121,10 @@ def sample_xgboost_optuna_params(
 def _objective_score(tuning_result: dict[str, object]) -> float:
     decision_loss = tuning_result.get("mean_decision_loss")
     if isinstance(decision_loss, bool) or not isinstance(decision_loss, (int, float)):
-        return -float(cast(Any, tuning_result["macro_mean_wape"]))
+        raise ValueError(
+            "XGBoost optimisation requires a numeric `mean_decision_loss`; "
+            "refusing to fall back to a predictive-error objective."
+        )
     return -float(decision_loss)
 
 
@@ -270,7 +279,9 @@ def _log_xgboost_feature_space(
     logger: logging.Logger,
 ) -> None:
     categorical_cols = [
-        column for column in feature_cols if _is_categorical_feature(train_frame[column])
+        column
+        for column in feature_cols
+        if _is_categorical_feature(train_frame[column])
     ]
     numeric_cols = [
         column for column in feature_cols if _is_numeric_feature(train_frame[column])
@@ -283,22 +294,6 @@ def _log_xgboost_feature_space(
         len(categorical_cols),
         _top_categorical_cardinalities(train_frame, categorical_cols),
     )
-
-
-def _fixed_tuning_max_bin() -> int | None:
-    choices = {int(choice) for choice in DEFAULT_XGBOOST_TUNING_MAX_BIN_CHOICES}
-    if len(choices) != 1:
-        return None
-    return next(iter(choices))
-
-
-def _fold_matrix_cache_params(
-    model_params: dict[str, object] | None,
-) -> dict[str, object] | None:
-    fixed_max_bin = _fixed_tuning_max_bin()
-    if fixed_max_bin is None:
-        return None
-    return {**(model_params or {}), "max_bin": fixed_max_bin}
 
 
 def _best_completed_trial(study: optuna.study.Study) -> optuna.trial.FrozenTrial:
@@ -331,6 +326,7 @@ def _final_best_params(
     best_params["random_state"] = random_seed + best_trial.number + 1
     best_params["n_jobs"] = total_threads
     best_params["enable_categorical"] = True
+    best_params["enable_dataset_sample_weight"] = True
     best_params["enable_early_stopping"] = True
     best_params["early_stopping_rounds"] = DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS
     best_params["validation_monitor_metric"] = "segmented_asymmetric_decision_loss"
@@ -410,8 +406,10 @@ def _build_objective(
                 for key in sorted(trial_params)
                 if key
                 in {
+                    "bakery_sample_weight_multiplier",
                     "colsample_bytree",
                     "early_stopping_rounds",
+                    "enable_dataset_sample_weight",
                     "enable_early_stopping",
                     "learning_rate",
                     "max_bin",
@@ -497,23 +495,12 @@ def _build_fold_matrix_cache_for_objective(
     model_params: dict[str, object] | None,
     total_threads: int,
 ) -> XGBoostFoldMatrixCache | None:
-    cache_params = _fold_matrix_cache_params(model_params)
-    if cache_params is None:
-        logger.info(
-            "XGBoost fold matrix cache skipped: max_bin search space is not fixed."
-        )
-        return None
-    return build_xgboost_fold_matrix_cache(
-        train_frame=train_frame,
-        tuning_frame=tuning_frame,
-        folds=folds,
-        feature_cols=feature_cols,
-        target_contract=target_contract,
-        logger=logger,
-        model_params=cache_params,
-        total_threads=total_threads,
-        train_frame_is_eligible=True,
+    _ = train_frame, tuning_frame, folds, feature_cols, target_contract, model_params
+    _ = total_threads
+    logger.info(
+        "XGBoost fold matrix cache skipped: bakery_sample_weight_multiplier is tuned per trial and changes training sample weights."
     )
+    return None
 
 
 def _record_trial_result(
@@ -543,6 +530,10 @@ def _record_trial_result(
     trial.set_user_attr("baseline_wape_improvement_pct", improvement_pct)
     trial.set_user_attr("fold_wape_scores", tuning_result["fold_results"])
     trial.set_user_attr("folds_completed", tuning_result["folds_completed"])
+    trial.set_user_attr(
+        "training_sample_weight_summary",
+        tuning_result.get("training_sample_weight_summary"),
+    )
     failure_reason = guardrail_failure_reason(
         tuning_result=tuning_result,
         baseline_wape=baseline_wape,
@@ -615,7 +606,9 @@ def _record_decision_trial_attrs(
         "segmented_economic_objective_config",
         tuning_result.get(
             "segmented_economic_objective_config",
-            tuning_result.get("economic_objective_config", economic_objective_config_payload()),
+            tuning_result.get(
+                "economic_objective_config", economic_objective_config_payload()
+            ),
         ),
     )
 

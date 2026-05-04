@@ -140,6 +140,8 @@ def _write_selected_inputs(root: Path) -> tuple[Path, Path, pd.DataFrame, pd.Dat
     train_input_path = root / "train_selection_70_selected.parquet"
     tuning_input_path = root / "train_tuning_30_selected.parquet"
     train_frame, tuning_frame = _sinusoidal_frames()
+    train_frame = train_frame.rename(columns={"target": "target_demand_qty_d_plus_1"})
+    tuning_frame = tuning_frame.rename(columns={"target": "target_demand_qty_d_plus_1"})
     train_frame.to_parquet(train_input_path, index=False)
     tuning_frame.to_parquet(tuning_input_path, index=False)
     return train_input_path, tuning_input_path, train_frame, tuning_frame
@@ -193,7 +195,7 @@ def _write_gold_table(duckdb_path: Path) -> None:
         connection.execute("create schema gold")
         connection.register("gold_frame", _gold_frame())
         connection.execute(
-            "create table gold.gold_daily_product_forecast_panel_d1 as select * from gold_frame"
+            "create table gold.gold_training_matrix_d1 as select * from gold_frame"
         )
         connection.unregister("gold_frame")
     finally:
@@ -202,7 +204,7 @@ def _write_gold_table(duckdb_path: Path) -> None:
 
 class OptimisationPipelineTests(unittest.TestCase):
     def test_training_defaults_to_model_facing_gold_panel(self) -> None:
-        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_model_training_panel_d1")
+        self.assertEqual(DEFAULT_GOLD_TABLE, "gold.gold_training_matrix_d1")
 
     def test_optimisation_request_defaults_to_full_sampling(self) -> None:
         request = OptimisationBuildRequest()
@@ -587,7 +589,7 @@ class OptimisationPipelineTests(unittest.TestCase):
                         tuning_input_path=None,
                         output_dir=output_dir,
                         duckdb_path=duckdb_path,
-                        gold_table="gold.gold_daily_product_forecast_panel_d1",
+                        gold_table="gold.gold_training_matrix_d1",
                         n_folds=1,
                         tuning_trials=2,
                         train_sample_fraction=1.0,
@@ -598,9 +600,7 @@ class OptimisationPipelineTests(unittest.TestCase):
 
             metadata = _assert_output_artifacts(output_dir)
             self.assertIsNone(metadata["train_input_path"])
-            self.assertEqual(
-                metadata["gold_table"], "gold.gold_daily_product_forecast_panel_d1"
-            )
+            self.assertEqual(metadata["gold_table"], "gold.gold_training_matrix_d1")
 
 
 if __name__ == "__main__":

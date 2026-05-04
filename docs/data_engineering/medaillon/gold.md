@@ -10,11 +10,11 @@ Gold produit le dataset ML D+1 du wedge Praedixa: prévoir la demande du lendema
 - `gold_feature_synthetic_foodservice_d1`
 - `gold_feature_panel_d1`
 - `gold_source_weights_d1`
-- `gold_daily_product_forecast_panel_d1`
-- `gold_model_training_panel_d1`
+- `gold_feature_quality_panel_d1`
+- `gold_training_matrix_d1`
 - `gold_run_manifest`
 
-La table consommée par le bundle est `gold_model_training_panel_d1`.
+La table consommée par le bundle est `gold_training_matrix_d1`.
 
 `gold_feature_supplemental_corpus_d1` existe comme surface de modèle mais est
 désactivée dans l'état courant. L'union active de `gold_feature_panel_d1`
@@ -49,11 +49,12 @@ Une ligne n'est pas utilisable si:
 
 - `label_quality_score < 0.75`;
 - `target_source in ('closed_or_missing_observation', 'dense_calendar_zero_fill')`;
+- `censor_flag = true` avec une cible de vente observée non reconstruite en demande latente;
 - la source n'est pas autorisée par la registry.
 
-`censor_flag` / `observed_stockout_flag` sont des signaux descriptifs. Dans le
-contrat actuel, la cible est la vente observée: une vente sous contrainte reste
-donc un label valide si l'observation POS elle-même est complète.
+`censor_flag` / `observed_stockout_flag` restent descriptifs dans Gold, mais
+le contrat d'entraînement n'autorise une ligne censurée que si
+`target_semantics = 'latent_demand_estimated'`.
 
 ## Contrat Résiduel XGBoost
 
@@ -83,7 +84,8 @@ Stratégies actuelles:
 
 - `synthetic_foodservice%`: `pilot_ready_chrono_60_20_20`, soit 60 % train,
   20 % val et 20 % test chronologiques par `dataset_source`;
-- `bakery`: `bakery_test_only`, soit holdout final sur les 3 derniers mois;
+- `bakery`: `bakery_chrono_75_25_test_3mo`, soit les 3 derniers mois en test
+  final puis 75 % train / 25 % val chronologiques sur le pré-test;
 - `m5_forecasting_accuracy`: surface supplemental `chrono_60_40`, mais modèle
   Gold désactivé dans l'état courant.
 
@@ -92,16 +94,19 @@ utilisé par Optuna/HPO.
 
 ### Évaluation Finale
 
-`bakery` est réservé au holdout d'évaluation finale. Le modèle ne doit pas voir
-Bakery pendant l'optimisation générale.
+`bakery` participe désormais au train et à la validation HPO sur la période
+pré-test. Les 3 derniers mois restent réservés au holdout d'évaluation finale.
 
-La stratégie `bakery_test_only` conserve uniquement:
+La stratégie `bakery_chrono_75_25_test_3mo` produit:
 
-- `split_bucket = 'test'`;
-- les lignes Bakery dont `dt` est dans les 3 derniers mois disponibles de
-  `silver_bakery_daily_product_demand`;
-- une fenêtre configurable via `PRAEDIXA_GOLD_BAKERY_TEST_MONTHS`, avec `3` mois
-  par défaut.
+- `split_bucket = 'test'` pour les lignes Bakery dont `dt` est dans les 3
+  derniers mois disponibles de `silver_bakery_daily_product_demand`;
+- `split_bucket = 'train'` pour les 75 premiers pourcents chronologiques des
+  dates Bakery pré-test;
+- `split_bucket = 'val'` pour les 25 derniers pourcents chronologiques des
+  dates Bakery pré-test;
+- une fenêtre test configurable via `PRAEDIXA_GOLD_BAKERY_TEST_MONTHS`, avec
+  `3` mois par défaut.
 
 Dans le bundle, `test` devient `valid.parquet` et `optimisation_valid.parquet`.
 Malgré le nom historique `valid`, ce fichier correspond au holdout final
@@ -117,12 +122,13 @@ Résumé du mapping:
 
 | Niveau gold | Source | Usage bundle |
 | --- | --- | --- |
-| `train` | synthetic foodservice actif | `train.parquet`, optimisation fit |
-| `val` | synthetic foodservice actif | `tuning.parquet`, validation HPO |
-| `test` | `bakery` uniquement | `valid.parquet`, évaluation finale |
+| `train` | synthetic foodservice actif + Bakery pré-test | `train.parquet`, optimisation fit |
+| `val` | synthetic foodservice actif + Bakery pré-test | `tuning.parquet`, validation HPO |
+| `test` | synthetic foodservice actif + 3 derniers mois Bakery | `valid.parquet`, évaluation finale |
 
-Dans le protocole XGBoost bakery reference du 2026-04-30, la validation HPO
-reste synthetic foodservice; Bakery n'est pas utilisé comme validation HPO.
+Dans le protocole XGBoost courant, Optuna peut aussi optimiser
+`bakery_sample_weight_multiplier` pour pondérer les lignes Bakery à
+l'entraînement sans pondérer la validation ni le test.
 
 ## Feature Registry
 

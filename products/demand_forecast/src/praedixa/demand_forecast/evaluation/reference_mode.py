@@ -32,9 +32,6 @@ from praedixa.demand_forecast.training.validation.eligibility import (
     TRAINING_ELIGIBILITY_COLUMNS,
     training_eligibility_mask,
 )
-from praedixa.demand_forecast.training.config.constants import (
-    DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
-)
 from praedixa.demand_forecast.contracts.targets import (
     TargetContract,
     ensure_learning_target_column,
@@ -45,6 +42,7 @@ _BAKERY_REFIT_SEED_FLAG_COL = "bakery_refit_seed_flag"
 _TRANSFER_HOLDOUT_MODEL_BACKENDS: frozenset[str] = frozenset(
     {"xgboost", "chronos2", "moirai", "timesfm"}
 )
+_REFERENCE_MODE_HOLDOUT_DATASET_SOURCES: tuple[str, ...] = ("bakery",)
 _BAKERY_REFIT_SEED_HISTORY_MONTHS = 1
 
 
@@ -321,7 +319,7 @@ def _load_transfer_training_frames(
         dataset_source_col=DEFAULT_DATASET_SOURCE_COL,
         train_sample_fraction=train_sample_fraction,
         tuning_sample_fraction=tuning_sample_fraction,
-        excluded_dataset_sources=DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES,
+        excluded_dataset_sources=_REFERENCE_MODE_HOLDOUT_DATASET_SOURCES,
     )
     return train_frame, valid_frame
 
@@ -700,7 +698,7 @@ def load_gold_reference_mode_frames(
         "model_training_dataset_sources": _dataset_sources(resolved_train_frame),
         "model_validation_dataset_sources": _dataset_sources(resolved_valid_frame),
         "model_training_excluded_dataset_sources": list(
-            DEFAULT_OPTIMISATION_HOLDOUT_DATASET_SOURCES
+            _REFERENCE_MODE_HOLDOUT_DATASET_SOURCES
         )
         if transfer_training or foundation_hybrid_training
         else [],

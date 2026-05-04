@@ -175,7 +175,7 @@ class SamplingQueriesTests(unittest.TestCase):
 
     def test_gold_train_sampling_requires_training_eligible_rows(self) -> None:
         query = build_gold_split_sampling_query(
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             split_bucket="train",
             date_col="dt",
             dataset_source_col="dataset_source",
@@ -190,22 +190,25 @@ class SamplingQueriesTests(unittest.TestCase):
                 "usable_for_training_flag",
                 "censor_flag",
                 "label_quality_score",
+                "target_semantics",
                 "target_source",
             ],
         )
 
         self.assertIn("coalesce(usable_for_training_flag, false)", query)
-        self.assertNotIn("not coalesce(censor_flag, false)", query)
+        self.assertIn("not coalesce(censor_flag, false)", query)
+        self.assertIn("latent_demand_estimated", query)
         self.assertIn("coalesce(label_quality_score, 0.0) >= 0.750000", query)
         self.assertIn(
             "coalesce(target_source, '') not in ('closed_or_missing_observation', 'dense_calendar_zero_fill')",
             query,
         )
-        self.assertIn("dataset_source not in ('bakery')", query)
+        self.assertIn("and true", query)
+        self.assertNotIn("dataset_source not in ('bakery')", query)
 
     def test_gold_sampling_can_scope_to_included_dataset_sources(self) -> None:
         query = build_gold_split_sampling_query(
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             split_bucket="train",
             date_col="dt",
             dataset_source_col="dataset_source",
@@ -216,11 +219,11 @@ class SamplingQueriesTests(unittest.TestCase):
         )
 
         self.assertIn("dataset_source in ('synthetic_foodservice_qsr')", query)
-        self.assertIn("dataset_source not in ('bakery')", query)
+        self.assertNotIn("dataset_source not in ('bakery')", query)
 
     def test_gold_val_sampling_requires_training_eligible_rows(self) -> None:
         query = build_gold_split_sampling_query(
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             split_bucket="val",
             date_col="dt",
             dataset_source_col="dataset_source",
@@ -235,6 +238,7 @@ class SamplingQueriesTests(unittest.TestCase):
                 "usable_for_training_flag",
                 "censor_flag",
                 "label_quality_score",
+                "target_semantics",
                 "target_source",
             ],
         )
@@ -246,7 +250,7 @@ class SamplingQueriesTests(unittest.TestCase):
         self,
     ) -> None:
         query = build_gold_split_sampling_query(
-            gold_table="gold.gold_daily_product_forecast_panel_d1",
+            gold_table="gold.gold_training_matrix_d1",
             split_bucket="train",
             date_col="dt",
             dataset_source_col="dataset_source",

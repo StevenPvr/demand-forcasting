@@ -18,16 +18,18 @@ for path in (PROJECT_ROOT, PLATFORM_SRC):
         sys.path.insert(0, str(path))
 
 from praedixa.platform.warehouse.dbt_runner import DbtStageResult  # noqa: E402
-from praedixa.platform.warehouse.local_silver import (  # noqa: E402
-    DEFAULT_LOCAL_DUCKDB_PATH,
-    LocalSilverRunConfig,
-    build_local_silver_env,
+from praedixa.platform.warehouse.dbt_runner import (  # noqa: E402
     dbt_packages_installed,
     ensure_dbt_profiles_file,
     resolve_dbt_selector,
     resolve_dbt_test_exclude,
     resolve_dbt_test_selector,
     resolve_warehouse_project_dir,
+)
+from praedixa.platform.warehouse.local_silver import (  # noqa: E402
+    DEFAULT_LOCAL_DUCKDB_PATH,
+    LocalSilverRunConfig,
+    build_local_silver_env,
     run_local_silver,
 )
 

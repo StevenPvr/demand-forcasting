@@ -1,7 +1,7 @@
 # Architecture Médaillon Actuelle
 
 Le médaillon actif est local, DuckDB/dbt-first, et orienté prévision D+1. La
-source de vérité aval est `gold.gold_model_training_panel_d1`, pas les anciens
+source de vérité aval est `gold.gold_training_matrix_d1`, pas les anciens
 parquets intermédiaires.
 
 ```mermaid
@@ -13,7 +13,7 @@ flowchart TB
   BronzeOpen["bronze_open_*"] --> SilverExog
   SilverExog["silver_open_*<br/>providers allowlist uniquement"] --> Gold
   SilverCore --> Gold
-  Gold["run_gold<br/>gold_base_panel_d1<br/>gold_feature_bakery_d1<br/>gold_feature_synthetic_foodservice_d1<br/>gold_model_training_panel_d1"] --> Bundle
+  Gold["run_gold<br/>gold_base_panel_d1<br/>gold_feature_bakery_d1<br/>gold_feature_synthetic_foodservice_d1<br/>gold_training_matrix_d1"] --> Bundle
   Bundle["training_bundle<br/>train/tuning filtrés<br/>contrat cible + feature manifest"] --> Evaluation
   Evaluation["evaluation bakery reference<br/>daily refit walk-forward<br/>metrics + economic gain"]
 ```
@@ -33,7 +33,8 @@ flowchart TB
 - `gold`: dataset ML D+1, avec labels alignés dans le futur, disponibilité
   temporelle explicite et contrat consommable par le bundle. Le synthetic
   foodservice actif suit `pilot_ready_chrono_60_20_20`; `bakery` suit
-  `bakery_test_only` sur les 3 derniers mois. Les runs de référence peuvent
+  `bakery_chrono_75_25_test_3mo`, avec train/val sur le pré-test et les 3
+  derniers mois en test. Les runs de référence peuvent
   matérialiser des cibles résiduelles autour d'une baseline terrain, mais
   l'évaluation se lit sur la cible absolue reconstruite.
 - `training_bundle`: filtre les lignes train/tuning non éligibles et conserve un

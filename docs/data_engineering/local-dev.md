@@ -16,7 +16,7 @@ Ordre réel:
 1. `load_core_bronze`: charge les sources locales coeur dans DuckDB.
 2. `run_silver`: exécute dbt sur la silver canonique.
 3. `refresh_open_exogenous`: lit `silver.silver_daily_product_demand`, produit les CSV open data, puis charge les `bronze_open_*`.
-4. `run_gold`: matérialise le panel gold et le contrat `gold_model_training_panel_d1`.
+4. `run_gold`: matérialise le panel gold et le contrat `gold_training_matrix_d1`.
 
 ## Variantes Sans CLI
 

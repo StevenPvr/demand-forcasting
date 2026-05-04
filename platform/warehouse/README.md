@@ -94,13 +94,15 @@ Important :
 
 ## Split Gold Actif
 
-Le contrat `gold.gold_model_training_panel_d1` sépare optimisation et évaluation:
+Le contrat `gold.gold_training_matrix_d1` sépare optimisation et évaluation:
 
 - les sources d'entraînement autorisées alimentent uniquement `train` et `val`;
 - leur split est chronologique 60/40 par `dataset_source`;
-- `bakery` alimente uniquement `test`;
-- le `test` Bakery couvre les 3 derniers mois disponibles par défaut
-  (`PRAEDIXA_GOLD_BAKERY_TEST_MONTHS=3`).
+- `bakery` alimente `train` et `val` sur sa période pré-test;
+- le `test` Bakery couvre toujours les 3 derniers mois disponibles par défaut
+  (`PRAEDIXA_GOLD_BAKERY_TEST_MONTHS=3`);
+- la période Bakery pré-test est répartie chronologiquement en 75 % `train`
+  puis 25 % `val`.
 
 Mapping bundle:
 
@@ -179,7 +181,7 @@ Cette commande :
 - lance silver
 - rafraîchit et charge les exogènes ouverts
 - lance gold
-- publie `gold.gold_model_training_panel_d1`
+- publie `gold.gold_training_matrix_d1`
 
 Les variantes se font via les dataclasses Python importables, pas avec des flags
 CLI. Les wrappers `main.py` sont volontairement sans parser.

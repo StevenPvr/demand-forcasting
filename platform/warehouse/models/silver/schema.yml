@@ -142,6 +142,27 @@ models:
           - accepted_values:
               arguments:
                 values: ["allowed", "quarantine", "rejected", "unreviewed"]
+      - name: medallion_enabled
+        tests:
+          - not_null
+      - name: training_scope
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["train", "reference_eval", "supplemental", "none"]
+      - name: split_strategy
+        tests:
+          - not_null
+      - name: source_priority
+        tests:
+          - not_null
+      - name: source_role
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["benchmark", "synthetic", "supplemental", "provider", "excluded"]
 
   - name: silver_allowed_provider_sources
     columns:

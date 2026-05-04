@@ -66,6 +66,95 @@ def validate_medallion_plan(config: MedallionRunConfig) -> None:
         )
 
 
+class MedallionPipelineRunner:
+    """Execute the local medallion workflow without duplicating dbt stage wiring."""
+
+    def __init__(
+        self,
+        dbt_runner_factory: Callable[[], DbtStageRunner] = DbtStageRunner,
+    ) -> None:
+        self._dbt_runner_factory = dbt_runner_factory
+
+    def run(self, config: MedallionRunConfig) -> dict[str, object]:
+        validate_medallion_plan(config)
+        env = self._build_env(config)
+        results: dict[str, object] = {}
+
+        if config.load_core_bronze:
+            results["load_core_bronze"] = self._load_core_bronze(config, env)
+        if config.run_silver:
+            results["run_silver"] = self._run_silver(config, env)
+        if config.refresh_open_exogenous:
+            results["refresh_open_exogenous"] = self._refresh_open_exogenous(env)
+        if config.run_gold:
+            results["run_gold"] = self._run_gold(config, env)
+
+        return results
+
+    def _build_env(self, config: MedallionRunConfig) -> dict[str, str]:
+        env = build_local_gold_env()
+        env["PRAEDIXA_BRONZE_DATA_DIR"] = str(config.silver.data_dir)
+        return env
+
+    def _load_core_bronze(
+        self,
+        config: MedallionRunConfig,
+        env: dict[str, str],
+    ) -> dict[str, object] | None:
+        logger.info("Starting medallion step: load_core_bronze.")
+        return load_core_bronze_sources(config.silver, env)
+
+    def _run_silver(
+        self,
+        config: MedallionRunConfig,
+        env: dict[str, str],
+    ) -> dict[str, object]:
+        logger.info("Starting medallion step: run_silver.")
+        return self._run_dbt_stage(
+            stage_config=DbtStageRunConfig(
+                selector=config.silver.dbt_select,
+                test_selector=resolve_dbt_test_selector(config.silver.dbt_select),
+                test_exclude=resolve_dbt_test_exclude(),
+                run_tests=config.silver.run_dbt_tests,
+            ),
+            env=env,
+        )
+
+    def _refresh_open_exogenous(self, env: dict[str, str]) -> dict[str, object]:
+        logger.info("Starting medallion step: refresh_open_exogenous.")
+        return refresh_open_exogenous_inputs(env)
+
+    def _run_gold(
+        self,
+        config: MedallionRunConfig,
+        env: dict[str, str],
+    ) -> dict[str, object]:
+        logger.info("Starting medallion step: run_gold.")
+        return self._run_dbt_stage(
+            stage_config=DbtStageRunConfig(
+                selector=config.gold.dbt_select,
+                test_selector=config.gold.dbt_select.strip().lstrip("+"),
+                run_tests=config.gold.run_dbt_tests,
+            ),
+            env=env,
+        )
+
+    def _run_dbt_stage(
+        self,
+        *,
+        stage_config: DbtStageRunConfig,
+        env: dict[str, str],
+    ) -> dict[str, object]:
+        return (
+            self._dbt_runner_factory()
+            .run_stage(
+                config=stage_config,
+                env=env,
+            )
+            .as_dict()
+        )
+
+
 def run_local_medallion_pipeline(
     config: MedallionRunConfig,
     *,
@@ -73,42 +162,4 @@ def run_local_medallion_pipeline(
 ) -> dict[str, object]:
     """Run the local medallion pipeline with explicit bronze/silver/open/gold steps."""
 
-    validate_medallion_plan(config)
-    results: dict[str, object] = {}
-    env = build_local_gold_env()
-    env["PRAEDIXA_BRONZE_DATA_DIR"] = str(config.silver.data_dir)
-
-    if config.load_core_bronze:
-        logger.info("Starting medallion step: load_core_bronze.")
-        results["load_core_bronze"] = load_core_bronze_sources(config.silver, env)
-
-    if config.run_silver:
-        logger.info("Starting medallion step: run_silver.")
-        runner = dbt_runner_factory()
-        results["run_silver"] = runner.run_stage(
-            config=DbtStageRunConfig(
-                selector=config.silver.dbt_select,
-                test_selector=resolve_dbt_test_selector(config.silver.dbt_select),
-                test_exclude=resolve_dbt_test_exclude(),
-                run_tests=config.silver.run_dbt_tests,
-            ),
-            env=env,
-        ).as_dict()
-
-    if config.refresh_open_exogenous:
-        logger.info("Starting medallion step: refresh_open_exogenous.")
-        results["refresh_open_exogenous"] = refresh_open_exogenous_inputs(env)
-
-    if config.run_gold:
-        logger.info("Starting medallion step: run_gold.")
-        runner = dbt_runner_factory()
-        results["run_gold"] = runner.run_stage(
-            config=DbtStageRunConfig(
-                selector=config.gold.dbt_select,
-                test_selector=config.gold.dbt_select.strip().lstrip("+"),
-                run_tests=config.gold.run_dbt_tests,
-            ),
-            env=env,
-        ).as_dict()
-
-    return results
+    return MedallionPipelineRunner(dbt_runner_factory=dbt_runner_factory).run(config)

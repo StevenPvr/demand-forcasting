@@ -1,8 +1,13 @@
 {{ config(tags=["silver", "demand", "training"], materialized="table") }}
 
 with allowed_training_sources as (
-    select dataset_source
+    select
+        dataset_source,
+        medallion_enabled,
+        training_scope
     from {{ ref('silver_allowed_training_dataset_sources') }}
+    where medallion_enabled
+      and training_scope in ('train', 'reference_eval')
 ),
 candidate_rows as (
     select
@@ -10,8 +15,6 @@ candidate_rows as (
     from {{ ref('silver_daily_product_demand_all') }} as demand
     inner join allowed_training_sources
       on demand.dataset_source = allowed_training_sources.dataset_source
-    where demand.dataset_source in ('bakery')
-       or demand.dataset_source like 'synthetic_foodservice%'
 )
 select
     dataset_source,

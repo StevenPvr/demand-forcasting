@@ -28,7 +28,9 @@ source_policy as (
         dataset_source,
         max(legal_basis) as source_legal_basis,
         max(license_type) as source_license_type,
-        max(review_status) as source_review_status
+        max(review_status) as source_review_status,
+        max(source_role) as source_role,
+        bool_or(source_role = 'synthetic') as is_synthetic_source
     from {{ ref('silver_source_registry') }}
     where source_kind = 'dataset'
       and dataset_source is not null
@@ -212,12 +214,8 @@ dense_panel as (
         coalesce(source_policy.source_license_type, 'unknown') as source_license_type,
         coalesce(source_policy.source_review_status, 'unknown') as source_review_status,
         coalesce(source_policy.source_review_status, 'unknown') as source_legal_status_snapshot,
-        case
-            when dense.dataset_source like 'synthetic_foodservice%' then 'synthetic'
-            when dense.dataset_source = 'bakery' then 'benchmark'
-            else 'supplemental'
-        end as source_role,
-        dense.dataset_source like 'synthetic_foodservice%' as is_synthetic_source,
+        coalesce(source_policy.source_role, 'supplemental') as source_role,
+        coalesce(source_policy.is_synthetic_source, false) as is_synthetic_source,
         '{{ gold_run_id }}' as gold_run_id
     from dense_dates as dense
     inner join series_bounds as bounds

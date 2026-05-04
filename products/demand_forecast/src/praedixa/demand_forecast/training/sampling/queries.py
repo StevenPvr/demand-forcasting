@@ -12,20 +12,13 @@ from praedixa.demand_forecast.training.sampling.dataset_filters import (
     dataset_source_not_in_filter,
 )
 from praedixa.demand_forecast.training.validation.eligibility import (
-    DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE,
-    NON_TRAINABLE_TARGET_SOURCES,
+    GOLD_TRAINING_ELIGIBILITY,
 )
 from praedixa.demand_forecast.training.sampling.models import (
     GoldSplitSamplingSpec,
     RelationSamplingQuery,
     RelationSamplingSpec,
 )
-
-_TRAINING_ELIGIBILITY_SQL_COLUMNS: set[str] = {
-    "usable_for_training_flag",
-    "label_quality_score",
-    "target_source",
-}
 
 
 def _per_stratum_sample_target_sql(sample_fraction: float) -> str:
@@ -41,22 +34,8 @@ def _per_series_stratum_sample_target_sql(sample_fraction: float) -> str:
     )
 
 
-def _sql_tuple(values: tuple[str, ...]) -> str:
-    quoted_values = ["'" + value.replace("'", "''") + "'" for value in values]
-    return "(" + ", ".join(quoted_values) + ")"
-
-
 def _gold_training_eligibility_filter(selected_columns: list[str] | None) -> str:
-    if selected_columns is not None and not _TRAINING_ELIGIBILITY_SQL_COLUMNS.issubset(
-        set(selected_columns)
-    ):
-        return "true"
-    return f"""
-(
-    coalesce(usable_for_training_flag, false)
-    and coalesce(label_quality_score, 0.0) >= {DEFAULT_MIN_TRAINING_LABEL_QUALITY_SCORE:.6f}
-    and coalesce(target_source, '') not in {_sql_tuple(NON_TRAINABLE_TARGET_SOURCES)}
-)""".strip()
+    return GOLD_TRAINING_ELIGIBILITY.sql_filter(available_columns=selected_columns)
 
 
 def build_gold_split_sampling_query(

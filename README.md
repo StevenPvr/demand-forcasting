@@ -22,7 +22,7 @@ Point d'entree recommande:
 
 ## Etat Actuel
 
-- Source de verite data: `gold.gold_model_training_panel_d1`.
+- Source de verite data: `gold.gold_training_matrix_d1`.
 - Warehouse local: DuckDB + dbt, couches `bronze -> silver -> gold`.
 - Backend courant exploitable: `xgboost`.
 - Backend cible: TFT, encore en durcissement.
@@ -54,7 +54,7 @@ sur l'erreur moyenne.
 sources locales / open data / bakery / synthetic foodservice
 -> bronze DuckDB
 -> silver_daily_product_demand
--> gold.gold_model_training_panel_d1
+-> gold.gold_training_matrix_d1
 -> training bundle / feature selection
 -> XGBoost ou TFT
 -> evaluation bakery reference

@@ -12,7 +12,7 @@ flowchart TB
   Sources["sources locales, bakery, corpus supplemental, synthetic foodservice"] --> Bronze
   Bronze["bronze DuckDB<br/>manifest + policy source"] --> Silver
   Silver["silver_daily_product_demand<br/>schema operationnel quotidien"] --> Gold
-  Gold["gold_base_panel_d1<br/>gold_feature_*_d1<br/>gold_model_training_panel_d1"] --> FeatureSelection
+  Gold["gold_base_panel_d1<br/>gold_feature_*_d1<br/>gold_training_matrix_d1"] --> FeatureSelection
   FeatureSelection["feature selection<br/>manifest features modele"] --> Training
   Training["training / tuning<br/>XGBoost courant, TFT cible"] --> Evaluation
   Evaluation["bakery reference evaluation<br/>daily refit walk-forward"] --> Artifacts
@@ -26,7 +26,7 @@ flowchart TB
 Le warehouse local est `DuckDB + dbt`. La table aval de reference est:
 
 ```text
-gold.gold_model_training_panel_d1
+gold.gold_training_matrix_d1
 ```
 
 Elle porte le panel quotidien au grain:
