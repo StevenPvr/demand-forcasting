@@ -41,6 +41,7 @@ from praedixa.demand_forecast.training.config.constants import (  # noqa: E402
 import praedixa.demand_forecast.training.xgboost.tuning as xgboost_tuning  # noqa: E402
 import praedixa.demand_forecast.training.xgboost.scoring as xgboost_scoring  # noqa: E402
 from praedixa.demand_forecast.training.xgboost.tuning import (  # noqa: E402
+    dataset_wape_collapse_warning,
     fit_and_score_xgboost_model_on_tuning,
     guardrail_failure_reason,
     sample_xgboost_optuna_params,
@@ -328,6 +329,28 @@ class XGBoostTuningTests(unittest.TestCase):
                 baseline_dataset_wape={"fixture": 0.50},
             ),
             "absolute_bias_too_high",
+        )
+
+    def test_dataset_wape_collapse_is_warning_not_terminal_guardrail(self) -> None:
+        collapsed_result: dict[str, object] = {
+            "dataset_mean_wape": {"fixture": 0.90},
+            "mean_abs_normalized_bias": 0.20,
+        }
+
+        self.assertIsNone(
+            guardrail_failure_reason(
+                tuning_result=collapsed_result,
+                baseline_wape=0.50,
+                baseline_dataset_wape={"fixture": 0.50},
+            )
+        )
+        self.assertEqual(
+            dataset_wape_collapse_warning(
+                tuning_result=collapsed_result,
+                baseline_wape=0.50,
+                baseline_dataset_wape={"fixture": 0.50},
+            ),
+            "dataset_wape_collapse:fixture",
         )
 
     def test_xgboost_objective_prefers_decision_loss_over_wape(self) -> None:

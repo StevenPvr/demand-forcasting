@@ -134,6 +134,24 @@ def guardrail_failure_reason(
     baseline_wape: float,
     baseline_dataset_wape: dict[str, float],
 ) -> str | None:
+    _ = baseline_dataset_wape
+    mean_abs_normalized_bias = tuning_result.get("mean_abs_normalized_bias")
+    if isinstance(mean_abs_normalized_bias, (int, float)) and float(
+        mean_abs_normalized_bias
+    ) > max(
+        DEFAULT_TUNING_GUARDRAIL_MIN_ABS_BIAS_LIMIT,
+        baseline_wape,
+    ):
+        return "absolute_bias_too_high"
+    return None
+
+
+def dataset_wape_collapse_warning(
+    *,
+    tuning_result: dict[str, object],
+    baseline_wape: float,
+    baseline_dataset_wape: dict[str, float],
+) -> str | None:
     dataset_mean_wape = cast(dict[str, float], tuning_result["dataset_mean_wape"])
     collapsed = [
         dataset_source
@@ -144,14 +162,6 @@ def guardrail_failure_reason(
     ]
     if collapsed:
         return f"dataset_wape_collapse:{','.join(collapsed)}"
-    mean_abs_normalized_bias = tuning_result.get("mean_abs_normalized_bias")
-    if isinstance(mean_abs_normalized_bias, (int, float)) and float(
-        mean_abs_normalized_bias
-    ) > max(
-        DEFAULT_TUNING_GUARDRAIL_MIN_ABS_BIAS_LIMIT,
-        baseline_wape,
-    ):
-        return "absolute_bias_too_high"
     return None
 
 
@@ -224,6 +234,7 @@ def _tuning_report_row(trial: optuna.trial.FrozenTrial) -> dict[str, object]:
         ),
         "native_best_score": _trial_user_attr_float(trial, "native_best_score"),
         "failure_reason": str(trial.user_attrs.get("failure_reason", "")),
+        "guardrail_warning": str(trial.user_attrs.get("guardrail_warning", "")),
         "baseline_wape_improvement_pct": _trial_user_attr_float(
             trial, "baseline_wape_improvement_pct"
         ),
@@ -534,6 +545,13 @@ def _record_trial_result(
         "training_sample_weight_summary",
         tuning_result.get("training_sample_weight_summary"),
     )
+    warning = dataset_wape_collapse_warning(
+        tuning_result=tuning_result,
+        baseline_wape=baseline_wape,
+        baseline_dataset_wape=baseline_dataset_wape,
+    )
+    if warning is not None:
+        trial.set_user_attr("guardrail_warning", warning)
     failure_reason = guardrail_failure_reason(
         tuning_result=tuning_result,
         baseline_wape=baseline_wape,
