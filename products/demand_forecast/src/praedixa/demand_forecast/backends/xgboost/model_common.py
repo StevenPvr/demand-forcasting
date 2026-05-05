@@ -44,7 +44,6 @@ DEFAULT_XGBOOST_MODEL_PARAMS: dict[str, object] = {
     "early_stopping_rounds": DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
     "enable_early_stopping": True,
     "enable_dataset_sample_weight": False,
-    "bakery_sample_weight_multiplier": 1.0,
     "verbosity": 0,
     "n_jobs": 1,
     "random_state": 42,

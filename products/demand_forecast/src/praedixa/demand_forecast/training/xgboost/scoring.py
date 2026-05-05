@@ -65,8 +65,6 @@ def _param_snapshot(params: dict[str, object]) -> dict[str, object]:
         "subsample",
         "tree_method",
         "device",
-        "bakery_sample_weight_multiplier",
-        "enable_dataset_sample_weight",
         "xgboost_matrix_type",
         "xgboost_gpu_input_backend",
     )
@@ -273,14 +271,6 @@ def _build_cached_xgboost_fold(
         feature_cols,
         target_col=target_contract.learning_target_col,
         model_params=resolved_params,
-        train_sample_weight=_sample_weights(
-            fold_train,
-            bakery_sample_weight_multiplier=_bakery_sample_weight_multiplier(
-                resolved_params
-            ),
-        )
-        if bool(resolved_params.get("enable_dataset_sample_weight", False))
-        else None,
     )
     logger.debug(
         "XGBoost cached fold matrix built: fold=%s position=%s train_rows=%s valid_rows=%s duration_seconds=%.3f",
@@ -351,16 +341,6 @@ def fit_and_score_xgboost_model_on_tuning(
         len(train_frame),
         len(base_train_frame),
     )
-    weight_summary = _training_sample_weight_summary(
-        base_train_frame,
-        resolved_params=resolved_params,
-    )
-    if weight_summary is not None:
-        logger.info(
-            "XGBoost training sample weights: trial=%s summary=%s",
-            trial_number,
-            weight_summary,
-        )
     fold_results, folds_completed = _score_xgboost_folds_with_optional_cache(
         train_frame=base_train_frame,
         tuning_frame=tuning_frame,
@@ -399,7 +379,6 @@ def fit_and_score_xgboost_model_on_tuning(
         "fold_results": fold_results,
         "folds_completed": folds_completed,
         "execution_policy": execution_policy,
-        "training_sample_weight_summary": weight_summary,
     }
     logger.info(
         "XGBoost scoring completed: trial=%s folds_completed=%s macro_mean_wape=%.6f mean_decision_loss=%s selected_n_estimators=%s native_best_score=%s duration_seconds=%.3f",
@@ -951,14 +930,6 @@ def _score_single_fold(
         feature_cols,
         target_col=target_contract.learning_target_col,
         model_params=resolved_params,
-        train_sample_weight=_sample_weights(
-            fold_train,
-            bakery_sample_weight_multiplier=_bakery_sample_weight_multiplier(
-                resolved_params
-            ),
-        )
-        if bool(resolved_params.get("enable_dataset_sample_weight", False))
-        else None,
     )
     predictions = reconstruct_absolute_predictions(
         raw_predictions,
@@ -1082,60 +1053,6 @@ def _product_group_col(frame: pd.DataFrame) -> str:
     if "product" in frame.columns:
         return "product"
     return "economic_segment"
-
-
-def _bakery_sample_weight_multiplier(resolved_params: dict[str, object]) -> float:
-    value = resolved_params.get("bakery_sample_weight_multiplier", 1.0)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 1.0
-    return max(float(value), 0.0)
-
-
-def _sample_weights(
-    frame: pd.DataFrame,
-    *,
-    bakery_sample_weight_multiplier: float = 1.0,
-) -> np.ndarray:
-    weights = np.ones(len(frame), dtype=np.float64)
-    if bakery_sample_weight_multiplier != 1.0:
-        bakery_mask = (
-            pd.Series(frame[DEFAULT_DATASET_SOURCE_COL], copy=False)
-            .astype("string")
-            .eq("bakery")
-            .to_numpy(dtype=bool, copy=False)
-        )
-        weights[bakery_mask] *= bakery_sample_weight_multiplier
-    return weights
-
-
-def _training_sample_weight_summary(
-    frame: pd.DataFrame,
-    *,
-    resolved_params: dict[str, object],
-) -> dict[str, object] | None:
-    if not bool(resolved_params.get("enable_dataset_sample_weight", False)):
-        return None
-    multiplier = _bakery_sample_weight_multiplier(resolved_params)
-    weights = _sample_weights(
-        frame,
-        bakery_sample_weight_multiplier=multiplier,
-    )
-    dataset_sources = pd.Series(frame[DEFAULT_DATASET_SOURCE_COL], copy=False).astype(
-        "string"
-    )
-    bakery_mask = dataset_sources.eq("bakery").to_numpy(dtype=bool, copy=False)
-    total_weight = float(weights.sum())
-    bakery_weight = float(weights[bakery_mask].sum()) if bakery_mask.any() else 0.0
-    return {
-        "bakery_sample_weight_multiplier": multiplier,
-        "bakery_rows": int(bakery_mask.sum()),
-        "total_rows": int(len(frame)),
-        "bakery_total_weight": bakery_weight,
-        "total_weight": total_weight,
-        "bakery_weight_share": bakery_weight / total_weight
-        if total_weight > 0.0
-        else 0.0,
-    }
 
 
 def _dataset_macro_scores(fold_results: list[dict[str, object]]) -> dict[str, float]:

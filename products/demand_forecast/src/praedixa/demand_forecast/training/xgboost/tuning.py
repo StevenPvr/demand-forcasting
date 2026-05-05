@@ -38,7 +38,6 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_TUNING_PROGRESS_LOG_EVERY,
     DEFAULT_TUNING_RANDOM_SEED,
     DEFAULT_TUNING_TRIALS,
-    DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
     DEFAULT_XGBOOST_TUNING_COLSAMPLE_BYTREE_RANGE,
     DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGBOOST_TUNING_LEARNING_RATE_RANGE,
@@ -61,6 +60,7 @@ from praedixa.demand_forecast.training.validation.eligibility import (
 )
 from praedixa.demand_forecast.training.xgboost.scoring import (
     XGBoostFoldMatrixCache,
+    build_xgboost_fold_matrix_cache,
     fit_and_score_xgboost_model_on_tuning,
     xgboost_execution_policy,
 )
@@ -105,14 +105,8 @@ def sample_xgboost_optuna_params(
             "max_cat_threshold",
             DEFAULT_XGBOOST_TUNING_MAX_CAT_THRESHOLD_CHOICES,
         ),
-        "bakery_sample_weight_multiplier": trial.suggest_float(
-            "bakery_sample_weight_multiplier",
-            *DEFAULT_XGBOOST_BAKERY_SAMPLE_WEIGHT_MULTIPLIER_RANGE,
-            log=True,
-        ),
         "enable_early_stopping": True,
         "enable_categorical": True,
-        "enable_dataset_sample_weight": True,
         "early_stopping_rounds": DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS,
         "random_state": int(random_seed + trial.number + 1),
     }
@@ -332,12 +326,13 @@ def _final_best_params(
     random_seed: int,
     total_threads: int,
 ) -> dict[str, object]:
-    best_params = {**(model_params or {}), **best_trial.params}
+    best_params = _without_hpo_sample_weight_params(
+        {**(model_params or {}), **best_trial.params}
+    )
     best_params["model_backend"] = "xgboost"
     best_params["random_state"] = random_seed + best_trial.number + 1
     best_params["n_jobs"] = total_threads
     best_params["enable_categorical"] = True
-    best_params["enable_dataset_sample_weight"] = True
     best_params["enable_early_stopping"] = True
     best_params["early_stopping_rounds"] = DEFAULT_XGBOOST_TUNING_EARLY_STOPPING_ROUNDS
     best_params["validation_monitor_metric"] = "segmented_asymmetric_decision_loss"
@@ -353,6 +348,13 @@ def _final_best_params(
         if key in best_trial.user_attrs:
             best_params[key] = best_trial.user_attrs[key]
     return resolve_xgboost_model_params(best_params)
+
+
+def _without_hpo_sample_weight_params(params: dict[str, object]) -> dict[str, object]:
+    cleaned = dict(params)
+    cleaned.pop("bakery_sample_weight_multiplier", None)
+    cleaned.pop("enable_dataset_sample_weight", None)
+    return cleaned
 
 
 def _build_objective(
@@ -409,6 +411,7 @@ def _build_objective(
             **(model_params or {}),
             **sample_xgboost_optuna_params(trial, random_seed=random_seed),
         }
+        trial_params = _without_hpo_sample_weight_params(trial_params)
         logger.info(
             "XGBoost Optuna trial sampled params: trial=%s params=%s",
             trial.number,
@@ -417,10 +420,8 @@ def _build_objective(
                 for key in sorted(trial_params)
                 if key
                 in {
-                    "bakery_sample_weight_multiplier",
                     "colsample_bytree",
                     "early_stopping_rounds",
-                    "enable_dataset_sample_weight",
                     "enable_early_stopping",
                     "learning_rate",
                     "max_bin",
@@ -506,12 +507,16 @@ def _build_fold_matrix_cache_for_objective(
     model_params: dict[str, object] | None,
     total_threads: int,
 ) -> XGBoostFoldMatrixCache | None:
-    _ = train_frame, tuning_frame, folds, feature_cols, target_contract, model_params
-    _ = total_threads
-    logger.info(
-        "XGBoost fold matrix cache skipped: bakery_sample_weight_multiplier is tuned per trial and changes training sample weights."
+    return build_xgboost_fold_matrix_cache(
+        train_frame=train_frame,
+        tuning_frame=tuning_frame,
+        folds=folds,
+        feature_cols=feature_cols,
+        target_contract=target_contract,
+        logger=logger,
+        model_params=_without_hpo_sample_weight_params(model_params or {}),
+        total_threads=total_threads,
     )
-    return None
 
 
 def _record_trial_result(
@@ -541,10 +546,6 @@ def _record_trial_result(
     trial.set_user_attr("baseline_wape_improvement_pct", improvement_pct)
     trial.set_user_attr("fold_wape_scores", tuning_result["fold_results"])
     trial.set_user_attr("folds_completed", tuning_result["folds_completed"])
-    trial.set_user_attr(
-        "training_sample_weight_summary",
-        tuning_result.get("training_sample_weight_summary"),
-    )
     warning = dataset_wape_collapse_warning(
         tuning_result=tuning_result,
         baseline_wape=baseline_wape,
