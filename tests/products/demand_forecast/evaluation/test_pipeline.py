@@ -1783,7 +1783,7 @@ class EvaluationPipelineTests(unittest.TestCase):
             ["global", "global"],
         )
 
-    def test_xgboost_refit_uses_single_worker_and_single_thread(self) -> None:
+    def test_xgboost_refit_uses_all_cores_and_single_worker(self) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         recorded: dict[str, object] = {}
 
@@ -1793,10 +1793,13 @@ class EvaluationPipelineTests(unittest.TestCase):
             recorded["model_params"] = kwargs["model_params"]
             return pd.DataFrame(), pd.DataFrame(), 7
 
-        with patch.object(
-            xgboost_runtime,
-            "evaluate_daily_refit_predictions",
-            side_effect=_record_refit_call,
+        with (
+            patch.object(xgboost_runtime.os, "cpu_count", return_value=12),
+            patch.object(
+                xgboost_runtime,
+                "evaluate_daily_refit_predictions",
+                side_effect=_record_refit_call,
+            ),
         ):
             _, _, best_iteration = (
                 xgboost_runtime.evaluate_xgboost_daily_refit_predictions(
@@ -1812,10 +1815,10 @@ class EvaluationPipelineTests(unittest.TestCase):
 
         refit_params = cast(dict[str, object], recorded["model_params"])
         self.assertEqual(best_iteration, 7)
-        self.assertEqual(refit_params["n_jobs"], 1)
+        self.assertEqual(refit_params["n_jobs"], 12)
         self.assertEqual(refit_params["evaluation_daily_refit_workers"], 1)
 
-    def test_xgboost_evaluation_forces_single_thread(self) -> None:
+    def test_xgboost_evaluation_uses_all_detected_cores(self) -> None:
         train_frame, valid_frame, _, target_contract = _build_refit_frames()
         recorded: dict[str, object] = {}
 
@@ -1827,6 +1830,7 @@ class EvaluationPipelineTests(unittest.TestCase):
             )
 
         with (
+            patch.object(evaluation_modeling.os, "cpu_count", return_value=12),
             patch.object(
                 evaluation_modeling,
                 "fit_xgboost_model",
@@ -1847,7 +1851,7 @@ class EvaluationPipelineTests(unittest.TestCase):
 
         fit_params = cast(dict[str, object], recorded["model_params"])
         self.assertEqual(best_iteration, 4)
-        self.assertEqual(fit_params["n_jobs"], 1)
+        self.assertEqual(fit_params["n_jobs"], 12)
 
     def test_xgboost_evaluation_forces_cpu_for_h100_params_on_macos(self) -> None:
         train_frame, valid_frame, _, target_contract = _build_refit_frames()

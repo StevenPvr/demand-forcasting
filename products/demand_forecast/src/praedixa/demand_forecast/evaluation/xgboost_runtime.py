@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -50,9 +51,13 @@ def _xgboost_daily_refit_model_params(
     model_params: dict[str, object],
 ) -> dict[str, object]:
     resolved = dict(model_params)
-    resolved["n_jobs"] = 1
+    resolved["n_jobs"] = _available_cpu_cores()
     resolved["evaluation_daily_refit_workers"] = 1
     return resolved
+
+
+def _available_cpu_cores() -> int:
+    return max(1, int(os.cpu_count() or 1))
 
 
 def _empty_quantile_predictions(*_: object, **__: object) -> pd.DataFrame:

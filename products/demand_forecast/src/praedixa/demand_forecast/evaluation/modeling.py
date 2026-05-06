@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 from typing import Any
 
@@ -400,7 +401,7 @@ def _stable_xgboost_evaluation_params(
     model_params: dict[str, object],
 ) -> dict[str, object]:
     resolved = dict(model_params)
-    resolved["n_jobs"] = 1
+    resolved["n_jobs"] = _available_cpu_cores()
     if platform.system() != "Darwin":
         return resolved
     if _xgboost_params_request_cuda(resolved):
@@ -418,6 +419,10 @@ def _stable_xgboost_evaluation_params(
         _log_native_categorical_evaluation_override()
         resolved["enable_categorical"] = False
     return resolved
+
+
+def _available_cpu_cores() -> int:
+    return max(1, int(os.cpu_count() or 1))
 
 
 def _xgboost_params_request_cuda(model_params: dict[str, object]) -> bool:
