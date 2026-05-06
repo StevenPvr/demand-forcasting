@@ -374,9 +374,7 @@ class EvaluationPipelineTests(unittest.TestCase):
                 explicit_params = params_builder(
                     {"enable_daily_prediction_calibration": True}
                 )
-                self.assertTrue(
-                    explicit_params["enable_daily_prediction_calibration"]
-                )
+                self.assertTrue(explicit_params["enable_daily_prediction_calibration"])
 
     def test_constant_metadata_features_are_kept_for_tft_evaluation(self) -> None:
         train_frame = pd.DataFrame(
@@ -990,10 +988,7 @@ class EvaluationPipelineTests(unittest.TestCase):
                 "product_id": ["sku_a"] * rows,
                 "client_id": ["store_a"] * rows,
                 "target_abs": np.linspace(1.0, 2.0, rows),
-                **{
-                    column: np.linspace(0.0, 1.0, rows)
-                    for column in feature_cols
-                },
+                **{column: np.linspace(0.0, 1.0, rows) for column in feature_cols},
             }
         )
 
@@ -1552,7 +1547,9 @@ class EvaluationPipelineTests(unittest.TestCase):
             ],
         )
 
-    def test_daily_refit_pretest_bakery_seed_does_not_add_weights_by_default(self) -> None:
+    def test_daily_refit_pretest_bakery_seed_does_not_add_weights_by_default(
+        self,
+    ) -> None:
         train_frame, valid_frame, test_frame, target_contract = _build_refit_frames()
         seed_frame = pd.DataFrame(
             {

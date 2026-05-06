@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from praedixa.demand_forecast.evaluation.constants import (
     DEFAULT_BEST_PARAMS_PATH,
@@ -19,16 +20,6 @@ from praedixa.demand_forecast.evaluation.modeling import fit_final_model
 from praedixa.demand_forecast.evaluation.modeling import (
     fit_final_xgboost_model,
 )
-from praedixa.demand_forecast.evaluation.chronos2_runtime import (
-    evaluate_chronos2_daily_refit_predictions,
-    fit_final_chronos2_model,
-    save_chronos2_model,
-)
-from praedixa.demand_forecast.evaluation.moirai_runtime import (
-    evaluate_moirai_daily_refit_predictions,
-    fit_final_moirai_model,
-    save_moirai_model,
-)
 from praedixa.demand_forecast.evaluation.orchestrator_context import (
     ensure_evaluation_target_dir,
 )
@@ -42,11 +33,6 @@ from praedixa.demand_forecast.evaluation.xgboost_runtime import (
     evaluate_xgboost_daily_refit_predictions,
     save_xgboost_model,
 )
-from praedixa.demand_forecast.evaluation.timesfm_runtime import (
-    evaluate_timesfm_daily_refit_predictions,
-    fit_final_timesfm_model,
-    save_timesfm_model,
-)
 from praedixa.demand_forecast.evaluation.reporting import (
     plot_actual_vs_predicted,
     plot_residuals,
@@ -57,20 +43,112 @@ from praedixa.demand_forecast.training.config.constants import (
     DEFAULT_DUCKDB_PATH,
     DEFAULT_GOLD_TABLE,
 )
-from praedixa.demand_forecast.backends.tft.model_utils import save_tft_model
 from praedixa.demand_forecast.backends.tft.backend import raise_if_tft_backend_required
 from praedixa.demand_forecast.backends.xgboost.backend import (
     raise_if_xgboost_backend_required,
 )
-from praedixa.demand_forecast.backends.chronos2.backend import (
-    raise_if_chronos2_backend_required,
-)
-from praedixa.demand_forecast.backends.moirai.backend import (
-    raise_if_moirai_backend_required,
-)
-from praedixa.demand_forecast.backends.timesfm.backend import (
-    raise_if_timesfm_backend_required,
-)
+
+
+def save_tft_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.backends.tft.model_utils import save_tft_model as impl
+
+    return impl(*args, **kwargs)
+
+
+def raise_if_chronos2_backend_required(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.backends.chronos2.backend import (
+        raise_if_chronos2_backend_required as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def evaluate_chronos2_daily_refit_predictions(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.chronos2_runtime import (
+        evaluate_chronos2_daily_refit_predictions as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def fit_final_chronos2_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.chronos2_runtime import (
+        fit_final_chronos2_model as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def save_chronos2_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.chronos2_runtime import (
+        save_chronos2_model as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def raise_if_moirai_backend_required(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.backends.moirai.backend import (
+        raise_if_moirai_backend_required as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def evaluate_moirai_daily_refit_predictions(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.moirai_runtime import (
+        evaluate_moirai_daily_refit_predictions as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def fit_final_moirai_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.moirai_runtime import (
+        fit_final_moirai_model as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def save_moirai_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.moirai_runtime import (
+        save_moirai_model as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def raise_if_timesfm_backend_required(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.backends.timesfm.backend import (
+        raise_if_timesfm_backend_required as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def evaluate_timesfm_daily_refit_predictions(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.timesfm_runtime import (
+        evaluate_timesfm_daily_refit_predictions as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def fit_final_timesfm_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.timesfm_runtime import (
+        fit_final_timesfm_model as impl,
+    )
+
+    return impl(*args, **kwargs)
+
+
+def save_timesfm_model(*args: Any, **kwargs: Any) -> Any:
+    from praedixa.demand_forecast.evaluation.timesfm_runtime import (
+        save_timesfm_model as impl,
+    )
+
+    return impl(*args, **kwargs)
 
 
 @dataclass(frozen=True)

@@ -23,15 +23,9 @@ from praedixa.demand_forecast.contracts.targets import (
     TargetContract,
     reconstruct_absolute_predictions,
 )
-from praedixa.demand_forecast.backends.tft.model_utils import (
-    DEFAULT_TFT_MODEL_PARAMS,
-    fit_tft_model,
-    predict_quantiles_with_tft_model,
-    predict_with_tft_model,
-    select_tft_feature_columns,
-)
 from praedixa.demand_forecast.backends.tft.feature_mapping import (
     TFT_EXPLICIT_ROLE_BY_COLUMN,
+    select_explicit_tft_feature_columns,
 )
 from praedixa.demand_forecast.backends.xgboost.model_common import (
     DEFAULT_XGBOOST_MODEL_PARAMS,
@@ -121,7 +115,7 @@ def select_feature_columns(
 ) -> tuple[list[str], list[str], list[str]]:
     identifier_exclusions = _identifier_feature_exclusions(model_backend)
     selection_frame = _feature_selection_frame(train_frame, model_backend=model_backend)
-    numeric_feature_cols = select_tft_feature_columns(
+    numeric_feature_cols = select_explicit_tft_feature_columns(
         selection_frame,
         excluded_cols={
             DEFAULT_DATE_COL,
@@ -198,6 +192,11 @@ def fit_evaluation_model(
     target_contract: TargetContract,
     model_params: dict[str, object],
 ) -> tuple[Any, int]:
+    from praedixa.demand_forecast.backends.tft.model_utils import (
+        DEFAULT_TFT_MODEL_PARAMS,
+        fit_tft_model,
+    )
+
     learning_target_col = target_contract.learning_target_col
     train_weights = _evaluation_sample_weights(train_frame)
     valid_weights = _evaluation_sample_weights(valid_frame)
@@ -230,6 +229,10 @@ def predict_absolute(
     feature_cols: list[str],
     target_contract: TargetContract,
 ) -> np.ndarray:
+    from praedixa.demand_forecast.backends.tft.model_utils import (
+        predict_with_tft_model,
+    )
+
     predictions = predict_with_tft_model(
         model,
         frame,
@@ -246,6 +249,10 @@ def predict_absolute_quantiles(
     feature_cols: list[str],
     target_contract: TargetContract,
 ) -> pd.DataFrame:
+    from praedixa.demand_forecast.backends.tft.model_utils import (
+        predict_quantiles_with_tft_model,
+    )
+
     quantile_predictions = predict_quantiles_with_tft_model(
         model,
         frame,
@@ -271,6 +278,11 @@ def fit_final_model(
     model_params: dict[str, object],
     num_boost_round: int,
 ) -> Any:
+    from praedixa.demand_forecast.backends.tft.model_utils import (
+        DEFAULT_TFT_MODEL_PARAMS,
+        fit_tft_model,
+    )
+
     learning_target_col = target_contract.learning_target_col
     fit_weights = _evaluation_sample_weights(fit_frame)
     fit_for_model = fit_frame.copy()
