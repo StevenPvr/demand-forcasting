@@ -51,10 +51,10 @@ class EvaluationReferenceModeTests(unittest.TestCase):
         )
         reference_train = pd.DataFrame(
             {
-                "date": pd.to_datetime(["2024-03-30"]),
-                "product": ["croissant"],
-                "quantity": [9.0],
-                "is_missing_day": [0],
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30"]),
+                "product": ["croissant", "croissant"],
+                "quantity": [7.0, 9.0],
+                "is_missing_day": [0, 0],
             }
         )
         reference_val = pd.DataFrame(
@@ -76,23 +76,27 @@ class EvaluationReferenceModeTests(unittest.TestCase):
         gold_feature_df = pd.DataFrame({"dataset_source": ["bakery"]})
         refit_seed_frame = pd.DataFrame(
             {
-                "dt": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "date": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "dataset_source": ["bakery", "bakery"],
-                "product_id": ["croissant", "croissant"],
-                "target_demand_qty_d_plus_1": [9.0, 10.0],
-                "target_semantics": ["observed_sales", "observed_sales"],
-                "censor_flag": [False, False],
-                "target_source": ["observed_sales", "observed_sales"],
-                "label_quality_score": [1.0, 1.0],
-                "usable_for_training_flag": [True, True],
+                "dt": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "dataset_source": ["bakery", "bakery", "bakery"],
+                "product_id": ["croissant", "croissant", "croissant"],
+                "target_demand_qty_d_plus_1": [7.0, 9.0, 10.0],
+                "target_semantics": [
+                    "observed_sales",
+                    "observed_sales",
+                    "observed_sales",
+                ],
+                "censor_flag": [False, False, False],
+                "target_source": ["observed_sales", "observed_sales", "observed_sales"],
+                "label_quality_score": [1.0, 1.0, 1.0],
+                "usable_for_training_flag": [True, True, True],
             }
         )
         scored_refit_seed = pd.DataFrame(
             {
-                "date": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "product": ["croissant", "croissant"],
-                "quantity": [9.0, 10.0],
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "product": ["croissant", "croissant", "croissant"],
+                "quantity": [7.0, 9.0, 10.0],
             }
         )
 
@@ -167,10 +171,15 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             gold_feature_df=gold_feature_df,
         )
         mocked_materialize.assert_called_once()
-        self.assertEqual(len(resolved_train_frame), len(train_frame) + 2)
+        seed_reference = mocked_materialize.call_args.kwargs["reference_split_df"]
+        self.assertEqual(
+            seed_reference["date"].dt.strftime("%Y-%m-%d").tolist(),
+            ["2024-01-15", "2024-03-30", "2024-03-31"],
+        )
+        self.assertEqual(len(resolved_train_frame), len(train_frame) + 3)
         self.assertEqual(
             int(resolved_train_frame["bakery_refit_seed_flag"].fillna(False).sum()),
-            2,
+            3,
         )
         self.assertIs(resolved_valid_frame, valid_frame)
         self.assertIs(resolved_test_frame, overlap_test_frame)
@@ -184,27 +193,27 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             overlap_metadata["model_training_excluded_dataset_sources"], ["bakery"]
         )
         self.assertEqual(
-            overlap_metadata["bakery_pretest_rows_used_for_model_training"], 2
+            overlap_metadata["bakery_pretest_rows_used_for_model_training"], 3
         )
         self.assertEqual(
             overlap_metadata["bakery_pretest_seed_rows_used_for_evaluation_refits"],
-            2,
+            3,
         )
         self.assertEqual(
             overlap_metadata[
                 "eligible_bakery_pretest_seed_rows_used_for_evaluation_refits"
             ],
-            2,
+            3,
         )
         self.assertEqual(
             overlap_metadata[
                 "eligible_bakery_pretest_seed_days_used_for_evaluation_refits"
             ],
-            2,
+            3,
         )
         self.assertEqual(
             overlap_metadata["bakery_refit_policy"],
-            "one_month_pretest_seed_plus_test_window_history",
+            "train_val_pretest_seed_plus_test_window_history",
         )
 
     def test_foundation_reference_mode_matches_xgboost_transfer_holdout_frames(
@@ -221,10 +230,10 @@ class EvaluationReferenceModeTests(unittest.TestCase):
         )
         reference_train = pd.DataFrame(
             {
-                "date": pd.to_datetime(["2024-03-30"]),
-                "product": ["croissant"],
-                "quantity": [9.0],
-                "is_missing_day": [0],
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30"]),
+                "product": ["croissant", "croissant"],
+                "quantity": [7.0, 9.0],
+                "is_missing_day": [0, 0],
             }
         )
         reference_val = pd.DataFrame(
@@ -246,23 +255,27 @@ class EvaluationReferenceModeTests(unittest.TestCase):
         gold_feature_df = pd.DataFrame({"dataset_source": ["bakery"]})
         refit_seed_frame = pd.DataFrame(
             {
-                "dt": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "date": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "dataset_source": ["bakery", "bakery"],
-                "product_id": ["croissant", "croissant"],
-                "target_demand_qty_d_plus_1": [9.0, 10.0],
-                "target_semantics": ["observed_sales", "observed_sales"],
-                "censor_flag": [False, False],
-                "target_source": ["observed_sales", "observed_sales"],
-                "label_quality_score": [1.0, 1.0],
-                "usable_for_training_flag": [True, True],
+                "dt": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "dataset_source": ["bakery", "bakery", "bakery"],
+                "product_id": ["croissant", "croissant", "croissant"],
+                "target_demand_qty_d_plus_1": [7.0, 9.0, 10.0],
+                "target_semantics": [
+                    "observed_sales",
+                    "observed_sales",
+                    "observed_sales",
+                ],
+                "censor_flag": [False, False, False],
+                "target_source": ["observed_sales", "observed_sales", "observed_sales"],
+                "label_quality_score": [1.0, 1.0, 1.0],
+                "usable_for_training_flag": [True, True, True],
             }
         )
         scored_refit_seed = pd.DataFrame(
             {
-                "date": pd.to_datetime(["2024-03-30", "2024-03-31"]),
-                "product": ["croissant", "croissant"],
-                "quantity": [9.0, 10.0],
+                "date": pd.to_datetime(["2024-01-15", "2024-03-30", "2024-03-31"]),
+                "product": ["croissant", "croissant", "croissant"],
+                "quantity": [7.0, 9.0, 10.0],
             }
         )
 
@@ -316,10 +329,15 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             )
 
         mocked_materialize.assert_called_once()
-        self.assertEqual(len(resolved_train_frame), len(train_frame) + 2)
+        seed_reference = mocked_materialize.call_args.kwargs["reference_split_df"]
+        self.assertEqual(
+            seed_reference["date"].dt.strftime("%Y-%m-%d").tolist(),
+            ["2024-01-15", "2024-03-30", "2024-03-31"],
+        )
+        self.assertEqual(len(resolved_train_frame), len(train_frame) + 3)
         self.assertEqual(
             int(resolved_train_frame["bakery_refit_seed_flag"].fillna(False).sum()),
-            2,
+            3,
         )
         self.assertIs(resolved_valid_frame, valid_frame)
         self.assertIs(resolved_test_frame, overlap_test_frame)
@@ -331,7 +349,7 @@ class EvaluationReferenceModeTests(unittest.TestCase):
             overlap_metadata["model_training_excluded_dataset_sources"], ["bakery"]
         )
         self.assertEqual(
-            overlap_metadata["bakery_pretest_rows_used_for_model_training"], 2
+            overlap_metadata["bakery_pretest_rows_used_for_model_training"], 3
         )
         self.assertEqual(
             overlap_metadata["non_bakery_pretest_rows_used_for_model_training"], 0

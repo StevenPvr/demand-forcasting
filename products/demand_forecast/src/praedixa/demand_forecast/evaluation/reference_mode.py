@@ -43,7 +43,6 @@ _TRANSFER_HOLDOUT_MODEL_BACKENDS: frozenset[str] = frozenset(
     {"xgboost", "chronos2", "moirai", "timesfm"}
 )
 _REFERENCE_MODE_HOLDOUT_DATASET_SOURCES: tuple[str, ...] = ("bakery",)
-_BAKERY_REFIT_SEED_HISTORY_MONTHS = 1
 
 
 def resolve_reference_product_col(frame: pd.DataFrame) -> str:
@@ -153,7 +152,6 @@ def _bakery_refit_seed_reference_frame(
     reference_test: pd.DataFrame,
 ) -> pd.DataFrame:
     test_start = pd.Timestamp(reference_test[REFERENCE_DATE_COL].min()).normalize()
-    seed_start = test_start - pd.DateOffset(months=_BAKERY_REFIT_SEED_HISTORY_MONTHS)
     history = downcast_pandas_frame(
         pl.concat(
             [
@@ -165,7 +163,7 @@ def _bakery_refit_seed_reference_frame(
         ).to_pandas()
     )
     history_dates = pd.to_datetime(history[REFERENCE_DATE_COL], errors="coerce")
-    seed_mask = (history_dates >= seed_start) & (history_dates < test_start)
+    seed_mask = history_dates < test_start
     return history.loc[seed_mask].reset_index(drop=True)
 
 
@@ -719,7 +717,7 @@ def load_gold_reference_mode_frames(
         ),
         **_refit_seed_metadata(seed_reference),
         **_refit_seed_eligibility_metadata(refit_seed_frame),
-        "bakery_refit_policy": "one_month_pretest_seed_plus_test_window_history",
+        "bakery_refit_policy": "train_val_pretest_seed_plus_test_window_history",
     }
     return (
         resolved_train_frame,
